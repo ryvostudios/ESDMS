@@ -316,3 +316,26 @@ real delivery/success.
 
 Accepted. Swapping in real providers later is a configuration + adapter
 change, not a business-logic change.
+
+---
+
+## 2026-08-22 — Placeholder Department Reference Data
+
+### Decision
+
+Seeded six department names (Electrical, Mechanical, Civil, HSE, Warehouse,
+Administration) in the `gate-pass-schema` migration so the demo has working
+dropdown data end-to-end.
+
+### Reason
+
+`gate_passes.issuing_department_id` is NOT NULL and no real department list
+exists yet (0 rows before this migration). No department-management UI/API
+is in scope this phase, so without seed data Gate Pass creation would be
+blocked entirely.
+
+### Status
+
+Accepted as placeholder — replace via a real migration once management
+supplies the actual department list. Renaming/adding departments is a data
+change, not a schema change.
