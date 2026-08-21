@@ -24,6 +24,7 @@ dist/
 build/
 frontend/dist/
 backend/dist/
+frontend/dev-dist/
 coverage/
 
 # Logs
