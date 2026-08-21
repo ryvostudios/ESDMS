@@ -80,8 +80,13 @@
   font-weight: 500;
 }
 
+.tableWrapper {
+  overflow-x: auto;
+}
+
 .itemsTable {
   width: 100%;
+  min-width: 480px;
   border-collapse: collapse;
   font-size: var(--text-sm);
 }

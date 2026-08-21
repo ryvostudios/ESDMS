@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { GATE_PASS_PURPOSES } from "./gate-pass.constants.js";
+import { GATE_PASS_PURPOSES, GATE_PASS_STATUS } from "./gate-pass.constants.js";
+
+const GATE_PASS_STATUSES = Object.values(GATE_PASS_STATUS);
 
 const uuid = z.string().uuid();
 
@@ -42,7 +44,7 @@ export const exitActionSchema = z.object({
 });
 
 export const listQuerySchema = z.object({
-  status: z.string().optional(),
+  status: z.enum(GATE_PASS_STATUSES).optional(),
   search: z.string().trim().max(100).optional(),
   page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),

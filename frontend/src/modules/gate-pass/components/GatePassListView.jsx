@@ -87,32 +87,34 @@ export function GatePassListView({ title, description, fixedStatus, showStatusFi
 
         {loadStatus === "ready" && rows.length > 0 && (
           <>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Gate Pass #</th>
-                  <th>Status</th>
-                  <th>Destination</th>
-                  <th>Vehicle</th>
-                  <th>Driver</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((gatePass) => (
-                  <tr key={gatePass.id} className={styles.row} onClick={() => goToDetail(gatePass.id)}>
-                    <td className={styles.gatePassNumber}>{gatePass.gatePassNumber}</td>
-                    <td>
-                      <GatePassStatusBadge status={gatePass.status} />
-                    </td>
-                    <td>{gatePass.destination}</td>
-                    <td>{gatePass.vehicleRegistration}</td>
-                    <td>{gatePass.driverName}</td>
-                    <td className={styles.muted}>{new Date(gatePass.createdAt).toLocaleDateString()}</td>
+            <div className={styles.tableWrapper}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Gate Pass #</th>
+                    <th>Status</th>
+                    <th>Destination</th>
+                    <th>Vehicle</th>
+                    <th>Driver</th>
+                    <th>Created</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((gatePass) => (
+                    <tr key={gatePass.id} className={styles.row} onClick={() => goToDetail(gatePass.id)}>
+                      <td className={styles.gatePassNumber}>{gatePass.gatePassNumber}</td>
+                      <td>
+                        <GatePassStatusBadge status={gatePass.status} />
+                      </td>
+                      <td>{gatePass.destination}</td>
+                      <td>{gatePass.vehicleRegistration}</td>
+                      <td>{gatePass.driverName}</td>
+                      <td className={styles.muted}>{new Date(gatePass.createdAt).toLocaleDateString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <div className={styles.cardList}>
               {rows.map((gatePass) => (

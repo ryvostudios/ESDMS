@@ -104,3 +104,33 @@ test("CORS rejects an unrecognized origin", async () => {
 
   assert.equal(response.status, 403);
 });
+
+// Placed last: intentionally exhausts the login rate limit for the rest of
+// this process, which would break earlier 401-expecting tests if it ran
+// before them.
+test("repeated failed logins are rate-limited, but successful logins never count against that budget", async () => {
+  // Several people can share one IP behind a site/office NAT — a shared
+  // budget across successful logins would let one person's normal sign-ins
+  // lock out everyone else at the same gate. Prove real successes here
+  // don't consume the failed-attempt budget, regardless of how many.
+  for (let i = 0; i < 5; i++) {
+    const { status } = await login(server.baseUrl, "admin@test.eset.local");
+    assert.equal(status, 200);
+  }
+
+  let sawTooManyRequests = false;
+
+  for (let i = 0; i < 10; i++) {
+    const { status, body } = await login(server.baseUrl, "admin@test.eset.local", "wrong-password");
+
+    if (status === 429) {
+      sawTooManyRequests = true;
+      assert.equal(body.error.code, "TOO_MANY_REQUESTS");
+      break;
+    }
+
+    assert.equal(status, 401);
+  }
+
+  assert.ok(sawTooManyRequests, "expected repeated failed logins to eventually be rate-limited");
+});

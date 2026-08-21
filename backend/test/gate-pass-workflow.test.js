@@ -244,6 +244,13 @@ test("malformed UUID in path is rejected, not 500", async () => {
   assert.ok([400, 404].includes(result.status), `expected 400/404, got ${result.status}`);
 });
 
+test("an invalid status filter value is rejected, not silently ignored", async () => {
+  const result = await apiRequest(server.baseUrl, "GET", "/api/v1/gate-passes?status=NOT_A_REAL_STATUS", {
+    token: tokens.admin,
+  });
+  assert.equal(result.status, 400);
+});
+
 test("guard search only returns state-appropriate, data-minimized results", async () => {
   // Must be unique per test run, not just per test — the test DB is not
   // reset between runs, so a fixed literal would match a leftover

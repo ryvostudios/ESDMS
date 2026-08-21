@@ -154,26 +154,28 @@ export function GatePassDetailPage() {
 
           <div className={styles.section}>
             <h2 className={styles.sectionTitle}>Items</h2>
-            <table className={styles.itemsTable}>
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th>Part Number</th>
-                  <th>Quantity</th>
-                  <th>Unit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {gatePass.items.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.description}</td>
-                    <td>{item.partNumber || "—"}</td>
-                    <td>{item.quantity}</td>
-                    <td>{item.unit || "—"}</td>
+            <div className={styles.tableWrapper}>
+              <table className={styles.itemsTable}>
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Part Number</th>
+                    <th>Quantity</th>
+                    <th>Unit</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {gatePass.items.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.description}</td>
+                      <td>{item.partNumber || "—"}</td>
+                      <td>{item.quantity}</td>
+                      <td>{item.unit || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {(gatePass.departureOdometer !== null || gatePass.returnOdometer !== null) && (
