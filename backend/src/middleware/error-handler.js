@@ -1,3 +1,4 @@
+import multer from "multer";
 import { AppError } from "../shared/errors/app-error.js";
 
 export function notFoundHandler(req, res) {
@@ -24,6 +25,16 @@ export function errorHandler(error, req, res, next) {
         code: error.code,
         message: error.message,
         ...(error.details ? { details: error.details } : {}),
+      },
+    });
+  }
+
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        message: error.code === "LIMIT_FILE_SIZE" ? "Photo exceeds the size limit." : "Invalid file upload.",
       },
     });
   }

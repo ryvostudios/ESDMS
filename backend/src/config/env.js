@@ -24,6 +24,8 @@ if (jwtSecret.length < 32) {
   throw new Error("JWT_SECRET must be at least 32 characters long.");
 }
 
+const frontendOrigins = parseOrigins(required("FRONTEND_ORIGIN"));
+
 export const config = {
   nodeEnv,
   isProduction: nodeEnv === "production",
@@ -31,7 +33,10 @@ export const config = {
   databaseUrl: required("DATABASE_URL"),
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",
-  frontendOrigins: parseOrigins(required("FRONTEND_ORIGIN")),
+  frontendOrigins,
+  // Base URL embedded in Gate Pass QR codes as a deep link. Defaults to the
+  // first allowed frontend origin when not set explicitly.
+  appPublicUrl: process.env.APP_PUBLIC_URL || frontendOrigins[0],
   storageDir: process.env.STORAGE_DIR || "./storage",
 };
 

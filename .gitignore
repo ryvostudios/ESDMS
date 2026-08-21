@@ -40,10 +40,11 @@ temp/
 *.tmp
 *.pid
 
-# Local uploads and evidence
+# Local uploads and evidence (runtime storage dir only — anchored to the
+# backend root so it doesn't also match backend/src/**/storage source dirs)
 uploads/
 backend/uploads/
-storage/
+/backend/storage/
 local-storage/
 
 # Database dumps / backups

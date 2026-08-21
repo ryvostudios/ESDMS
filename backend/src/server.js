@@ -1,6 +1,7 @@
 import config from "./config/env.js";
 import app from "./app.js";
 import { checkDatabaseConnection } from "./config/database.js";
+import { startOutboxProcessor } from "./shared/notifications/outbox.processor.js";
 
 async function startServer() {
   try {
@@ -11,9 +12,12 @@ async function startServer() {
       console.log(`E-Set API running on http://127.0.0.1:${config.port}`);
     });
 
+    const stopOutboxProcessor = startOutboxProcessor();
+
     function shutdown(signal) {
       console.log(`${signal} received. Shutting down.`);
 
+      stopOutboxProcessor();
       server.close(() => {
         process.exit(0);
       });
