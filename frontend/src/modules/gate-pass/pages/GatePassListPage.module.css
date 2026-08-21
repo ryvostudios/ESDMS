@@ -1,0 +1,107 @@
+.filters {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.statusSelect {
+  max-width: 200px;
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.table th {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.row {
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--color-bg);
+}
+
+.row:last-child td {
+  border-bottom: none;
+}
+
+.gatePassNumber {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 768px) {
+  .table {
+    display: none;
+  }
+}
+
+.cardList {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .cardList {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+.mobileRow {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.mobileRow:last-child {
+  border-bottom: none;
+}
+
+.mobileRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mobileRowMeta {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}

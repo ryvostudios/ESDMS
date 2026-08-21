@@ -1,0 +1,70 @@
+.section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  margin-bottom: var(--space-5);
+}
+
+.sectionTitle {
+  font-size: var(--text-base);
+  margin-bottom: var(--space-4);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fullRow {
+  grid-column: 1 / -1;
+}
+
+.itemRow {
+  display: grid;
+  grid-template-columns: 2fr 1fr 0.7fr 0.8fr auto;
+  gap: var(--space-3);
+  align-items: end;
+  margin-bottom: var(--space-3);
+}
+
+@media (max-width: 768px) {
+  .itemRow {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.removeButton {
+  height: 42px;
+  width: 42px;
+  flex-shrink: 0;
+}
+
+.itemsError {
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-3);
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.formError {
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}

@@ -57,8 +57,33 @@ async function request(method, path, { body, token, isForm, suppressUnauthorized
   return payload;
 }
 
+async function getBlob(path) {
+  const authToken = getToken();
+  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      onUnauthorized();
+    }
+
+    const isJson = response.headers.get("content-type")?.includes("application/json");
+    const payload = isJson ? await response.json().catch(() => null) : null;
+
+    throw new ApiError(
+      response.status,
+      payload?.error?.code || "UNKNOWN_ERROR",
+      payload?.error?.message || "Unable to download the file.",
+    );
+  }
+
+  return response.blob();
+}
+
 export const apiClient = {
   get: (path, options) => request("GET", path, options),
   post: (path, body, options) => request("POST", path, { ...options, body }),
   patch: (path, body, options) => request("PATCH", path, { ...options, body }),
+  getBlob,
 };

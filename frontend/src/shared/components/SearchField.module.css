@@ -1,0 +1,19 @@
+.wrapper {
+  position: relative;
+  max-width: 320px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.icon {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-subtle);
+  pointer-events: none;
+}
+
+.input {
+  padding-left: 36px;
+}
