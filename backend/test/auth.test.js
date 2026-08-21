@@ -77,6 +77,10 @@ test("/auth/me with a valid token returns the authenticated user", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(body.data.user.id, users.admin);
+  // Login and /auth/me must return the same user shape — the frontend's
+  // AuthContext relies on this to survive a page reload without losing
+  // fields the login response had.
+  assert.equal(body.data.user.email, "admin@test.eset.local");
 });
 
 test("a token for a user who is deactivated after login is rejected on next use", async () => {

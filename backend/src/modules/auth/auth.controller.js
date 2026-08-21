@@ -31,6 +31,7 @@ export const me = asyncHandler(async (req, res) => {
     data: {
       user: {
         id: req.user.id,
+        email: req.user.email,
         fullName: req.user.fullName,
         role: req.user.role,
         departmentId: req.user.departmentId,
