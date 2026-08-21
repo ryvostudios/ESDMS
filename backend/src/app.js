@@ -1,31 +1,40 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import config from "./config/env.js";
 import healthRoutes from "./routes/health.routes.js";
 import authRoutes from "./modules/auth/auth.routes.js";
+import { apiRateLimiter } from "./middleware/rate-limit.js";
+import { notFoundHandler, errorHandler } from "./middleware/error-handler.js";
+import { ForbiddenError } from "./shared/errors/app-error.js";
 
 const app = express();
 
+app.use(helmet());
+
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin(origin, callback) {
+      // Same-origin/non-browser requests (curl, health checks) send no
+      // Origin header at all — allow those through; browsers always send it.
+      if (!origin || config.frontendOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new ForbiddenError("Origin not allowed."));
+    },
     credentials: true,
   }),
 );
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
+app.use(apiRateLimiter);
 
 app.use("/api/v1/health", healthRoutes);
 app.use("/api/v1/auth", authRoutes);
 
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: {
-      code: "NOT_FOUND",
-      message: "Route not found.",
-    },
-  });
-});
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 export default app;

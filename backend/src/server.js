@@ -1,16 +1,14 @@
-import "dotenv/config";
+import config from "./config/env.js";
 import app from "./app.js";
 import { checkDatabaseConnection } from "./config/database.js";
-
-const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   try {
     await checkDatabaseConnection();
     console.log("PostgreSQL connected");
 
-    const server = app.listen(PORT, "127.0.0.1", () => {
-      console.log(`E-Set API running on http://127.0.0.1:${PORT}`);
+    const server = app.listen(config.port, "127.0.0.1", () => {
+      console.log(`E-Set API running on http://127.0.0.1:${config.port}`);
     });
 
     function shutdown(signal) {

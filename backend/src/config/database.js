@@ -1,9 +1,10 @@
 import pg from "pg";
+import config from "./env.js";
 
 const { Pool } = pg;
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: config.databaseUrl,
 });
 
 export async function checkDatabaseConnection() {

@@ -1,6 +1,7 @@
 import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import pool from "../../config/database.js";
+import config from "../../config/env.js";
 
 export async function loginUser(email, password) {
   const normalizedEmail = email.trim().toLowerCase();
@@ -39,9 +40,9 @@ export async function loginUser(email, password) {
       sub: user.id,
       role: user.role,
     },
-    process.env.JWT_SECRET,
+    config.jwtSecret,
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || "8h",
+      expiresIn: config.jwtExpiresIn,
     },
   );
 
