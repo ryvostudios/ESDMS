@@ -93,3 +93,33 @@ export function ClipboardCheckIcon(props) {
     </svg>
   );
 }
+
+export function ScanIcon(props) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M4 7V5a1 1 0 0 1 1-1h2" />
+      <path d="M16 7V5a1 1 0 0 0-1-1h-2" />
+      <path d="M4 13v2a1 1 0 0 0 1 1h2" />
+      <path d="M16 13v2a1 1 0 0 1-1 1h-2" />
+      <path d="M4 10h12" />
+    </svg>
+  );
+}
+
+export function CameraIcon(props) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h1.379a1.5 1.5 0 0 0 1.06-.44l.622-.62A1.5 1.5 0 0 1 8.62 4.5h2.76a1.5 1.5 0 0 1 1.06.44l.622.62a1.5 1.5 0 0 0 1.06.44H15.5A1.5 1.5 0 0 1 17 7.5v6a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 13.5z" />
+      <circle cx="10" cy="10.25" r="2.75" />
+    </svg>
+  );
+}
+
+export function BellIcon(props) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M5 8.5a5 5 0 0 1 10 0c0 3.5 1 4.5 1 4.5H4s1-1 1-4.5" />
+      <path d="M8.3 15.5a1.7 1.7 0 0 0 3.4 0" />
+    </svg>
+  );
+}

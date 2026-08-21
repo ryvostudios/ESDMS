@@ -2,12 +2,17 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { AppShell } from "../layout/AppShell.jsx";
 import { ProtectedRoute } from "./ProtectedRoute.jsx";
 import { PermissionRoute } from "./PermissionRoute.jsx";
+import { HomeRoute } from "./HomeRoute.jsx";
 import { LoginPage } from "../../modules/auth/pages/LoginPage.jsx";
-import { DashboardPage } from "../../modules/gate-pass/pages/DashboardPage.jsx";
 import { GatePassListPage } from "../../modules/gate-pass/pages/GatePassListPage.jsx";
 import { GatePassDetailPage } from "../../modules/gate-pass/pages/GatePassDetailPage.jsx";
 import { GatePassFormPage } from "../../modules/gate-pass/pages/GatePassFormPage.jsx";
 import { ApprovalQueuePage } from "../../modules/gate-pass/pages/ApprovalQueuePage.jsx";
+import { GuardDashboardPage } from "../../modules/guard/pages/GuardDashboardPage.jsx";
+import { GuardVerifyPage } from "../../modules/guard/pages/GuardVerifyPage.jsx";
+import { GuardActionPage } from "../../modules/guard/pages/GuardActionPage.jsx";
+
+const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
 export function AppRoutes() {
   return (
@@ -20,7 +25,7 @@ export function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route path="/" element={<DashboardPage />} />
+        <Route path="/" element={<HomeRoute />} />
 
         <Route
           path="/gate-passes"
@@ -59,6 +64,31 @@ export function AppRoutes() {
           element={
             <PermissionRoute permissions={["gate_pass.approve"]}>
               <ApprovalQueuePage />
+            </PermissionRoute>
+          }
+        />
+
+        <Route
+          path="/guard"
+          element={
+            <PermissionRoute permissions={GUARD_PERMISSIONS}>
+              <GuardDashboardPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/guard/verify/:token"
+          element={
+            <PermissionRoute permissions={GUARD_PERMISSIONS}>
+              <GuardVerifyPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/guard/gate-passes/:id"
+          element={
+            <PermissionRoute permissions={GUARD_PERMISSIONS}>
+              <GuardActionPage />
             </PermissionRoute>
           }
         />

@@ -1,6 +1,7 @@
 import { useAuth } from "../../core/auth/AuthContext.jsx";
 import { formatEnumLabel } from "../../shared/utilities/format.js";
 import { MenuIcon, LogoutIcon } from "../../shared/icons.jsx";
+import { NotificationBell } from "./NotificationBell.jsx";
 import styles from "./TopBar.module.css";
 
 export function TopBar({ onOpenMenu, menuButtonRef }) {
@@ -21,6 +22,7 @@ export function TopBar({ onOpenMenu, menuButtonRef }) {
       <div className={styles.spacer} />
 
       <div className={styles.userMenu}>
+        <NotificationBell />
         <div className={styles.userInfo}>
           <span className={styles.userName}>{user.fullName}</span>
           <span className={styles.roleBadge}>{formatEnumLabel(user.role)}</span>

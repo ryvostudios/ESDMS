@@ -1,0 +1,16 @@
+.searchSection {
+  margin-bottom: var(--space-5);
+}
+
+.section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-4);
+}
+
+.sectionTitle {
+  font-size: var(--text-base);
+  margin-bottom: var(--space-2);
+}
