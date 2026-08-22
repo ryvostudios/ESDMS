@@ -867,3 +867,357 @@ Accepted. There is currently no in-app UI/API for creating *additional*
 users of any role beyond this first admin — every account is still
 provisioned server-side. Tracked as a known gap for a real multi-user
 rollout, not addressed this pass.
+
+---
+
+## 2026-08-22 — Require Same-Site Custom Domains for Production, Not SameSite=None
+
+### Decision
+
+`validateProductionConfig()` now requires a new `API_PUBLIC_URL` env var
+(the backend's own public URL) and rejects startup if `FRONTEND_ORIGIN`
+and `API_PUBLIC_URL` are not same-site — including the specific case of
+two different subdomains under a shared multi-tenant PaaS host
+(`onrender.com`, `vercel.app`, etc.), which a naive same-suffix check
+would otherwise miss. The session cookie stays `HttpOnly` +
+`SameSite=Lax` with no CSRF token, and `SameSite=None` remains
+deliberately unimplemented as a configuration option.
+
+### Reason
+
+A default two-service Render deployment (separate `*-frontend.onrender.com`
+/ `*-api.onrender.com` domains) starts successfully and looks fine —
+`/health` answers, the frontend loads — but the browser never attaches the
+session cookie to the cross-site request, so login silently fails to
+persist. That failure mode is invisible until someone actually tries to
+use the deployed app. Switching to `SameSite=None` to "fix" it would
+remove the one mechanism currently standing in for CSRF protection
+(`SameSite=Lax` already excludes the classic CSRF vector for this
+cookie — see `docs/SECURITY.md` §5.2) without replacing it with anything.
+Requiring same-site custom domains keeps the existing, already-reasoned-
+about cookie design working unchanged, at the cost of one more required
+production env var and a DNS step before go-live.
+
+### Status
+
+Accepted. No real company domain is hardcoded — both `FRONTEND_ORIGIN` and
+`API_PUBLIC_URL` are environment-driven. `SameSite=None` + CSRF protection
+remains a documented future option if a deployment genuinely cannot use
+one registrable domain, but is not built.
+
+---
+
+## 2026-08-22 — A Crashed WhatsApp Send Goes UNCERTAIN, Never Auto-Resent
+
+### Decision
+
+`claimBatch` no longer reclaims a stale (lease-expired) `PROCESSING` row
+for external-delivery channels (currently `WHATSAPP`). A separate sweep,
+`reconcileStaleExternalDeliveries`, moves those rows straight to the
+terminal `UNCERTAIN` status instead — never back to claimable. Internal
+channels (`SYSTEM`) are unaffected and still reclaim normally.
+
+### Reason
+
+For an external delivery, a crash between "the provider accepted/sent the
+message" and "our own `markDelivered()` write landed" is indistinguishable
+from "the provider never got it," purely from local DB state. Reclaiming
+and resending risks a real duplicate delivery — a driver actually
+receiving the same WhatsApp document twice. `SYSTEM` jobs (PDF generation)
+only ever write to storage/DB this application controls, so replaying the
+same idempotent step on reclaim is safe and unchanged.
+
+### Status
+
+Accepted. `UNCERTAIN` is not automatically retried; resolving one requires
+a human or provider-side lookup via the preserved `idempotency_key`. There
+is currently no UI for that reconciliation step — tracked as future work
+for whenever a real (non-simulated) WhatsApp provider is connected.
+
+---
+
+## 2026-08-22 — PDF Finalization Locks the Gate Pass Row for Its Full Duration
+
+### Decision
+
+`processApprovalPdfJob` now acquires the Gate Pass row lock
+(`repo.lockDetailById`, `FOR UPDATE OF gp`) as its first step and holds it
+through generate/upload/commit, re-checking `status !== CANCELLED` right
+after acquiring it. Cancellation (`runTransition`'s cancel branch) already
+locked the same row. Whichever transaction acquires the lock first now
+fully determines the outcome.
+
+### Reason
+
+The existing defense layers (`voidPending` at cancel time, the generic
+`stillDeliverable` re-check before a job handler runs) both read
+authoritative state *before* finalization's own transaction begins —
+leaving a window where cancellation could commit *during* finalization,
+after its own check passed. A real row lock closes that window instead of
+narrowing it, and as a side effect means a cancellation that wins the race
+is detected before any PDF is generated or uploaded — nothing is left
+orphaned in object storage to clean up after the fact.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Evidence Photo File-Type Coherence Enforced by Trigger
+
+### Decision
+
+Added a narrow `BEFORE INSERT OR UPDATE OF departure_photo_file_id,
+return_photo_file_id` trigger on `gate_passes` verifying the referenced
+`gate_pass_files` row has the matching `file_type` (`DEPARTURE_PHOTO` /
+`RETURN_PHOTO` respectively). The existing composite FK only guaranteed
+the file belongs to the same Gate Pass, not that it's the right kind.
+
+### Reason
+
+A composite FK can't express "must equal this literal value" — both sides
+of a FK must be real columns, and `gate_passes` has no `file_type` column
+of its own to pair against. A trigger scoped to exactly these two columns
+(not a general-purpose/magic trigger) is the narrowest mechanism that can
+express the actual invariant. The migration verifies no existing row
+already violates it before installing the trigger, failing loudly rather
+than silently enforcing only from that point forward.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Logout Distinguishes "Nothing to Revoke" from "Revocation Failed"
+
+### Decision
+
+`POST /auth/logout` now separates two previously-identical code paths: an
+invalid/expired/missing token (nothing to revoke — succeeds, matching
+logout's idempotent contract) versus a genuine database failure while
+bumping `session_version` for a token that WAS valid (now a `503`, cookie
+left in place). The frontend (`AuthContext.jsx`) only clears local session
+state on a confirmed `200`, and shows an explicit failure message
+otherwise (`TopBar.jsx`) instead of silently treating the request as
+fire-and-forget.
+
+### Reason
+
+Reporting success when the revocation write actually failed would tell
+both the user and the frontend that a session is dead when it is, in
+fact, still live server-side — a false sense of security for exactly the
+"I just logged out on a shared device" scenario this system's coarse,
+user-wide revocation exists to serve.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Supabase Storage Calls Are Bounded by a Configurable Timeout
+
+### Decision
+
+`SupabaseStorageProvider` wraps every request (upload/download/delete) in
+an `AbortController`-based timeout (`SUPABASE_STORAGE_TIMEOUT_MS`, default
+10000ms, validated 1000-120000). A timeout raises a typed
+`StorageTimeoutError` rather than an opaque `AbortError`. `SUPABASE_URL`
+and `SUPABASE_STORAGE_BUCKET` are now validated at provider construction
+time (valid URL; a plain bucket name with no path-traversal characters)
+in every environment, not just production.
+
+### Reason
+
+PDF finalization holds a Gate Pass row lock for the duration of its
+storage write (see the row-locking entry above) — an unbounded network
+call to Supabase Storage would mean a storage-side outage could hold that
+lock open indefinitely, blocking cancellation and anything else contending
+for the same row.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Frontend Operational Timestamps Use a Centralized Business-Timezone Formatter
+
+### Decision
+
+Added `frontend/src/shared/utilities/datetime.js` (`formatDate`,
+`formatDateTime`, `currentYear`), reading a new `VITE_APP_TIMEZONE` build
+env var (default `Asia/Karachi`, matching the backend's `APP_TIMEZONE`
+default). Every operational timestamp display (Gate Pass created/approved/
+departure/return times, audit log entries, notification timestamps,
+expected-return dates) now goes through this shared utility instead of
+scattered `new Date(...).toLocaleString()` / `.toLocaleDateString()`
+calls, which rendered in whichever timezone the viewer's own browser/OS
+happened to be set to.
+
+### Reason
+
+A manager checking the dashboard while traveling, or any device with its
+clock/region set incorrectly, must see the same operational times gate
+staff see — the business's own timezone, not the viewer's. This mirrors
+the backend's existing `APP_TIMEZONE` handling (PDF dates, gate pass
+numbering) for the same reason. Backend timestamps remain stored as UTC/
+timestamptz either way — only display is affected on both sides.
+
+### Reason for a duplicated env var instead of fetching from the API
+
+`VITE_APP_TIMEZONE` is build-time and non-sensitive; fetching it from the
+backend would mean either blocking the first render on an extra request or
+accepting a moment of wrong-timezone display before it resolves, for a
+value that essentially never changes at runtime. The two are documented as
+needing to match, in both `.env.example` files.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Frontend Test Storage Reset, Not an Undocumented NODE_OPTIONS Flag
+
+### Decision
+
+Added `frontend/vitest.setup.js`, registered via `test.setupFiles` in
+`vitest.config.js`, clearing `localStorage`/`sessionStorage` before every
+test. Also pinned `"engines": {"node": ">=20.0.0"}` in both `package.json`
+files (validated against Node v24.19.0).
+
+### Reason
+
+`npm test` was reported to need `NODE_OPTIONS=--no-experimental-webstorage`
+to pass reliably — undocumented flags aren't an acceptable standard test
+command. The suspected mechanism is Node's own experimental global
+`localStorage` (real, potentially disk-backed) interacting with jsdom's
+per-environment storage in a way that could leak state across tests (e.g.
+`NotificationBell`'s `lastViewedAt` key). This wasn't reliably reproducible
+during this pass — plain `npm test` was clean across many runs both with
+and without the flag — but resetting storage before every test is correct
+test hygiene regardless of the exact root cause, and directly neutralizes
+the specific failure mode described (leftover storage state affecting a
+later test).
+
+### Status
+
+Accepted. `npm test` passes without any extra flags. If a real Node/jsdom
+storage interaction is later confirmed as the definitive cause, this reset
+already covers it; the `engines` pin documents the actually-validated
+version.
+
+---
+
+## 2026-08-22 — PDF Metadata Column Reserves Space for the QR Code
+
+### Decision
+
+`generateGatePassPdf`'s header-block metadata rows (date, department,
+requester, destination, driver, vehicle registration, expected return
+date) are now drawn with an explicit `width: 250` clamp instead of
+pdfkit's default (full remaining page width), and the content that
+follows (the "Items" heading) starts at `Math.max(current y, QR block
+bottom)` rather than wherever the metadata column happened to end. The
+items table's column header row is now extracted into `drawTableHeader()`
+and called again after every `addPage()`.
+
+### Reason
+
+A long destination/driver/department value previously wrapped at the
+page's full width, which runs directly through the QR code's own printed
+space. A short metadata column (few rows) could also leave the "Items"
+heading starting inside the QR block's vertical footprint. Multi-page
+Gate Passes (many line items) previously left the second and later pages
+with no column headers, making the table ambiguous without flipping back
+to page one.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — NotificationBell Is a Disclosure, Not a Menu
+
+### Decision
+
+`NotificationBell`'s trigger button dropped `role="menu"`/`aria-haspopup
+="menu"` in favor of a plain disclosure pattern: `aria-expanded` +
+`aria-controls` pointing at the panel's id, and the panel itself is
+`role="region"` containing a real `<ul>`/`<li>` list instead of
+role-less `<div>`s. `MobileNav`'s trigger (in `TopBar.jsx`) gained the
+same `aria-controls`/`aria-expanded` pairing against the drawer's now-
+stable `id="mobile-nav-drawer"`.
+
+### Reason
+
+Notification entries aren't actionable commands (no click handler, no
+keyboard activation) — `role="menu"` requires `role="menuitem"` children
+with full arrow-key/Home/End roving-tabindex behavior to be correct, none
+of which existed. A disclosure (button reveals a labeled region) is the
+accurate, simpler pattern for informational content, per WAI-ARIA
+Authoring Practices — not a compromise, the actual right widget for what
+this is.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — PWA Navigation Fallback Excludes /api/
+
+### Decision
+
+Added `navigateFallbackDenylist: [/^\/api\//]` to the Workbox config in
+`vite.config.js`. Verified in the built `dist/sw.js` output: the
+`NavigationRoute` now carries `{denylist:[/^\/api\//]}`.
+
+### Reason
+
+The SPA navigation fallback (serving `index.html` for any unmatched route
+so client-side routing survives a hard refresh/deep link) previously had
+no exclusion — a direct browser navigation to `/api/v1/...` could be
+served the app shell HTML instead of reaching the real API. The existing
+`NetworkOnly` runtime-caching rule for `/api/` already covered `fetch()`
+calls the app itself makes; this closes the separate gap for actual
+top-level navigation requests.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Admin Bootstrap Script Hardened: Active-State Checks, No-Echo Password, Stdin Path
+
+### Decision
+
+`scripts/create-admin-user.js` now rejects provisioning against a
+deactivated site or a deactivated `ADMIN` role (previously it only
+checked existence). The interactive password prompt suppresses terminal
+echo via raw-mode stdin — no dependency added, correcting an earlier
+attempt in this file that had accidentally embedded literal control-byte
+characters instead of `\uXXXX` escape sequences. Non-interactive mode now
+also accepts the password piped via stdin as an alternative to
+`ADMIN_PASSWORD`, documented as the preferred production path since it
+never appears in shell history or a `ps` listing.
+
+### Reason
+
+Provisioning the very first account into a deactivated site or role would
+create an admin nobody could actually use to sign in (site/role active
+checks already gate every login) — worth catching at creation time with a
+clear message rather than a confusing later login failure. A password
+visibly echoed to the terminal, or passed inline as an env var on a
+command line, are both avoidable exposure for a credential this
+sensitive; raw-mode stdin and a piped-password path close both without
+adding a masking library.
+
+### Status
+
+Accepted.

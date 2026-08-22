@@ -11,6 +11,7 @@ import { LoadingState, ErrorState, EmptyState } from "../../../shared/components
 import { Button } from "../../../shared/components/Button.jsx";
 import { PermissionGate } from "../../../shared/components/PermissionGate.jsx";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
+import { formatDate } from "../../../shared/utilities/datetime.js";
 import { GATE_PASS_STATUSES } from "../constants.js";
 import styles from "../pages/GatePassListPage.module.css";
 
@@ -116,7 +117,7 @@ export function GatePassListView({ title, description, fixedStatus, showStatusFi
                       <td>{gatePass.destination}</td>
                       <td>{gatePass.vehicleRegistration}</td>
                       <td>{gatePass.driverName}</td>
-                      <td className={styles.muted}>{new Date(gatePass.createdAt).toLocaleDateString()}</td>
+                      <td className={styles.muted}>{formatDate(gatePass.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>

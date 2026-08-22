@@ -1,7 +1,7 @@
 import pool from "../../config/database.js";
 import { whatsAppProvider } from "./whatsapp-provider.js";
 import { storageService } from "../storage/storage-service.js";
-import { claimBatch, markDelivered, markFailed } from "./outbox.repository.js";
+import { claimBatch, markDelivered, markFailed, reconcileStaleExternalDeliveries } from "./outbox.repository.js";
 
 // SYSTEM jobs are shared-shape (same outbox table/claim logic) but their
 // actual work is domain-specific — a module registers its own handler by
@@ -62,6 +62,12 @@ async function drain(channel, processItem) {
 }
 
 async function processWhatsAppOnce() {
+  // Sweep any stale PROCESSING row (worker crashed mid-send, lease
+  // expired) to UNCERTAIN before claiming — WHATSAPP is an external
+  // delivery channel, so claimBatch itself never reclaims a stale
+  // PROCESSING row for it (see outbox.repository.js).
+  await reconcileStaleExternalDeliveries("WHATSAPP");
+
   await drain("WHATSAPP", async (item) => {
     const documentBuffer = await storageService.read(item.payload.storageKey);
 

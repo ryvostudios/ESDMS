@@ -80,6 +80,18 @@
   }
 }
 
+.logoutError {
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  max-width: 180px;
+}
+
+@media (max-width: 560px) {
+  .logoutError {
+    display: none;
+  }
+}
+
 .logoutButton {
   display: inline-flex;
   align-items: center;

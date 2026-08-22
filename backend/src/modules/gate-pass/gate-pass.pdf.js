@@ -11,9 +11,9 @@ function collectPdfBuffer(doc) {
   });
 }
 
-function row(doc, label, value) {
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#475569").text(label, { continued: false });
-  doc.font("Helvetica").fontSize(11).fillColor("#0f172a").text(value || "—");
+function row(doc, label, value, { width } = {}) {
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#475569").text(label, { continued: false, width });
+  doc.font("Helvetica").fontSize(11).fillColor("#0f172a").text(value || "—", { width });
   doc.moveDown(0.6);
 }
 
@@ -31,46 +31,65 @@ export async function generateGatePassPdf(gatePass, items, verificationUrl) {
   doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(gatePass.gate_pass_number);
   doc.moveDown(1);
 
+  // Reserved rectangle for the QR code — metadata text is clamped to
+  // columnWidth so a long value (destination, remarks-length driver name,
+  // etc.) wraps within its own column instead of running rightward into
+  // the QR's space.
   const columnWidth = 250;
   const leftX = doc.x;
   const topY = doc.y;
+  const qrSize = 160;
+  const qrCaptionHeight = 20;
+  const qrBlockBottom = topY + qrSize + qrCaptionHeight;
 
-  row(doc, "Date", formatDate(gatePass.created_at));
-  row(doc, "Issuing Department", gatePass.issuing_department_name);
-  row(doc, "Requested By", gatePass.requested_by);
-  row(doc, "Issued To / Destination", gatePass.destination);
-  row(doc, "Driver", `${gatePass.driver_name} (${gatePass.driver_phone})`);
-  row(doc, "Vehicle Registration", gatePass.vehicle_registration);
-  if (gatePass.job_order_id) row(doc, "Job Order ID", gatePass.job_order_id);
-  row(doc, "Purpose", gatePass.purpose.replaceAll("_", " "));
+  row(doc, "Date", formatDate(gatePass.created_at), { width: columnWidth });
+  row(doc, "Issuing Department", gatePass.issuing_department_name, { width: columnWidth });
+  row(doc, "Requested By", gatePass.requested_by, { width: columnWidth });
+  row(doc, "Issued To / Destination", gatePass.destination, { width: columnWidth });
+  row(doc, "Driver", `${gatePass.driver_name} (${gatePass.driver_phone})`, { width: columnWidth });
+  row(doc, "Vehicle Registration", gatePass.vehicle_registration, { width: columnWidth });
+  if (gatePass.job_order_id) row(doc, "Job Order ID", gatePass.job_order_id, { width: columnWidth });
+  row(doc, "Purpose", gatePass.purpose.replaceAll("_", " "), { width: columnWidth });
   if (gatePass.expected_return_date) {
-    row(doc, "Expected Return Date", formatDate(gatePass.expected_return_date));
+    row(doc, "Expected Return Date", formatDate(gatePass.expected_return_date), { width: columnWidth });
   }
 
-  doc.image(qrImage, leftX + columnWidth + 40, topY, { width: 160 });
+  doc.image(qrImage, leftX + columnWidth + 40, topY, { width: qrSize });
   doc
     .font("Helvetica")
     .fontSize(8)
     .fillColor("#64748b")
-    .text("Scan at the gate to verify", leftX + columnWidth + 40, topY + 165, { width: 160, align: "center" });
+    .text("Scan at the gate to verify", leftX + columnWidth + 40, topY + qrSize + 5, {
+      width: qrSize,
+      align: "center",
+    });
+
+  // Continue below whichever block is taller — the (now width-clamped,
+  // correctly wrapping) metadata column, or the fixed-height QR block —
+  // so short metadata never lets later content start inside the QR's own
+  // footprint.
+  doc.y = Math.max(doc.y, qrBlockBottom);
 
   doc.moveDown(1);
-  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a").text("Items");
-  doc.moveDown(0.3);
 
-  const tableTop = doc.y;
   const cols = [40, 240, 340, 420, 480];
 
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#475569");
-  doc.text("Description", cols[0], tableTop);
-  doc.text("Part Number", cols[1], tableTop);
-  doc.text("Qty", cols[2], tableTop);
-  doc.text("Unit", cols[3], tableTop);
-  doc.moveDown(0.4);
-  doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor("#e2e8f0").stroke();
-  doc.moveDown(0.3);
+  function drawTableHeader() {
+    const headerY = doc.y;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#475569");
+    doc.text("Description", cols[0], headerY);
+    doc.text("Part Number", cols[1], headerY);
+    doc.text("Qty", cols[2], headerY);
+    doc.text("Unit", cols[3], headerY);
+    doc.moveDown(0.4);
+    doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor("#e2e8f0").stroke();
+    doc.moveDown(0.3);
+    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+  }
 
-  doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a").text("Items");
+  doc.moveDown(0.3);
+  drawTableHeader();
 
   const rowGap = 6;
 
@@ -88,6 +107,7 @@ export async function generateGatePassPdf(gatePass, items, verificationUrl) {
 
     if (doc.y + rowHeight > doc.page.height - doc.page.margins.bottom) {
       doc.addPage();
+      drawTableHeader();
     }
 
     const y = doc.y;

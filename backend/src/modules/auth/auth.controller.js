@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import { loginUser } from "./auth.service.js";
 import { loginSchema } from "./auth.validation.js";
 import { asyncHandler } from "../../shared/http/async-handler.js";
-import { ValidationError, UnauthorizedError } from "../../shared/errors/app-error.js";
+import { ValidationError, UnauthorizedError, ServiceUnavailableError } from "../../shared/errors/app-error.js";
 import { setSessionCookie, clearSessionCookie } from "../../shared/http/session-cookie.js";
 import { extractToken } from "../../middleware/authenticate.js";
 import { bumpSessionVersion } from "../../shared/users/user-profile.repository.js";
@@ -38,23 +38,44 @@ export const login = asyncHandler(async (req, res) => {
 });
 
 export const logout = asyncHandler(async (req, res) => {
-  // Best-effort real revocation: if the request still carries a token that
-  // verifies (even one close to expiry), bump that user's session_version
-  // so it — and any other still-valid token for them — is rejected on its
-  // next use. An invalid/missing/expired token isn't an error here: logout
-  // is idempotent, the outcome the caller wants (no working session) is
+  // Real revocation: if the request still carries a token that verifies
+  // (even one close to expiry), bump that user's session_version so it —
+  // and any other still-valid token for them — is rejected on its next
+  // use. An invalid/missing/expired token isn't an error here: logout is
+  // idempotent, the outcome the caller wants (no working session) is
   // already true.
+  //
+  // A DB failure while bumping session_version is a DIFFERENT case from
+  // "no valid token" and must not be treated the same way: the token WAS
+  // valid, and if the write to bump session_version fails, that session is
+  // NOT actually revoked — it stays live until natural expiry. Reporting
+  // success anyway would tell the frontend it's safe to treat the user as
+  // logged out while a still-valid token exists. This is surfaced as a
+  // failure instead, and the cookie is left in place so client state
+  // matches reality (still authenticated) rather than showing a false
+  // "logged out" UI over a token that's still actually live.
   const token = extractToken(req);
 
   if (token) {
+    let payload = null;
+
     try {
-      const payload = jwt.verify(token, config.jwtSecret, {
+      payload = jwt.verify(token, config.jwtSecret, {
         issuer: config.jwtIssuer,
         audience: config.jwtAudience,
       });
-      await bumpSessionVersion(payload.sub);
     } catch {
-      // Nothing to revoke — already unusable.
+      // Invalid/expired/missing signature — nothing to revoke, already
+      // unusable. Falls through to the normal success response below.
+    }
+
+    if (payload) {
+      try {
+        await bumpSessionVersion(payload.sub);
+      } catch (error) {
+        console.error("Logout: failed to revoke session_version for a valid session:", error);
+        throw new ServiceUnavailableError("Could not securely sign out. Please try again.");
+      }
     }
   }
 

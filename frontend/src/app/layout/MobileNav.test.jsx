@@ -70,4 +70,16 @@ describe("MobileNav focus trap", () => {
 
     trigger.remove();
   });
+
+  test("the drawer has a stable id matching TopBar's trigger aria-controls value", async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <MobileNav open onClose={() => {}} triggerRef={{ current: null }} />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(screen.getByRole("dialog").id).toBe("mobile-nav-drawer");
+  });
 });

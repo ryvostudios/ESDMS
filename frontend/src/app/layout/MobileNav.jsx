@@ -55,7 +55,14 @@ export function MobileNav({ open, onClose, triggerRef }) {
   return (
     <>
       <div className={styles.backdrop} onClick={onClose} />
-      <div className={styles.drawer} role="dialog" aria-modal="true" aria-label="Navigation menu" ref={drawerRef}>
+      <div
+        id="mobile-nav-drawer"
+        className={styles.drawer}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
+        ref={drawerRef}
+      >
         <div className={styles.header}>
           <div className={styles.brand}>
             <span className={styles.brandMark} aria-hidden="true">

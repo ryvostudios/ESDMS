@@ -374,16 +374,26 @@ Current stage:
 **Gate Pass MVP built and security-hardened; not yet deployed**
 
 The Gate Pass module (schema, backend workflow/PDF/QR/outbox, frontend UI,
-guard workflow, PWA) is implemented end-to-end, followed by two independent
-security/architecture reviews and fix passes addressing their findings — see
-`docs/DECISIONS.md` for what changed and why, and `docs/MODULES.md` for
-per-module status. The second pass also raised the backend's deployment
-readiness: configurable `HOST` binding, a config-selected storage provider
-(`local` for dev/single-instance, `supabase` for production), and fail-fast
-production config validation (`src/config/env.js`).
+guard workflow, PWA) is implemented end-to-end, followed by three
+independent security/architecture reviews and fix passes addressing their
+findings — see `docs/DECISIONS.md` for what changed and why, and
+`docs/MODULES.md` for per-module status. Deployment readiness work across
+the three passes covers: configurable `HOST` binding; a config-selected
+storage provider (`local` for dev/single-instance, `supabase` for
+production) with a bounded request timeout; fail-fast production config
+validation (`src/config/env.js`), including same-site cookie topology
+validation between `FRONTEND_ORIGIN` and the new `API_PUBLIC_URL`; row-
+locked cancellation/finalization concurrency handling; and a stale-lease
+outbox worker that distinguishes internal (safely reclaimed) from external
+delivery (never blindly resent) jobs.
 
 No production deployment exists yet; deployment is explicitly gated on
-independent re-review of the fix passes.
+independent re-review of the fix passes. Even once code review concludes,
+three integration points remain externally unverified until an actual
+deployment exercises them: the Render same-site domain topology, a real
+Supabase Storage project/bucket, and a real Meta WhatsApp integration
+(currently a simulated provider only) — see `docs/SECURITY.md` §5.2, §9,
+§11 and `README.md`.
 
 Inventory and all other modules listed in `docs/MODULES.md` remain
 unstarted, per the "Inventory must not begin before Gate Pass MVP

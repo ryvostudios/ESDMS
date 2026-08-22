@@ -1,4 +1,5 @@
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
+import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import styles from "./AuditTimeline.module.css";
 
 const ACTION_LABEL = {
@@ -24,7 +25,7 @@ export function AuditTimeline({ entries }) {
           <div className={styles.content}>
             <p className={styles.action}>{ACTION_LABEL[entry.action] || formatEnumLabel(entry.action)}</p>
             <p className={styles.meta}>
-              {entry.actorName} · {new Date(entry.createdAt).toLocaleString()}
+              {entry.actorName} · {formatDateTime(entry.createdAt)}
             </p>
             {entry.metadata?.reason && <p className={styles.reason}>“{entry.metadata.reason}”</p>}
           </div>

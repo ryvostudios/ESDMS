@@ -1,5 +1,6 @@
 import { GatePassStatusBadge } from "../../gate-pass/components/GatePassStatusBadge.jsx";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
+import { formatDate } from "../../../shared/utilities/datetime.js";
 import styles from "./GuardPassCard.module.css";
 
 function Field({ label, value }) {
@@ -25,7 +26,7 @@ export function GuardPassCard({ gatePass }) {
         <Field label="Driver Phone" value={gatePass.driverPhone} />
         <Field label="Vehicle Registration" value={gatePass.vehicleRegistration} />
         {gatePass.expectedReturnDate && (
-          <Field label="Expected Return" value={new Date(gatePass.expectedReturnDate).toLocaleDateString()} />
+          <Field label="Expected Return" value={formatDate(gatePass.expectedReturnDate)} />
         )}
       </dl>
       <p className={styles.driverHint}>Confirm the driver's ID matches the record above before proceeding.</p>

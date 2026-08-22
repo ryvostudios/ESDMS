@@ -10,9 +10,10 @@ const scriptPath = path.resolve(import.meta.dirname, "../scripts/create-admin-us
 const envPath = path.resolve(import.meta.dirname, "../.env.test");
 
 const testEmail = `bootstrap-admin-${Date.now()}@test.eset.local`;
+const testEmailVariant = (suffix) => testEmail.replace("@", `-${suffix}@`);
 
 after(async () => {
-  await pool.query("DELETE FROM users WHERE email = $1", [testEmail]);
+  await pool.query("DELETE FROM users WHERE email IN ($1, $2)", [testEmail, testEmailVariant("stdin")]);
   await pool.end();
 });
 
@@ -60,11 +61,61 @@ test("running it again for the same email is rejected, not silently re-created",
 
 test("a password under 12 characters is rejected before touching the database", () => {
   const result = runScript({
-    ADMIN_EMAIL: `${testEmail}-2`,
+    ADMIN_EMAIL: testEmailVariant("2"),
     ADMIN_FULL_NAME: "Bootstrap Admin",
     ADMIN_PASSWORD: "short",
   });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /at least 12 characters/);
+});
+
+test("a password piped via stdin (no ADMIN_PASSWORD env var) works — the shell-history-safe path", () => {
+  const email = testEmailVariant("stdin");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    env: { ...process.env, DOTENV_CONFIG_PATH: envPath, ADMIN_EMAIL: email, ADMIN_FULL_NAME: "Bootstrap Admin" },
+    input: "Bootstrap-Admin-Pw-456",
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Admin user created/);
+});
+
+test("bootstrapping against a deactivated site is rejected", async () => {
+  await pool.query(
+    "INSERT INTO sites (code, name, is_active) VALUES ($1, $2, false) ON CONFLICT (code) DO UPDATE SET is_active = false",
+    ["BOOTSTRAP-TEST-INACTIVE", "Inactive Bootstrap Test Site"],
+  );
+
+  try {
+    const result = runScript({
+      ADMIN_EMAIL: testEmailVariant("inactive-site"),
+      ADMIN_FULL_NAME: "Bootstrap Admin",
+      ADMIN_PASSWORD: "Bootstrap-Admin-Pw-123",
+      ADMIN_SITE_CODE: "BOOTSTRAP-TEST-INACTIVE",
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /exists but is deactivated/);
+  } finally {
+    await pool.query("DELETE FROM sites WHERE code = $1", ["BOOTSTRAP-TEST-INACTIVE"]);
+  }
+});
+
+test("bootstrapping while the ADMIN role itself is deactivated is rejected", async () => {
+  await pool.query("UPDATE roles SET is_active = false WHERE name = 'ADMIN'");
+
+  try {
+    const result = runScript({
+      ADMIN_EMAIL: testEmailVariant("inactive-role"),
+      ADMIN_FULL_NAME: "Bootstrap Admin",
+      ADMIN_PASSWORD: "Bootstrap-Admin-Pw-123",
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /"ADMIN" role exists but is deactivated/);
+  } finally {
+    await pool.query("UPDATE roles SET is_active = true WHERE name = 'ADMIN'");
+  }
 });

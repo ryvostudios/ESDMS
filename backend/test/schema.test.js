@@ -241,6 +241,65 @@ test("a Gate Pass's evidence photo pointer must reference a file that actually b
   );
 });
 
+async function insertGatePassFile(client, gatePassId, fileType, { version = 1 } = {}) {
+  const result = await client.query(
+    `INSERT INTO gate_pass_files
+       (gate_pass_id, file_type, storage_key, mime_type, size_bytes, checksum_sha256, version, created_by_user_id)
+     VALUES ($1, $2, 'gate-pass/x/file/' || gen_random_uuid() || '.jpg', 'image/jpeg', 10, repeat('c', 64), $3, $4)
+     RETURNING id`,
+    [gatePassId, fileType, version, users.guard],
+  );
+  return result.rows[0].id;
+}
+
+test("departure_photo_file_id referencing a RETURN_PHOTO file is rejected (wrong type, same Gate Pass)", async () => {
+  const draft = await insertDraftGatePass(pool);
+  const returnPhotoId = await insertGatePassFile(pool, draft.id, "RETURN_PHOTO");
+
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET departure_photo_file_id = $1 WHERE id = $2", [returnPhotoId, draft.id]),
+    /must reference a gate_pass_files row with file_type = DEPARTURE_PHOTO/,
+  );
+});
+
+test("departure_photo_file_id referencing an APPROVED_PDF file is rejected", async () => {
+  const draft = await insertDraftGatePass(pool);
+  const pdfId = await insertGatePassFile(pool, draft.id, "APPROVED_PDF");
+
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET departure_photo_file_id = $1 WHERE id = $2", [pdfId, draft.id]),
+    /must reference a gate_pass_files row with file_type = DEPARTURE_PHOTO/,
+  );
+});
+
+test("return_photo_file_id referencing a DEPARTURE_PHOTO file is rejected (wrong type, same Gate Pass)", async () => {
+  const draft = await insertDraftGatePass(pool);
+  const departurePhotoId = await insertGatePassFile(pool, draft.id, "DEPARTURE_PHOTO");
+
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET return_photo_file_id = $1 WHERE id = $2", [departurePhotoId, draft.id]),
+    /must reference a gate_pass_files row with file_type = RETURN_PHOTO/,
+  );
+});
+
+test("correct departure/return photo type references are accepted", async () => {
+  const draft = await insertDraftGatePass(pool);
+  const departurePhotoId = await insertGatePassFile(pool, draft.id, "DEPARTURE_PHOTO");
+  const returnPhotoId = await insertGatePassFile(pool, draft.id, "RETURN_PHOTO");
+
+  await pool.query("UPDATE gate_passes SET departure_photo_file_id = $1, return_photo_file_id = $2 WHERE id = $3", [
+    departurePhotoId,
+    returnPhotoId,
+    draft.id,
+  ]);
+
+  const row = await pool.query("SELECT departure_photo_file_id, return_photo_file_id FROM gate_passes WHERE id = $1", [
+    draft.id,
+  ]);
+  assert.equal(row.rows[0].departure_photo_file_id, departurePhotoId);
+  assert.equal(row.rows[0].return_photo_file_id, returnPhotoId);
+});
+
 test("gate_pass_items rejects a duplicate line_no within the same Gate Pass", async () => {
   const draft = await insertDraftGatePass(pool);
 

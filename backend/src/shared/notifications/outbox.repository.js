@@ -38,18 +38,32 @@ export async function enqueue(client, notifications) {
   }
 }
 
+// Channels whose delivery step is irreversible and happens outside this
+// database — a crash between "the provider accepted/sent it" and "our own
+// markDelivered() write landed" is indistinguishable, locally, from
+// "the provider never got it." Blindly reclaiming and resending a stale
+// PROCESSING row for one of these risks a real duplicate delivery (a
+// WhatsApp message the driver/gate actually receives twice). Internal
+// channels (SYSTEM) only ever write to storage/DB this application
+// controls, so replaying the same idempotent step on reclaim is safe.
+const EXTERNAL_DELIVERY_CHANNELS = new Set(["WHATSAPP"]);
+
 // Atomic claim: FOR UPDATE SKIP LOCKED lets multiple worker processes poll
 // the same table concurrently without ever double-claiming a row.
 //
-// Eligible rows are PENDING/FAILED (always claimable — locked_at is NULL
-// for both, they were never mid-claim) OR PROCESSING whose lease has
-// expired: a worker that crashed mid-send left the row PROCESSING with a
-// locked_at that just keeps aging, and without this branch nothing ever
-// looks at status = 'PROCESSING' again — it would be stuck forever.
+// Eligible rows are always PENDING/FAILED (locked_at is NULL for both,
+// they were never mid-claim). For internal channels, a stale PROCESSING
+// row (worker crashed mid-send, lease expired) is also reclaimed — nothing
+// else would ever look at status = 'PROCESSING' again otherwise. External
+// channels never reclaim a stale PROCESSING row here — see
+// reconcileStaleExternalDeliveries below, which is the only thing allowed
+// to move one of those out of PROCESSING.
 const LEASE_MINUTES = 5;
 const MAX_ATTEMPTS = 5;
 
 export async function claimBatch(channel, limit = 20) {
+  const allowStaleReclaim = !EXTERNAL_DELIVERY_CHANNELS.has(channel);
+
   const result = await pool.query(
     `WITH claimed AS (
        SELECT id FROM notification_outbox
@@ -57,7 +71,7 @@ export async function claimBatch(channel, limit = 20) {
          AND attempts < $2
          AND (
            status IN ('PENDING', 'FAILED')
-           OR (status = 'PROCESSING' AND locked_at < now() - interval '${LEASE_MINUTES} minutes')
+           OR ($4 AND status = 'PROCESSING' AND locked_at < now() - interval '${LEASE_MINUTES} minutes')
          )
        ORDER BY created_at ASC
        LIMIT $3
@@ -68,7 +82,29 @@ export async function claimBatch(channel, limit = 20) {
      FROM claimed
      WHERE o.id = claimed.id
      RETURNING o.*`,
-    [channel, MAX_ATTEMPTS, limit],
+    [channel, MAX_ATTEMPTS, limit, allowStaleReclaim],
+  );
+
+  return result.rows;
+}
+
+// The only path by which a stale PROCESSING external-delivery job leaves
+// PROCESSING: straight to UNCERTAIN, never back to claimable. UNCERTAIN is
+// terminal here — it is never automatically retried (see outbox.processor
+// / claimBatch above) — because only a human or a provider-side lookup
+// (via the preserved idempotency_key / any provider correlation id already
+// in payload) can determine what actually happened. attempts and
+// idempotency_key are left untouched; locked_at is left as the moment the
+// lease expired, as a record of when the crash was detected.
+export async function reconcileStaleExternalDeliveries(channel) {
+  const result = await pool.query(
+    `UPDATE notification_outbox
+     SET status = 'UNCERTAIN'
+     WHERE channel = $1
+       AND status = 'PROCESSING'
+       AND locked_at < now() - interval '${LEASE_MINUTES} minutes'
+     RETURNING id`,
+    [channel],
   );
 
   return result.rows;

@@ -17,6 +17,7 @@ import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
+import { formatDate, formatDateTime } from "../../../shared/utilities/datetime.js";
 import styles from "./GatePassDetailPage.module.css";
 
 const EDITABLE_STATUSES = ["DRAFT"];
@@ -161,7 +162,7 @@ export function GatePassDetailPage() {
           <h1 className={styles.number}>{gatePass.gatePassNumber}</h1>
           <div className={styles.subtitle}>
             <GatePassStatusBadge status={gatePass.status} /> &nbsp;·&nbsp; Created{" "}
-            {new Date(gatePass.createdAt).toLocaleString()}
+            {formatDateTime(gatePass.createdAt)}
           </div>
         </div>
         <div className={styles.actions}>
@@ -222,7 +223,7 @@ export function GatePassDetailPage() {
               <DetailField label="Job Order ID" value={gatePass.jobOrderId} />
               <DetailField
                 label="Expected Return Date"
-                value={gatePass.expectedReturnDate ? new Date(gatePass.expectedReturnDate).toLocaleDateString() : null}
+                value={formatDate(gatePass.expectedReturnDate)}
               />
               <DetailField label="Created By" value={gatePass.createdByName} />
               <DetailField label="Approved By" value={gatePass.approvedByName} />
@@ -263,9 +264,9 @@ export function GatePassDetailPage() {
               <h2 className={styles.sectionTitle}>Gate Activity</h2>
               <dl className={styles.detailGrid}>
                 <DetailField label="Departure Odometer" value={gatePass.departureOdometer} />
-                <DetailField label="Departure Time" value={gatePass.departureAt ? new Date(gatePass.departureAt).toLocaleString() : null} />
+                <DetailField label="Departure Time" value={formatDateTime(gatePass.departureAt)} />
                 <DetailField label="Return Odometer" value={gatePass.returnOdometer} />
-                <DetailField label="Return Time" value={gatePass.returnAt ? new Date(gatePass.returnAt).toLocaleString() : null} />
+                <DetailField label="Return Time" value={formatDateTime(gatePass.returnAt)} />
                 <DetailField label="Distance" value={gatePass.distanceKm !== null ? `${gatePass.distanceKm} km` : null} />
                 {gatePass.returnRemarks && <DetailField label="Return Remarks" value={gatePass.returnRemarks} />}
               </dl>
@@ -284,7 +285,7 @@ export function GatePassDetailPage() {
                       <DetailField label="Odometer" value={gatePass.departureEvidence.odometer} />
                       <DetailField
                         label="Recorded"
-                        value={new Date(gatePass.departureEvidence.recordedAt).toLocaleString()}
+                        value={formatDateTime(gatePass.departureEvidence.recordedAt)}
                       />
                       <DetailField label="Guard" value={gatePass.departureEvidence.recordedByName} />
                     </dl>
@@ -304,7 +305,7 @@ export function GatePassDetailPage() {
                       <DetailField label="Odometer" value={gatePass.returnEvidence.odometer} />
                       <DetailField
                         label="Recorded"
-                        value={new Date(gatePass.returnEvidence.recordedAt).toLocaleString()}
+                        value={formatDateTime(gatePass.returnEvidence.recordedAt)}
                       />
                       <DetailField label="Guard" value={gatePass.returnEvidence.recordedByName} />
                     </dl>

@@ -39,6 +39,12 @@ export default defineConfig({
             handler: 'NetworkOnly',
           },
         ],
+        // The SPA navigation fallback (serving index.html for any
+        // unmatched route, so client-side routing works on a hard
+        // refresh/deep link) must never apply to a direct browser
+        // navigation to /api/... — that must reach the real API (and get
+        // its real 404/401/whatever), never the app shell HTML.
+        navigateFallbackDenylist: [/^\/api\//],
       },
     }),
   ],

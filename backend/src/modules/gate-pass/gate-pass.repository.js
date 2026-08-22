@@ -129,6 +129,19 @@ export async function lockById(client, id) {
   return result.rows[0] || null;
 }
 
+// Same shape as findById, but row-locked within the caller's transaction —
+// used by PDF finalization so the entire generate/upload/commit sequence
+// holds the lock, closing the TOCTOU window against a concurrent
+// cancellation (which also locks this row via lockById above). FOR UPDATE
+// OF gp: only the gate_passes row itself needs locking, not the LEFT
+// JOINed department/user rows this view pulls in for display names.
+export async function lockDetailById(client, id) {
+  const result = await client.query(`SELECT ${DETAIL_COLUMNS} ${DETAIL_FROM} WHERE gp.id = $1 FOR UPDATE OF gp`, [
+    id,
+  ]);
+  return result.rows[0] || null;
+}
+
 export async function findById(id) {
   const result = await pool.query(`SELECT ${DETAIL_COLUMNS} ${DETAIL_FROM} WHERE gp.id = $1`, [id]);
   return result.rows[0] || null;

@@ -14,7 +14,7 @@ export function AppShell() {
       <Sidebar />
       <MobileNav open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} triggerRef={menuButtonRef} />
       <div className={styles.main}>
-        <TopBar onOpenMenu={() => setMobileNavOpen(true)} menuButtonRef={menuButtonRef} />
+        <TopBar onOpenMenu={() => setMobileNavOpen(true)} menuButtonRef={menuButtonRef} menuOpen={mobileNavOpen} />
         <main id="main-content" className={styles.content}>
           <Outlet />
         </main>

@@ -237,17 +237,34 @@ async function processApprovalPdfJob(item) {
   const gatePassId = item.entity_id;
   const outcome = { status: "SENT" };
 
-  // Cancellation defense-in-depth layer 2 (voidPending at cancel time is
-  // layer 1) lives once, generically, in outbox.processor.js's
-  // stillDeliverable gate — it already ran before this handler was ever
-  // called, for every channel/job type keyed off a Gate Pass, so this
-  // handler doesn't need its own copy of the same check.
+  // outbox.processor.js's stillDeliverable gate already re-checked
+  // "cancelled?" once, generically, before this handler was ever called —
+  // but that read isn't locked and happens before this transaction starts,
+  // so it can go stale: a cancellation can still land in the window
+  // between that check and this handler's own commit. The row lock below
+  // closes that window for real, rather than just narrowing it — see
+  // lockDetailById and runTransition's cancel branch (which locks the same
+  // row). Whichever of the two transactions acquires the lock first fully
+  // determines the outcome; generate/upload/commit all happen while this
+  // transaction holds the lock, so cancellation cannot interleave with it,
+  // and there is no uploaded-but-orphaned PDF to clean up after the fact —
+  // if cancellation wins the lock, this handler exits before ever
+  // generating or uploading anything.
   await withTransaction(async (client) => {
-    const gatePass = await repo.findById(gatePassId);
+    const gatePass = await repo.lockDetailById(client, gatePassId);
 
     if (!gatePass) {
       // Should be unreachable — gate_passes forbids DELETE — but never
       // silently retry forever against a target that can't exist.
+      return;
+    }
+
+    if (gatePass.status === GATE_PASS_STATUS.CANCELLED) {
+      // Cancellation won the race for this row's lock — nothing to
+      // generate or deliver. The WHATSAPP follow-up job never gets
+      // enqueued in this run, so there's nothing further for the generic
+      // entity-recheck layer to catch.
+      outcome.status = "VOID";
       return;
     }
 
@@ -320,6 +337,11 @@ async function processApprovalPdfJob(item) {
 }
 
 registerSystemJobHandler("GENERATE_APPROVAL_PDF", processApprovalPdfJob);
+
+// Exposed for tests: lets a test invoke finalization directly (e.g.
+// concurrently with a real cancel request) instead of only via the
+// registry/poll loop.
+export { processApprovalPdfJob };
 
 // Fix #6 defense-in-depth layer 2, shared by every channel/job type keyed
 // off a Gate Pass (currently SYSTEM PDF generation and the WHATSAPP send

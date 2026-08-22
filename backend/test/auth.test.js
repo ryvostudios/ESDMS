@@ -201,6 +201,40 @@ test("logout with no session (already logged out, or never logged in) still succ
   assert.equal(response.status, 200);
 });
 
+test("a DB failure while revoking a VALID session is surfaced as a failure, not reported as a successful logout", async (t) => {
+  const { cookie } = await login(server.baseUrl, "admin@test.eset.local");
+
+  const realQuery = pool.query.bind(pool);
+  t.mock.method(pool, "query", (text, params) => {
+    if (typeof text === "string" && text.includes("UPDATE users SET session_version")) {
+      throw new Error("simulated DB failure during session revocation");
+    }
+    return realQuery(text, params);
+  });
+
+  const logoutResponse = await fetch(`${server.baseUrl}/api/v1/auth/logout`, {
+    method: "POST",
+    headers: { Origin: "http://localhost:5173", Cookie: cookie },
+  });
+
+  assert.equal(logoutResponse.status, 503);
+  const body = await logoutResponse.json();
+  assert.equal(body.success, false);
+
+  t.mock.reset();
+
+  // The token WAS valid and the revocation write never landed — the old
+  // session must NOT be treated as dead. A frontend that (incorrectly)
+  // discarded its local session after a false "success" would leave the
+  // user unable to tell whether they're actually still authenticated;
+  // here, replaying the pre-logout cookie proves the server's own state
+  // agrees the session is still live.
+  const replay = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
+    headers: { Origin: "http://localhost:5173", Cookie: cookie },
+  });
+  assert.equal(replay.status, 200);
+});
+
 test("CORS rejects an unrecognized origin", async () => {
   const response = await fetch(`${server.baseUrl}/api/v1/health`, {
     headers: { Origin: "http://evil.example" },

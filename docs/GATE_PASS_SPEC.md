@@ -260,18 +260,34 @@ Approval writes an outbox row inside the same transaction as the state
 change; delivery (Guard in-app notification, Driver WhatsApp) happens in a
 background step **after** commit, so external delivery availability never
 gates approval. Delivery state (`PENDING` / `PROCESSING` / `SENT` /
-`FAILED` / `VOID` / `SIMULATED`) is tracked per outbox row with retry
-support.
+`FAILED` / `VOID` / `SIMULATED` / `UNCERTAIN`) is tracked per outbox row
+with retry support.
 
 Every outbox row carries an authoritative `recipient_site_id` derived from
 the Gate Pass, never a frontend-supplied filter — a Guard notification is
 only visible to the same site. Jobs are claimed atomically
-(`FOR UPDATE SKIP LOCKED`); a worker that crashes mid-job eventually loses
-its lease and the job is reclaimed. Cancelling a Gate Pass voids any still-
-pending job in the same transaction, plus a defense-in-depth re-check before
-a worker actually generates or sends, so a cancel-before-worker-runs race
-can never produce a stale delivery. WhatsApp sends carry a stable
-idempotency key through to the provider.
+(`FOR UPDATE SKIP LOCKED`). What happens to a stale (lease-expired)
+`PROCESSING` job after a worker crash depends on the channel: **internal**
+jobs (`SYSTEM` — PDF generation) are safely reclaimed and retried, since
+they only ever write to storage/DB this application controls, and the
+existing PDF-file check makes a retry an idempotent no-op. **External**
+delivery jobs (`WHATSAPP`) are never blindly reclaimed and resent — a
+crash between "the provider accepted the message" and "our own DB write
+landed" can't be distinguished locally from "never sent," so resending
+risks a real duplicate WhatsApp message. A stale `WHATSAPP` job instead
+moves to the terminal `UNCERTAIN` status, preserving its idempotency key
+and attempt history for a human/provider-side reconciliation step (not yet
+built — see `docs/DECISIONS.md`).
+
+PDF finalization additionally locks the Gate Pass row for its full
+generate/upload/commit duration (`repo.lockDetailById`), closing the race
+where a cancellation could otherwise land between an earlier "still
+deliverable?" check and the job's own commit. Cancelling a Gate Pass also
+voids any still-pending job in the same transaction, plus the same
+defense-in-depth re-check for jobs already claimed, so a
+cancel-before-worker-runs (or cancel-during-finalization) race can never
+produce a stale delivery. WhatsApp sends carry a stable idempotency key
+through to the provider.
 
 A `WhatsAppProvider` interface is implemented by a demo/local provider when
 real Meta WhatsApp Business Cloud API credentials are not configured. The

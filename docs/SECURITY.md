@@ -114,11 +114,74 @@ Do not casually store long-lived bearer tokens in browser localStorage.
   Logout bumps `session_version`, which immediately invalidates every
   outstanding token for that user (coarse, user-wide revocation — not
   per-device — chosen for simplicity; see `docs/DECISIONS.md`).
+- Logout distinguishes "nothing to revoke" (missing/invalid/expired token —
+  succeeds, since the outcome the caller wants is already true) from a real
+  database failure while bumping `session_version` for a token that WAS
+  valid: the latter returns `503` and leaves the cookie in place, rather
+  than reporting success for a session that was never actually revoked
+  server-side (`src/modules/auth/auth.controller.js`). The frontend only
+  clears local session state on a confirmed `200` (`AuthContext.jsx`) and
+  shows an explicit "Could not securely sign out" message otherwise.
 - Every authenticated request re-checks the user's, their role's, **and**
   their site's active flags from the database (`isProfileActive`,
   `src/shared/users/user-profile.repository.js`) — a JWT issued while
   everything was active does not remain valid after an admin deactivates the
   site or account mid-session.
+
+### 5.2 Render Cookie Topology (Deployment-Critical)
+
+The session cookie is `HttpOnly` + `SameSite=Lax` with **no CSRF token** —
+deliberately (see `docs/DECISIONS.md`): `SameSite=Lax` already excludes the
+cookie from the cross-site fetch/XHR requests a CSRF token would otherwise
+guard against. This is correct and sufficient **only if the frontend and
+API are deployed same-site** — sharing one registrable domain (e.g.
+`app.example.com` and `api.example.com`, both under `example.com`).
+
+**Two separate default Render service domains (e.g.
+`esdms-frontend.onrender.com` and `esdms-api.onrender.com`) are NOT
+same-site.** Render hands each service its own subdomain of the shared
+`onrender.com` parent, which behaves as a public suffix for cookie
+purposes — the browser treats each one as an unrelated site. A default
+two-service Render deployment will **start successfully and appear to
+work** (the API answers `/health`, the frontend loads) but **login will
+silently fail to persist**: the browser never attaches the session cookie
+to cross-site requests, so every request after login looks unauthenticated
+again. There is no error to see — just an app that seems to forget you
+immediately after logging in.
+
+**Do not fix this by setting `SameSite=None`** without also adding real
+CSRF protection — that would remove the one thing currently standing in
+for a CSRF token. It is deliberately not supported as a configuration
+option in this codebase.
+
+**Required production topology**: same-site custom domains —
+
+```
+app.<company-domain>   → Render Static Site (frontend)
+api.<company-domain>   → Render Web Service (backend)
+```
+
+Both share one registrable domain, so the existing `HttpOnly` /
+`SameSite=Lax` cookie design works unchanged. No real company domain is
+hardcoded anywhere in this codebase — it's entirely environment-driven via
+`FRONTEND_ORIGIN` (frontend) and `API_PUBLIC_URL` (backend, new — see
+`.env.example`).
+
+**Enforcement**: `validateProductionConfig()` (`src/config/env.js`)
+requires `API_PUBLIC_URL` in production and rejects startup if
+`FRONTEND_ORIGIN`'s registrable domain doesn't match `API_PUBLIC_URL`'s —
+including the specific known-unsafe case of two different subdomains under
+`onrender.com` (and a handful of other common multi-tenant PaaS host
+suffixes: `vercel.app`, `netlify.app`, `herokuapp.com`, `pages.dev`,
+`railway.app`, `fly.dev`). This is a heuristic, not a full public-suffix-
+list implementation — it catches the specific failure mode described
+above, not every conceivable domain edge case.
+
+An alternative for a topology that genuinely can't use one registrable
+domain: put a same-origin reverse proxy in front of both frontend and API
+so the browser only ever talks to one origin. Not implemented in this
+codebase; the custom-domain approach above is simpler and sufficient for
+the current deployment target.
 
 ---
 
@@ -193,6 +256,7 @@ The application must never run its normal request-handling workload as a databas
 - Production configuration validation (`validateProductionConfig` in `src/config/env.js`) refuses to start with `STORAGE_PROVIDER=local` unless explicitly overridden to `local-single-instance-accepted-risk`, so a production deploy can't silently end up with non-durable, single-instance-only file storage.
 - Supabase credentials (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`) are variable names only in `.env.example`; no real Supabase project has been connected as part of this fix pass. `SUPABASE_SERVICE_ROLE_KEY` must never reach frontend code.
 - Departure/return evidence descriptors returned to Admin/Site Manager on the Gate Pass detail endpoint are metadata only (file id, odometer, timestamp, recorded-by name) — never a storage path or URL. The actual bytes are only reachable through the existing authorized `GET /gate-passes/:id/files/:fileId` endpoint, which re-checks scope and file ownership itself.
+- Every `SupabaseStorageProvider` call (upload/download/delete) is bounded by `SUPABASE_STORAGE_TIMEOUT_MS` (default 10000, validated 1000-120000) via `AbortController` — a network/storage outage aborts the request instead of holding it (and any DB transaction/row lock a caller holds alongside it, e.g. PDF finalization — see `docs/DECISIONS.md`) open indefinitely. A timeout raises a typed `StorageTimeoutError`, distinguishable from a plain HTTP/network failure. `SUPABASE_URL` and `SUPABASE_STORAGE_BUCKET` are validated at provider construction (valid URL; a plain, unambiguous bucket name — no path-traversal characters) in every environment, not just production.
 
 ---
 
@@ -224,9 +288,19 @@ npm run user:create-admin
 
 run server-side (a Render Shell session or a one-off job against the target database), never through the browser. It supports two modes:
 
-- **Interactive**: run with no relevant environment variables set; it prompts for email, full name, site code, and password (entered in plain sight — an accepted tradeoff for a one-time command run by an operator on their own trusted shell).
-- **Non-interactive**: set `ADMIN_EMAIL`, `ADMIN_FULL_NAME`, `ADMIN_PASSWORD` (and optionally `ADMIN_SITE_CODE`, default `MAIN`) as environment variables — e.g. for a scripted first-deploy step.
+- **Interactive**: run with no relevant environment variables set; it prompts for email, full name, and site code (visible), then the password — read with terminal echo suppressed via raw-mode stdin (no masking dependency added; falls back to a plain line read when stdin isn't a real terminal, e.g. when piped).
+- **Non-interactive**: set `ADMIN_EMAIL` and `ADMIN_FULL_NAME` (and optionally `ADMIN_SITE_CODE`, default `MAIN`) as environment variables. The password can be supplied either as `ADMIN_PASSWORD` or piped via stdin — see the exact procedure below.
 
-The script (`scripts/create-admin-user.js`) requires migrations to have already run (it looks up the `ADMIN` role and the target site by code, both seeded by migrations), rejects a password under 12 characters, and refuses to run if the email already exists rather than silently resetting it.
+The script (`scripts/create-admin-user.js`) requires migrations to have already run (it looks up the `ADMIN` role and the target site by code, both seeded by migrations), rejects a password under 12 characters, refuses to run if the email already exists rather than silently resetting it, and refuses to run against a **deactivated** site or a deactivated `ADMIN` role rather than silently provisioning into a site/role nobody can actually use.
+
+**Secure production bootstrap procedure:**
+
+1. Run migrations first (`npm run migrate:up:prod`) — the `ADMIN` role and target site row must already exist.
+2. Set `ADMIN_EMAIL` and `ADMIN_FULL_NAME` (and `ADMIN_SITE_CODE` if not `MAIN`) through your platform's own environment-variable injection (e.g. a Render one-off Job's "Environment" tab) — never typed inline on a command line, where they would land in shell history.
+3. Supply the password by piping it into the script rather than as an env var typed on a command line, so the secret itself never appears in shell history or a `ps` listing of the command:
+   ```
+   printf '%s' "$SECRET_PASSWORD" | node scripts/create-admin-user.js
+   ```
+   (An `ADMIN_PASSWORD` env var is still supported and is fine when your platform's own env var injection is itself secret-safe — the risk is specifically typing the value inline on a command line.)
 
 There is currently no in-app user-management UI/API for creating additional users of any role — every user account (not just the first admin) is provisioned server-side for now. This is a known gap for a real multi-user rollout, tracked as future work, not a security control to route around by adding a public registration endpoint.

@@ -327,4 +327,10 @@ This sequence may change only through an explicit documented project decision.
 | Workforce / Attendance | Not started |
 
 See `docs/DECISIONS.md` for the specific decisions behind the Gate Pass
-implementation and its subsequent security fix pass.
+implementation and its subsequent security fix passes.
+
+"Security-hardened" above describes the code and its test coverage, not a
+verified deployment: the Render same-site domain topology, a real
+Supabase Storage project, and a real Meta WhatsApp integration are all
+designed for but not yet exercised against anything real — see
+`docs/SECURITY.md` §5.2, §9, §11 and `README.md`.

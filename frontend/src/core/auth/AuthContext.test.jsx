@@ -86,4 +86,39 @@ describe("AuthContext critical flow", () => {
     await waitFor(() => expect(result.current.status).toBe("unauthenticated"));
     expect(result.current.user).toBeNull();
   });
+
+  test("logout: a failed request (e.g. the backend's 503 when it couldn't confirm revocation) does NOT clear the session", async () => {
+    const user = { id: "u1", role: "ADMIN", permissions: [] };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url) => {
+        if (String(url).includes("/auth/me")) {
+          return Promise.resolve(jsonResponse(200, { success: true, data: { user } }));
+        }
+        if (String(url).includes("/auth/logout")) {
+          return Promise.resolve(
+            jsonResponse(503, {
+              success: false,
+              error: { code: "SERVICE_UNAVAILABLE", message: "Could not securely sign out. Please try again." },
+            }),
+          );
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      }),
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(result.current.status).toBe("authenticated"));
+
+    await act(async () => {
+      await expect(result.current.logout()).rejects.toThrow("Could not securely sign out. Please try again.");
+    });
+
+    // The UI must keep showing the user as authenticated — a false
+    // "logged out" state here would be misleading given the session may
+    // still be live server-side.
+    expect(result.current.status).toBe("authenticated");
+    expect(result.current.user).toEqual(user);
+  });
 });

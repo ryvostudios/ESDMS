@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   LocalStorageProvider,
   SupabaseStorageProvider,
+  StorageTimeoutError,
   createStorageService,
 } from "../src/shared/storage/storage-service.js";
 
@@ -115,4 +116,91 @@ test("SupabaseStorageProvider.remove never throws, even on a network failure", a
   // No assertion needed beyond "didn't throw" — remove() is a
   // compensating-cleanup path that must never mask the caller's original
   // error.
+});
+
+// A fetch mock that actually respects the AbortSignal it's given, the way
+// the real fetch does — never resolves on its own, only rejects once
+// aborted. Exercises the real timeout/AbortController wiring rather than
+// just asserting a rejection happens.
+function neverResolvingFetchRespectingAbort() {
+  return (url, options) =>
+    new Promise((resolve, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        const error = new Error("The operation was aborted.");
+        error.name = "AbortError";
+        reject(error);
+      });
+    });
+}
+
+test("SupabaseStorageProvider.save times out and throws a typed StorageTimeoutError", async () => {
+  global.fetch = neverResolvingFetchRespectingAbort();
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+    timeoutMs: 20,
+  });
+
+  await assert.rejects(
+    provider.save(Buffer.from("x"), { gatePassId: "gp-1", category: "departure", extension: "jpg" }),
+    (error) => {
+      assert.ok(error instanceof StorageTimeoutError);
+      assert.match(error.message, /upload timed out after 20ms/);
+      return true;
+    },
+  );
+});
+
+test("SupabaseStorageProvider.read times out and throws a typed StorageTimeoutError", async () => {
+  global.fetch = neverResolvingFetchRespectingAbort();
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+    timeoutMs: 20,
+  });
+
+  await assert.rejects(provider.read("gate-pass/gp-1/departure/x.jpg"), StorageTimeoutError);
+});
+
+test("SupabaseStorageProvider.remove swallows a timeout too — the never-throws contract holds even for an abort", async () => {
+  global.fetch = neverResolvingFetchRespectingAbort();
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+    timeoutMs: 20,
+  });
+
+  await provider.remove("gate-pass/gp-1/departure/x.jpg");
+});
+
+test("SupabaseStorageProvider rejects an invalid SUPABASE_URL at construction", () => {
+  assert.throws(
+    () => new SupabaseStorageProvider({ url: "not-a-url", serviceRoleKey: "k", bucket: "gate-pass-evidence" }),
+    /Invalid SUPABASE_URL/,
+  );
+});
+
+test("SupabaseStorageProvider rejects an unsafe or empty bucket name at construction", () => {
+  for (const bucket of ["", "../escape", "has spaces", "slash/inside"]) {
+    assert.throws(
+      () => new SupabaseStorageProvider({ url: "https://project.supabase.co", serviceRoleKey: "k", bucket }),
+      /Invalid SUPABASE_STORAGE_BUCKET/,
+    );
+  }
+});
+
+test("SupabaseStorageProvider accepts a safe bucket name", () => {
+  assert.doesNotThrow(() => {
+    new SupabaseStorageProvider({
+      url: "https://project.supabase.co",
+      serviceRoleKey: "k",
+      bucket: "gate-pass-evidence_v2.prod",
+    });
+  });
 });

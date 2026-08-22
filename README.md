@@ -11,12 +11,29 @@ The platform is being designed so that individual business modules can be develo
 ## Development Status
 
 Gate Pass MVP implemented end-to-end (backend, frontend, PWA, tests) and
-subsequently hardened through two independent security/architecture review
-and fix passes — see `docs/DECISIONS.md` for what changed and why.
+subsequently hardened through three independent security/architecture
+review and fix passes — see `docs/DECISIONS.md` for what changed and why.
 
 No production deployment exists yet: deployment is explicitly gated on
 independent re-review of the fix passes. See `docs/ARCHITECTURE.md` §13 and
-`docs/MODULES.md` §15 for current per-module status.
+`docs/MODULES.md` §15 for current per-module status. Three things in
+particular are implemented but **not yet externally verified**, and this
+codebase should not be described as "production-ready" until they are:
+
+- **Render deployment topology**: the app requires the frontend and API to
+  be deployed same-site (e.g. `app.<domain>` / `api.<domain>`) — separate
+  default `*.onrender.com` service domains are not a supported topology
+  for authenticated use (the session cookie won't be sent cross-site). See
+  `docs/SECURITY.md` §5.2.
+- **Supabase Storage**: the provider implementation exists and is unit
+  tested against a mocked API, but no real Supabase project has been
+  connected — live bucket privacy, connectivity, and TLS behavior remain
+  to be verified during actual deployment. See `docs/SECURITY.md` §9.
+- **WhatsApp delivery**: only a simulated (demo) provider is connected. A
+  real Meta integration will need to implement the reconciliation
+  behavior this codebase is already designed around (an uncertain/crashed
+  send is never blindly retried — see `docs/SECURITY.md` §11) before it
+  can be trusted for real driver notifications.
 
 ## Initial Module
 

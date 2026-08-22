@@ -67,6 +67,23 @@ export class LocalStorageProvider {
   }
 }
 
+// Thrown when a Supabase Storage call is aborted by its own timeout —
+// distinct from a plain network/HTTP failure so callers (and tests) can
+// tell "we gave up waiting" apart from "the request completed and failed."
+export class StorageTimeoutError extends Error {
+  constructor(operation, timeoutMs) {
+    super(`Supabase Storage ${operation} timed out after ${timeoutMs}ms.`);
+    this.name = "StorageTimeoutError";
+  }
+}
+
+// Server-generated storage keys (see generateStorageKey above) are already
+// safe; a bucket name is operator-configured (env var), so it gets the
+// same treatment as any other config value that ends up in a URL path —
+// reject anything that isn't a plain, unambiguous name before it's ever
+// used to build a request.
+const SAFE_BUCKET_NAME = /^[a-zA-Z0-9._-]+$/;
+
 // Production-ready private storage. Talks to Supabase Storage's plain HTTP
 // API directly (rather than pulling in @supabase/supabase-js) — uploading,
 // downloading, and deleting one object each map to one REST call, so a
@@ -78,25 +95,67 @@ export class SupabaseStorageProvider {
   #baseUrl;
   #bucket;
   #headers;
+  #timeoutMs;
 
-  constructor({ url, serviceRoleKey, bucket }) {
-    this.#baseUrl = url.replace(/\/$/, "");
+  constructor({ url, serviceRoleKey, bucket, timeoutMs }) {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new Error(`Invalid SUPABASE_URL: "${url}".`);
+    }
+
+    if (!bucket || !SAFE_BUCKET_NAME.test(bucket)) {
+      throw new Error(`Invalid SUPABASE_STORAGE_BUCKET: "${bucket}".`);
+    }
+
+    this.#baseUrl = parsedUrl.origin + parsedUrl.pathname.replace(/\/$/, "");
     this.#bucket = bucket;
     this.#headers = { Authorization: `Bearer ${serviceRoleKey}`, apikey: serviceRoleKey };
+    // Matches config/env.js's own default — kept here too so constructing
+    // a provider directly (as the test suite does) without an explicit
+    // timeoutMs still has a sane, safe bound rather than an
+    // effectively-immediate setTimeout(fn, undefined).
+    this.#timeoutMs = timeoutMs ?? 10_000;
   }
 
   #objectUrl(storageKey) {
     return `${this.#baseUrl}/storage/v1/object/${this.#bucket}/${storageKey}`;
   }
 
+  // Bounds every request so a network/storage outage can't hold this call
+  // — and any DB transaction/row lock a caller is holding alongside it —
+  // open indefinitely. AbortController's reason isn't used in the thrown
+  // error (it would just be a generic AbortError); the operation name and
+  // configured timeout are enough to act on.
+  async #fetchWithTimeout(url, options, operation) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+      if (error.name === "AbortError") {
+        throw new StorageTimeoutError(operation, this.#timeoutMs);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async save(buffer, params) {
     const storageKey = generateStorageKey(params);
 
-    const response = await fetch(this.#objectUrl(storageKey), {
-      method: "POST",
-      headers: { ...this.#headers, "Content-Type": "application/octet-stream" },
-      body: buffer,
-    });
+    const response = await this.#fetchWithTimeout(
+      this.#objectUrl(storageKey),
+      {
+        method: "POST",
+        headers: { ...this.#headers, "Content-Type": "application/octet-stream" },
+        body: buffer,
+      },
+      "upload",
+    );
 
     if (!response.ok) {
       throw new Error(`Supabase Storage upload failed (${response.status}): ${await response.text()}`);
@@ -110,7 +169,11 @@ export class SupabaseStorageProvider {
   }
 
   async read(storageKey) {
-    const response = await fetch(this.#objectUrl(storageKey), { headers: this.#headers });
+    const response = await this.#fetchWithTimeout(
+      this.#objectUrl(storageKey),
+      { headers: this.#headers },
+      "download",
+    );
 
     if (!response.ok) {
       throw new Error(`Supabase Storage download failed (${response.status}): ${await response.text()}`);
@@ -122,13 +185,17 @@ export class SupabaseStorageProvider {
   // Same never-throws contract as LocalStorageProvider.remove.
   async remove(storageKey) {
     try {
-      const response = await fetch(this.#objectUrl(storageKey), { method: "DELETE", headers: this.#headers });
+      const response = await this.#fetchWithTimeout(
+        this.#objectUrl(storageKey),
+        { method: "DELETE", headers: this.#headers },
+        "delete",
+      );
 
       if (!response.ok && response.status !== 404) {
         console.error(`Failed to clean up orphaned file ${storageKey}: HTTP ${response.status}`);
       }
     } catch (error) {
-      console.error(`Failed to clean up orphaned file ${storageKey}:`, error);
+      console.error(`Failed to clean up orphaned file ${storageKey}:`, error.message);
     }
   }
 }
@@ -151,6 +218,7 @@ export function createStorageService(source = config) {
       url: source.supabaseUrl,
       serviceRoleKey: source.supabaseServiceRoleKey,
       bucket: source.supabaseStorageBucket,
+      timeoutMs: source.supabaseStorageTimeoutMs,
     });
   }
 

@@ -41,8 +41,15 @@ export function AuthProvider({ children }) {
     setStatus("authenticated");
   }, []);
 
-  const logout = useCallback(() => {
-    apiClient.post("/auth/logout", undefined, { suppressUnauthorizedHandling: true }).finally(clearSession);
+  // Only clears local session state on a CONFIRMED server-side logout — a
+  // failed request (network error, or the backend's own 503 when it
+  // couldn't confirm session revocation — see docs/SECURITY.md) must not
+  // make the UI claim the user is logged out while their session may
+  // still be live server-side. Callers should catch and surface the
+  // rejection (see TopBar.jsx) rather than treating this as fire-and-forget.
+  const logout = useCallback(async () => {
+    await apiClient.post("/auth/logout", undefined, { suppressUnauthorizedHandling: true });
+    clearSession();
   }, [clearSession]);
 
   const hasPermission = useCallback(

@@ -20,6 +20,7 @@ const BASE_VALID_PROD_ENV = {
   JWT_SECRET: "a".repeat(32),
   FRONTEND_ORIGIN: "https://app.example.com",
   APP_PUBLIC_URL: "https://app.example.com",
+  API_PUBLIC_URL: "https://api.example.com",
   TRUST_PROXY_HOPS: "1",
   STORAGE_PROVIDER: "supabase",
   SUPABASE_URL: "https://project.supabase.co",
@@ -71,6 +72,115 @@ test("production refuses to start without an explicit TRUST_PROXY_HOPS", () => {
   const result = runWithEnv({ TRUST_PROXY_HOPS: undefined });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /TRUST_PROXY_HOPS must be set explicitly/);
+});
+
+test("TRUST_PROXY_HOPS accepts 0, 1, and 2", () => {
+  for (const value of ["0", "1", "2"]) {
+    const result = runWithEnv({ TRUST_PROXY_HOPS: value });
+    assert.equal(result.status, 0, `TRUST_PROXY_HOPS=${value} should be valid: ${result.stderr}`);
+  }
+});
+
+test("TRUST_PROXY_HOPS rejects Infinity, abc, -1, 1.5, and 999999", () => {
+  for (const value of ["Infinity", "abc", "-1", "1.5", "999999"]) {
+    const result = runWithEnv({ TRUST_PROXY_HOPS: value });
+    assert.notEqual(result.status, 0, `TRUST_PROXY_HOPS=${value} should be rejected`);
+    assert.match(result.stderr, /TRUST_PROXY_HOPS must be an integer between 0 and 10/);
+  }
+});
+
+test("an invalid PORT is rejected", () => {
+  for (const value of ["0", "-1", "abc", "1.5", "70000", "Infinity"]) {
+    const result = runWithEnv({ PORT: value });
+    assert.notEqual(result.status, 0, `PORT=${value} should be rejected`);
+    assert.match(result.stderr, /PORT must be an integer between 1 and 65535/);
+  }
+});
+
+test("an unrecognized APP_TIMEZONE is rejected", () => {
+  const result = runWithEnv({ APP_TIMEZONE: "Not/AZone" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /APP_TIMEZONE.*not a recognized IANA timezone/);
+});
+
+test("a real IANA APP_TIMEZONE is accepted", () => {
+  const result = runWithEnv({ APP_TIMEZONE: "Asia/Karachi" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("SUPABASE_STORAGE_TIMEOUT_MS rejects out-of-range or malformed values", () => {
+  for (const value of ["999", "120001", "abc", "-1", "1.5", "Infinity"]) {
+    const result = runWithEnv({ SUPABASE_STORAGE_TIMEOUT_MS: value });
+    assert.notEqual(result.status, 0, `SUPABASE_STORAGE_TIMEOUT_MS=${value} should be rejected`);
+    assert.match(result.stderr, /SUPABASE_STORAGE_TIMEOUT_MS must be an integer between 1000 and 120000/);
+  }
+});
+
+test("SUPABASE_STORAGE_TIMEOUT_MS accepts a value within range", () => {
+  const result = runWithEnv({ SUPABASE_STORAGE_TIMEOUT_MS: "15000" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("production refuses to start without API_PUBLIC_URL", () => {
+  const result = runWithEnv({ API_PUBLIC_URL: undefined });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /API_PUBLIC_URL must be set in production/);
+});
+
+test("production refuses to start with an http:// API_PUBLIC_URL", () => {
+  const result = runWithEnv({ API_PUBLIC_URL: "http://api.example.com" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /API_PUBLIC_URL.*https/);
+});
+
+test("production refuses a loopback HOST", () => {
+  for (const value of ["127.0.0.1", "localhost", "::1"]) {
+    const result = runWithEnv({ HOST: value });
+    assert.notEqual(result.status, 0, `HOST=${value} should be rejected`);
+    assert.match(result.stderr, /HOST ".*" is a loopback address/);
+  }
+});
+
+test("production accepts an explicit HOST=0.0.0.0", () => {
+  const result = runWithEnv({ HOST: "0.0.0.0" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("known unsafe separate Render domains (different *.onrender.com subdomains) are rejected", () => {
+  const result = runWithEnv({
+    FRONTEND_ORIGIN: "https://esdms-frontend.onrender.com",
+    APP_PUBLIC_URL: "https://esdms-frontend.onrender.com",
+    API_PUBLIC_URL: "https://esdms-api.onrender.com",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /are not same-site/);
+});
+
+test("a same-site custom-domain topology (app.<domain> / api.<domain>) is accepted", () => {
+  const result = runWithEnv({
+    FRONTEND_ORIGIN: "https://app.eset.example",
+    APP_PUBLIC_URL: "https://app.eset.example",
+    API_PUBLIC_URL: "https://api.eset.example",
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("SUPABASE_URL with embedded credentials is rejected", () => {
+  const result = runWithEnv({ SUPABASE_URL: "https://user:pass@project.supabase.co" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SUPABASE_URL must not embed credentials/);
+});
+
+test("a malformed SUPABASE_URL is rejected", () => {
+  const result = runWithEnv({ SUPABASE_URL: "not-a-url" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SUPABASE_URL ".*" is not a valid URL/);
+});
+
+test("an http:// SUPABASE_URL is rejected in production", () => {
+  const result = runWithEnv({ SUPABASE_URL: "http://project.supabase.co" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SUPABASE_URL ".*" must be an https:\/\/ URL/);
 });
 
 test("development does not require any of the production-only settings", () => {

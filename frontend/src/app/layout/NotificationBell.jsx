@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listNotifications } from "../../core/api/notifications.js";
 import { useAuth } from "../../core/auth/AuthContext.jsx";
 import { BellIcon } from "../../shared/icons.jsx";
+import { formatDateTime } from "../../shared/utilities/datetime.js";
 import styles from "./NotificationBell.module.css";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -108,29 +109,42 @@ export function NotificationBell() {
         className={styles.button}
         onClick={handleToggle}
         aria-label="Notifications"
-        aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls="notifications-panel"
       >
         <BellIcon />
         {hasUnseen && <span className={styles.dot} aria-hidden="true" />}
       </button>
 
       {open && (
-        <div className={styles.panel} role="menu" aria-label="Notifications" ref={panelRef} tabIndex={-1}>
+        // A disclosure panel of informational content, not a command menu
+        // (nothing here is an actionable menuitem) — role="region" plus a
+        // real list is the correct, simpler structure rather than
+        // role="menu" over plain non-interactive <div> children.
+        <div
+          id="notifications-panel"
+          className={styles.panel}
+          role="region"
+          aria-label="Notifications"
+          ref={panelRef}
+          tabIndex={-1}
+        >
           <div className={styles.panelHeader}>Notifications</div>
           {notifications.length === 0 ? (
             <p className={styles.empty}>No notifications yet.</p>
           ) : (
-            notifications.map((notification) => {
-              const { title, meta } = describe(notification);
-              return (
-                <div className={styles.item} key={notification.id}>
-                  <p className={styles.itemTitle}>{title}</p>
-                  {meta && <p className={styles.itemMeta}>{meta}</p>}
-                  <p className={styles.itemMeta}>{new Date(notification.createdAt).toLocaleString()}</p>
-                </div>
-              );
-            })
+            <ul className={styles.list}>
+              {notifications.map((notification) => {
+                const { title, meta } = describe(notification);
+                return (
+                  <li className={styles.item} key={notification.id}>
+                    <p className={styles.itemTitle}>{title}</p>
+                    {meta && <p className={styles.itemMeta}>{meta}</p>}
+                    <p className={styles.itemMeta}>{formatDateTime(notification.createdAt)}</p>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
       )}
