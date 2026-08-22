@@ -14,7 +14,7 @@ vi.mock("../../core/api/notifications.js", () => ({
 afterEach(() => {
   cleanup();
   mockListNotifications.mockReset();
-  localStorage.clear();
+  window.localStorage.clear();
 });
 
 describe("NotificationBell semantics", () => {

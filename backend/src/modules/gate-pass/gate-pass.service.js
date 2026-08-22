@@ -237,55 +237,68 @@ async function processApprovalPdfJob(item) {
   const gatePassId = item.entity_id;
   const outcome = { status: "SENT" };
 
-  // outbox.processor.js's stillDeliverable gate already re-checked
-  // "cancelled?" once, generically, before this handler was ever called —
-  // but that read isn't locked and happens before this transaction starts,
-  // so it can go stale: a cancellation can still land in the window
-  // between that check and this handler's own commit. The row lock below
-  // closes that window for real, rather than just narrowing it — see
-  // lockDetailById and runTransition's cancel branch (which locks the same
-  // row). Whichever of the two transactions acquires the lock first fully
-  // determines the outcome; generate/upload/commit all happen while this
-  // transaction holds the lock, so cancellation cannot interleave with it,
-  // and there is no uploaded-but-orphaned PDF to clean up after the fact —
-  // if cancellation wins the lock, this handler exits before ever
-  // generating or uploading anything.
-  await withTransaction(async (client) => {
-    const gatePass = await repo.lockDetailById(client, gatePassId);
+  // Tracked outside the transaction, not just around insertFile: the
+  // upload itself is not transactional (object storage has no concept of
+  // this DB transaction), so a failure ANYWHERE from here through COMMIT
+  // — insertFile, enqueue, or the COMMIT statement itself, which only
+  // runs after this callback already returned (see withTransaction) —
+  // must still trigger cleanup. Only set when THIS attempt uploaded a new
+  // object; an already-existing, already-committed PDF found via
+  // findLatestPdfFile below is never touched.
+  let newlyUploadedStorageKey = null;
 
-    if (!gatePass) {
-      // Should be unreachable — gate_passes forbids DELETE — but never
-      // silently retry forever against a target that can't exist.
-      return;
-    }
+  try {
+    // outbox.processor.js's stillDeliverable gate already re-checked
+    // "cancelled?" once, generically, before this handler was ever
+    // called — but that read isn't locked and happens before this
+    // transaction starts, so it can go stale: a cancellation can still
+    // land in the window between that check and this handler's own
+    // commit. The row lock below closes that window for real, rather
+    // than just narrowing it — see lockDetailById and runTransition's
+    // cancel branch (which locks the same row). Whichever of the two
+    // transactions acquires the lock first fully determines the outcome;
+    // generate/upload/commit all happen while this transaction holds the
+    // lock, so cancellation cannot interleave with it, and there is no
+    // uploaded-but-orphaned PDF to clean up from THAT race specifically —
+    // if cancellation wins the lock, this handler exits before ever
+    // generating or uploading anything. (A plain DB failure at commit
+    // time is a separate, unrelated risk — see the catch below.)
+    await withTransaction(async (client) => {
+      const gatePass = await repo.lockDetailById(client, gatePassId);
 
-    if (gatePass.status === GATE_PASS_STATUS.CANCELLED) {
-      // Cancellation won the race for this row's lock — nothing to
-      // generate or deliver. The WHATSAPP follow-up job never gets
-      // enqueued in this run, so there's nothing further for the generic
-      // entity-recheck layer to catch.
-      outcome.status = "VOID";
-      return;
-    }
+      if (!gatePass) {
+        // Should be unreachable — gate_passes forbids DELETE — but never
+        // silently retry forever against a target that can't exist.
+        return;
+      }
 
-    // Re-derive "already done?" from durable state instead of trusting
-    // anything about this job's own prior attempts — safe to run twice.
-    const existing = await repo.findLatestPdfFile(gatePassId, client);
-    let storageKey = existing?.storage_key;
+      if (gatePass.status === GATE_PASS_STATUS.CANCELLED) {
+        // Cancellation won the race for this row's lock — nothing to
+        // generate or deliver. The WHATSAPP follow-up job never gets
+        // enqueued in this run, so there's nothing further for the generic
+        // entity-recheck layer to catch.
+        outcome.status = "VOID";
+        return;
+      }
 
-    if (!storageKey) {
-      const items = await repo.findItemsByGatePassId(gatePassId);
-      // A URL fragment, not a path segment: the browser never sends it to
-      // any server, so it never lands in access/proxy logs when the QR
-      // code is scanned and opened. The frontend reads it client-side and
-      // POSTs it to the backend once, in the request body.
-      const verificationUrl = `${config.appPublicUrl}/guard/verify#${item.payload.rawToken}`;
-      const pdfBuffer = await generateGatePassPdf(gatePass, items, verificationUrl);
-      const version = await repo.nextPdfVersion(gatePassId);
-      const saved = await storageService.save(pdfBuffer, { gatePassId, category: "pdf", extension: "pdf" });
-      storageKey = saved.storageKey;
+      // Re-derive "already done?" from durable state instead of trusting
+      // anything about this job's own prior attempts — safe to run twice.
+      const existing = await repo.findLatestPdfFile(gatePassId, client);
+      let storageKey = existing?.storage_key;
 
-      try {
+      if (!storageKey) {
+        const items = await repo.findItemsByGatePassId(gatePassId);
+        // A URL fragment, not a path segment: the browser never sends it to
+        // any server, so it never lands in access/proxy logs when the QR
+        // code is scanned and opened. The frontend reads it client-side and
+        // POSTs it to the backend once, in the request body.
+        const verificationUrl = `${config.appPublicUrl}/guard/verify#${item.payload.rawToken}`;
+        const pdfBuffer = await generateGatePassPdf(gatePass, items, verificationUrl);
+        const version = await repo.nextPdfVersion(gatePassId);
+        const saved = await storageService.save(pdfBuffer, { gatePassId, category: "pdf", extension: "pdf" });
+        storageKey = saved.storageKey;
+        newlyUploadedStorageKey = saved.storageKey;
+
         await repo.insertFile(client, {
           gatePassId,
           fileType: "APPROVED_PDF",
@@ -296,42 +309,55 @@ async function processApprovalPdfJob(item) {
           version,
           createdByUserId: item.payload.approvedByUserId,
         });
-      } catch (error) {
-        await storageService.remove(saved.storageKey);
-        throw error;
       }
-    }
 
-    // Idempotent via idempotency_key regardless of which branch above ran
-    // — a retry after the PDF row already exists just re-issues this as a
-    // guaranteed-safe no-op rather than needing its own "already sent?"
-    // check.
-    await enqueue(client, [
-      {
-        channel: "WHATSAPP",
-        eventType: "GATE_PASS_APPROVED",
-        entityType: "GATE_PASS",
-        entityId: gatePassId,
-        recipientPhone: gatePass.driver_phone,
-        recipientSiteId: gatePass.site_id,
-        idempotencyKey: `whatsapp-approval:${gatePassId}`,
-        payload: {
-          storageKey,
-          filename: `${gatePass.gate_pass_number}.pdf`,
-          caption: `Gate Pass ${gatePass.gate_pass_number} approved.`,
+      // Idempotent via idempotency_key regardless of which branch above ran
+      // — a retry after the PDF row already exists just re-issues this as a
+      // guaranteed-safe no-op rather than needing its own "already sent?"
+      // check.
+      await enqueue(client, [
+        {
+          channel: "WHATSAPP",
+          eventType: "GATE_PASS_APPROVED",
+          entityType: "GATE_PASS",
+          entityId: gatePassId,
+          recipientPhone: gatePass.driver_phone,
+          recipientSiteId: gatePass.site_id,
+          idempotencyKey: `whatsapp-approval:${gatePassId}`,
+          payload: {
+            storageKey,
+            filename: `${gatePass.gate_pass_number}.pdf`,
+            caption: `Gate Pass ${gatePass.gate_pass_number} approved.`,
+          },
         },
-      },
-    ]);
+      ]);
 
-    // Raw token minimization (Fix #11): the QR/PDF has now been generated
-    // from it — nothing further ever needs the plaintext value again, so
-    // it's erased from this job's own row rather than retained
-    // indefinitely. (No-op if a prior, already-committed attempt already
-    // did this — see the storageKey branch above.)
-    await client.query(`UPDATE notification_outbox SET payload = payload - 'rawToken' WHERE id = $1`, [
-      item.id,
-    ]);
-  });
+      // Raw token minimization (Fix #11): the QR/PDF has now been generated
+      // from it — nothing further ever needs the plaintext value again, so
+      // it's erased from this job's own row rather than retained
+      // indefinitely. (No-op if a prior, already-committed attempt already
+      // did this — see the storageKey branch above.)
+      await client.query(`UPDATE notification_outbox SET payload = payload - 'rawToken' WHERE id = $1`, [
+        item.id,
+      ]);
+    });
+
+    // Transaction committed successfully — any newly uploaded object is
+    // now referenced by a committed row. Nothing to clean up.
+    newlyUploadedStorageKey = null;
+  } catch (error) {
+    if (newlyUploadedStorageKey) {
+      // The object was uploaded, but the transaction that was going to
+      // reference it — whether insertFile/enqueue itself threw, or the
+      // transaction failed at COMMIT after this callback had already
+      // returned — did not survive. Delete the now-unreferenced object
+      // rather than leaving it orphaned in storage forever.
+      // storageService.remove() never throws (logs failures for orphan
+      // reconciliation instead), so this can't mask the error below.
+      await storageService.remove(newlyUploadedStorageKey);
+    }
+    throw error;
+  }
 
   return outcome;
 }

@@ -169,13 +169,33 @@ hardcoded anywhere in this codebase — it's entirely environment-driven via
 
 **Enforcement**: `validateProductionConfig()` (`src/config/env.js`)
 requires `API_PUBLIC_URL` in production and rejects startup if
-`FRONTEND_ORIGIN`'s registrable domain doesn't match `API_PUBLIC_URL`'s —
-including the specific known-unsafe case of two different subdomains under
-`onrender.com` (and a handful of other common multi-tenant PaaS host
-suffixes: `vercel.app`, `netlify.app`, `herokuapp.com`, `pages.dev`,
-`railway.app`, `fly.dev`). This is a heuristic, not a full public-suffix-
-list implementation — it catches the specific failure mode described
-above, not every conceivable domain edge case.
+`FRONTEND_ORIGIN`'s registrable domain (eTLD+1) doesn't match
+`API_PUBLIC_URL`'s. The registrable domain is computed with
+[`tldts`](https://www.npmjs.com/package/tldts) (`getDomain(hostname, {
+allowPrivateDomains: true })`) against the real Mozilla Public Suffix
+List — not a homemade "last two labels" heuristic, which gets
+multi-label suffixes backwards (e.g. it would treat
+`app.customer-a.com.pk` and `api.customer-b.com.pk`, two different
+customers, as the same site, while correctly handling
+`app.company.com.pk` / `api.company.com.pk`, the same customer, requires
+knowing `.com.pk` itself is the suffix, not just the last two labels).
+`allowPrivateDomains` also makes `tldts` treat PSL "private section"
+entries — Render, Vercel, Netlify, Heroku, GitHub Pages, Fly.io, Railway,
+etc. — as their own suffix, so two different customers' subdomains under
+one of those are correctly rejected too, without this codebase
+maintaining its own list of platform domains. `tldts` is a runtime
+(production) dependency for exactly this reason — see
+`docs/DECISIONS.md`.
+
+Both `FRONTEND_ORIGIN` and `API_PUBLIC_URL` must additionally be a bare
+`https://` origin in production — no path, query, fragment, or embedded
+credentials (e.g. `https://app.example.com`, not
+`https://app.example.com/path` or a URL with `user:pass@`). A browser's
+CORS `Origin` header is always exactly scheme + host[:port]; a
+`FRONTEND_ORIGIN` value carrying anything else could never actually match
+one. `APP_PUBLIC_URL` gets the same requirement for a different reason —
+it's used as a bare base that `/guard/verify` is appended onto for every
+QR code link, so a value with its own path would produce a broken link.
 
 An alternative for a topology that genuinely can't use one registrable
 domain: put a same-origin reverse proxy in front of both frontend and API
@@ -256,7 +276,8 @@ The application must never run its normal request-handling workload as a databas
 - Production configuration validation (`validateProductionConfig` in `src/config/env.js`) refuses to start with `STORAGE_PROVIDER=local` unless explicitly overridden to `local-single-instance-accepted-risk`, so a production deploy can't silently end up with non-durable, single-instance-only file storage.
 - Supabase credentials (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`) are variable names only in `.env.example`; no real Supabase project has been connected as part of this fix pass. `SUPABASE_SERVICE_ROLE_KEY` must never reach frontend code.
 - Departure/return evidence descriptors returned to Admin/Site Manager on the Gate Pass detail endpoint are metadata only (file id, odometer, timestamp, recorded-by name) — never a storage path or URL. The actual bytes are only reachable through the existing authorized `GET /gate-passes/:id/files/:fileId` endpoint, which re-checks scope and file ownership itself.
-- Every `SupabaseStorageProvider` call (upload/download/delete) is bounded by `SUPABASE_STORAGE_TIMEOUT_MS` (default 10000, validated 1000-120000) via `AbortController` — a network/storage outage aborts the request instead of holding it (and any DB transaction/row lock a caller holds alongside it, e.g. PDF finalization — see `docs/DECISIONS.md`) open indefinitely. A timeout raises a typed `StorageTimeoutError`, distinguishable from a plain HTTP/network failure. `SUPABASE_URL` and `SUPABASE_STORAGE_BUCKET` are validated at provider construction (valid URL; a plain, unambiguous bucket name — no path-traversal characters) in every environment, not just production.
+- Every `SupabaseStorageProvider` call (upload/download/delete) is bounded by `SUPABASE_STORAGE_TIMEOUT_MS` (default 10000, validated 1000-120000) via `AbortController`, and the timeout covers the **entire** operation — request, response headers, AND response body consumption (`.text()`/`.arrayBuffer()`), not just the initial `fetch()` resolving. A server that sends headers and then stalls the body is caught the same way a server that never responds at all is; the timer is only cleared once the whole operation, body included, has settled. A network/storage outage therefore can't hold the request (and any DB transaction/row lock a caller holds alongside it, e.g. PDF finalization — see `docs/DECISIONS.md`) open indefinitely. A timeout raises a typed `StorageTimeoutError`, distinguishable from a plain HTTP/network failure. `SUPABASE_URL` and `SUPABASE_STORAGE_BUCKET` are validated at provider construction in every environment, not just production: a valid URL, and a bucket name that is a plain, unambiguous identifier — no path separators, and the exact dot-segment values `.`/`..` explicitly rejected (per RFC 3986, those two specific values are special in a URL path even though every character in them is individually "safe").
+- PDF finalization additionally cleans up a newly uploaded object if the enclosing database transaction fails anywhere after the upload succeeded — including at `COMMIT` itself, which runs after the transaction's own callback has already returned successfully (see `docs/DECISIONS.md`). Only an object uploaded by that specific attempt is ever deleted; an already-committed, already-referenced PDF is never touched.
 
 ---
 

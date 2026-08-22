@@ -289,6 +289,13 @@ cancel-before-worker-runs (or cancel-during-finalization) race can never
 produce a stale delivery. WhatsApp sends carry a stable idempotency key
 through to the provider.
 
+If the DB transaction that was going to reference a newly uploaded PDF
+fails for any reason — including at `COMMIT` itself, after the
+transaction's own callback already returned successfully — the uploaded
+object is deleted rather than left orphaned in storage. Only the object
+from that specific failed attempt is ever removed; an already-committed
+PDF is never touched.
+
 A `WhatsAppProvider` interface is implemented by a demo/local provider when
 real Meta WhatsApp Business Cloud API credentials are not configured. The
 demo provider must mark deliveries as `SIMULATED`, never `SENT` — simulated

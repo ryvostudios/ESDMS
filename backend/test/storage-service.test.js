@@ -133,6 +133,32 @@ function neverResolvingFetchRespectingAbort() {
     });
 }
 
+// Headers arrive immediately (fetch() itself resolves), but the response
+// BODY never arrives unless the same abort signal fires — models a server
+// that sends a 200/4xx and then stalls mid-stream. Real undici/fetch ties
+// an in-flight .text()/.arrayBuffer() read to the same AbortSignal the
+// request itself used; this mock reproduces exactly that coupling so the
+// test exercises the real mechanism, not just an assumption about it.
+function stallingBodyFetch({ ok = true, status = 200 } = {}) {
+  return (url, options) => {
+    const stallForever = () =>
+      new Promise((resolve, reject) => {
+        options.signal?.addEventListener("abort", () => {
+          const error = new Error("The operation was aborted.");
+          error.name = "AbortError";
+          reject(error);
+        });
+      });
+
+    return Promise.resolve({
+      ok,
+      status,
+      arrayBuffer: stallForever,
+      text: stallForever,
+    });
+  };
+}
+
 test("SupabaseStorageProvider.save times out and throws a typed StorageTimeoutError", async () => {
   global.fetch = neverResolvingFetchRespectingAbort();
 
@@ -179,6 +205,86 @@ test("SupabaseStorageProvider.remove swallows a timeout too — the never-throws
   await provider.remove("gate-pass/gp-1/departure/x.jpg");
 });
 
+test("SupabaseStorageProvider.read times out when headers arrive but the body stalls (not just when fetch() itself never resolves)", async () => {
+  global.fetch = stallingBodyFetch({ ok: true, status: 200 });
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+    timeoutMs: 20,
+  });
+
+  await assert.rejects(provider.read("gate-pass/gp-1/departure/x.jpg"), StorageTimeoutError);
+});
+
+test("SupabaseStorageProvider.save times out reading a non-OK response's error body if it stalls", async () => {
+  global.fetch = stallingBodyFetch({ ok: false, status: 500 });
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+    timeoutMs: 20,
+  });
+
+  await assert.rejects(
+    provider.save(Buffer.from("x"), { gatePassId: "gp-1", category: "departure", extension: "jpg" }),
+    StorageTimeoutError,
+  );
+});
+
+test("SupabaseStorageProvider.remove completes normally on a successful delete", async () => {
+  let called = false;
+  global.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200 };
+  };
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+  });
+
+  await provider.remove("gate-pass/gp-1/departure/x.jpg");
+  assert.ok(called);
+});
+
+test("the abort timer is cleared after a successful call — it does not fire late and abort an unrelated later request", async () => {
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount += 1;
+    return {
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new TextEncoder().encode("file contents").buffer,
+    };
+  };
+
+  const provider = new SupabaseStorageProvider({
+    url: "https://project.supabase.co",
+    serviceRoleKey: "test-key",
+    bucket: "gate-pass-evidence",
+    timeoutMs: 30,
+  });
+
+  await provider.read("gate-pass/gp-1/departure/x.jpg");
+  assert.equal(fetchCount, 1);
+
+  // If the first call's timer weren't cleared, waiting past its timeout
+  // would prove nothing wrong by itself — but a second, fresh, slow call
+  // started after that wait must still get its OWN full timeout budget,
+  // not an already-fired one.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  global.fetch = neverResolvingFetchRespectingAbort();
+  const start = Date.now();
+  await assert.rejects(provider.read("gate-pass/gp-1/departure/y.jpg"), StorageTimeoutError);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed >= 25, `expected the second call to wait out its own ~30ms timeout, took ${elapsed}ms`);
+});
+
 test("SupabaseStorageProvider rejects an invalid SUPABASE_URL at construction", () => {
   assert.throws(
     () => new SupabaseStorageProvider({ url: "not-a-url", serviceRoleKey: "k", bucket: "gate-pass-evidence" }),
@@ -187,20 +293,34 @@ test("SupabaseStorageProvider rejects an invalid SUPABASE_URL at construction", 
 });
 
 test("SupabaseStorageProvider rejects an unsafe or empty bucket name at construction", () => {
-  for (const bucket of ["", "../escape", "has spaces", "slash/inside"]) {
+  const invalidBuckets = [
+    "",
+    " ",
+    ".",
+    "..",
+    "../bucket",
+    "bucket/child",
+    "/bucket",
+    "bucket/",
+    "has spaces",
+    "slash/inside",
+  ];
+
+  for (const bucket of invalidBuckets) {
     assert.throws(
       () => new SupabaseStorageProvider({ url: "https://project.supabase.co", serviceRoleKey: "k", bucket }),
       /Invalid SUPABASE_STORAGE_BUCKET/,
+      `expected "${bucket}" to be rejected`,
     );
   }
 });
 
-test("SupabaseStorageProvider accepts a safe bucket name", () => {
-  assert.doesNotThrow(() => {
-    new SupabaseStorageProvider({
-      url: "https://project.supabase.co",
-      serviceRoleKey: "k",
-      bucket: "gate-pass-evidence_v2.prod",
-    });
-  });
+test("SupabaseStorageProvider accepts ordinary safe bucket names", () => {
+  const validBuckets = ["eset-gate-pass-files", "gate_pass_files", "gate-pass-evidence_v2.prod"];
+
+  for (const bucket of validBuckets) {
+    assert.doesNotThrow(() => {
+      new SupabaseStorageProvider({ url: "https://project.supabase.co", serviceRoleKey: "k", bucket });
+    }, `expected "${bucket}" to be accepted`);
+  }
 });

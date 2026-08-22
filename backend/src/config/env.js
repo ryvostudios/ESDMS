@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { getDomain } from "tldts";
 
 function required(name) {
   const value = process.env[name];
@@ -33,14 +34,6 @@ function parseDurationMs(value) {
   return amount * unitMs;
 }
 
-function isHttpsUrl(value) {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function isValidUrl(value) {
   try {
     new URL(value);
@@ -48,6 +41,33 @@ function isValidUrl(value) {
   } catch {
     return false;
   }
+}
+
+// A browser's CORS `Origin` header is always exactly scheme + host[:port]
+// — never a path, query, fragment, or credentials. FRONTEND_ORIGIN is
+// compared against that header (see app.js's CORS origin callback), and
+// APP_PUBLIC_URL/API_PUBLIC_URL are each used as a bare base that other
+// code appends its own path onto (QR deep links; same-site hostname
+// extraction) — a value that already carries its own path/query/fragment
+// would silently produce a malformed URL wherever it's concatenated, or
+// simply misrepresent what's being compared. Checking the protocol alone
+// doesn't catch any of that — a value like
+// "https://app.example.com/some/path" is still https.
+function isCleanProductionOrigin(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === "https:" &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    parsed.pathname === "/" &&
+    parsed.search === "" &&
+    parsed.hash === ""
+  );
 }
 
 // Strict non-negative integer parser for config values. `Number(raw)` alone
@@ -197,38 +217,18 @@ export const config = {
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"]);
 
-// Render (and most PaaS platforms that hand each customer a subdomain of a
-// shared parent, e.g. *.onrender.com) behave as a public suffix for cookie
-// purposes: two different customer subdomains under them are NOT the same
-// "site" even though they share a DNS parent. A first-party session cookie
-// (SameSite=Lax, no CSRF token by design — see docs/SECURITY.md) silently
-// stops being sent the moment the frontend and API sit on two such
-// unrelated subdomains — the browser just never attaches it, and "login
-// doesn't work" is the only symptom. This must fail at deploy time.
-const KNOWN_MULTI_TENANT_HOST_SUFFIXES = [
-  "onrender.com",
-  "vercel.app",
-  "netlify.app",
-  "herokuapp.com",
-  "pages.dev",
-  "railway.app",
-  "fly.dev",
-];
-
+// eTLD+1 (registrable domain) via the Public Suffix List, not a homemade
+// "last two labels" heuristic — that naive approach is wrong for
+// multi-label suffixes (app.company.com.pk / api.company.com.pk ARE
+// same-site; app.customer-a.com.pk / api.customer-b.com.pk are NOT, but
+// "last two labels" would get the second case backwards). allowPrivateDomains
+// also makes tldts treat PSL "private section" entries — Render, Vercel,
+// Netlify, Heroku, GitHub Pages, Fly.io, Railway, etc. — as their own
+// suffix, so two different customers' subdomains under one of those are
+// correctly NOT same-site either, without this codebase maintaining its
+// own partial list of platform domains.
 function registrableSite(hostname) {
-  const lower = hostname.toLowerCase();
-  const knownSuffix = KNOWN_MULTI_TENANT_HOST_SUFFIXES.find(
-    (suffix) => lower === suffix || lower.endsWith(`.${suffix}`),
-  );
-  // Under a known multi-tenant host, the whole subdomain IS the site — one
-  // customer's *.onrender.com name is not "the same site" as another's.
-  if (knownSuffix) return lower;
-  // Naive eTLD+1 (last two labels) for ordinary custom domains — correct
-  // for the common case (app.example.com / api.example.com -> example.com).
-  // Doesn't handle multi-part public suffixes like co.uk; a deployment on
-  // one of those should double-check its own topology manually.
-  const labels = lower.split(".");
-  return labels.slice(-2).join(".");
+  return getDomain(hostname, { allowPrivateDomains: true });
 }
 
 function validateSameSiteCookieTopology(problems) {
@@ -239,13 +239,22 @@ function validateSameSiteCookieTopology(problems) {
     return;
   }
 
-  if (!isHttpsUrl(apiPublicUrl)) {
-    problems.push(`API_PUBLIC_URL "${apiPublicUrl}" must be an https:// URL in production.`);
+  if (!isCleanProductionOrigin(apiPublicUrl)) {
+    problems.push(
+      `API_PUBLIC_URL "${apiPublicUrl}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials (e.g. "https://api.example.com", not "https://api.example.com/v1" or a URL with "user:pass@").`,
+    );
     return;
   }
 
   const apiHost = new URL(apiPublicUrl).hostname;
   const apiSite = registrableSite(apiHost);
+
+  if (!apiSite) {
+    problems.push(
+      `API_PUBLIC_URL "${apiPublicUrl}" does not resolve to a registrable domain (e.g. it's a bare IP or a single-label host) — same-site cookie validation can't be performed against it.`,
+    );
+    return;
+  }
 
   for (const origin of frontendOrigins) {
     let frontendHost;
@@ -255,9 +264,15 @@ function validateSameSiteCookieTopology(problems) {
       continue; // already reported as an invalid FRONTEND_ORIGIN below
     }
 
-    if (registrableSite(frontendHost) !== apiSite) {
+    const frontendSite = registrableSite(frontendHost);
+
+    if (!frontendSite) {
       problems.push(
-        `FRONTEND_ORIGIN "${frontendHost}" and API_PUBLIC_URL "${apiHost}" are not same-site. Separate default platform domains (e.g. a "*-frontend.onrender.com" paired with a "*-api.onrender.com") are NOT a supported topology for authenticated production use — the session cookie will never be sent. Deploy both under the same registrable domain instead (e.g. app.<domain> and api.<domain>), or put a same-origin reverse proxy in front of both.`,
+        `FRONTEND_ORIGIN "${frontendHost}" does not resolve to a registrable domain — same-site cookie validation can't be performed against it.`,
+      );
+    } else if (frontendSite !== apiSite) {
+      problems.push(
+        `FRONTEND_ORIGIN "${frontendHost}" and API_PUBLIC_URL "${apiHost}" are not same-site (registrable domains "${frontendSite}" vs "${apiSite}"). Separate default platform domains (e.g. a "*-frontend.onrender.com" paired with a "*-api.onrender.com") are NOT a supported topology for authenticated production use — the session cookie will never be sent. Deploy both under the same registrable domain instead (e.g. app.<domain> and api.<domain>), or put a same-origin reverse proxy in front of both.`,
       );
     }
   }
@@ -272,14 +287,16 @@ function validateProductionConfig() {
   const problems = [];
 
   for (const origin of frontendOrigins) {
-    if (!isHttpsUrl(origin)) {
-      problems.push(`FRONTEND_ORIGIN "${origin}" must be an https:// URL in production.`);
+    if (!isCleanProductionOrigin(origin)) {
+      problems.push(
+        `FRONTEND_ORIGIN "${origin}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials. A browser's CORS Origin header never carries any of those, so a value that does can never actually match one (e.g. "https://app.example.com", not "https://app.example.com/path" or "https://app.example.com?x=1").`,
+      );
     }
   }
 
-  if (!isHttpsUrl(appPublicUrl)) {
+  if (!isCleanProductionOrigin(appPublicUrl)) {
     problems.push(
-      `APP_PUBLIC_URL "${appPublicUrl}" must be an https:// URL in production — this is embedded in every Gate Pass QR code.`,
+      `APP_PUBLIC_URL "${appPublicUrl}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials. This is embedded in every Gate Pass QR code as a base that "/guard/verify" is appended onto; a value with its own path would produce a malformed link.`,
     );
   }
 

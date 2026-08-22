@@ -50,6 +50,37 @@ test("production refuses to start with an http:// FRONTEND_ORIGIN", () => {
   assert.match(result.stderr, /FRONTEND_ORIGIN.*https/);
 });
 
+test("a clean https FRONTEND_ORIGIN is accepted, with or without a trailing slash", () => {
+  for (const value of ["https://app.example.com", "https://app.example.com/"]) {
+    const result = runWithEnv({ FRONTEND_ORIGIN: value });
+    assert.equal(result.status, 0, `FRONTEND_ORIGIN=${value} should be accepted: ${result.stderr}`);
+  }
+});
+
+test("a FRONTEND_ORIGIN with a path is rejected — a browser's Origin header never carries one", () => {
+  const result = runWithEnv({ FRONTEND_ORIGIN: "https://app.example.com/path" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FRONTEND_ORIGIN.*no path, query, fragment/);
+});
+
+test("a FRONTEND_ORIGIN with a query string is rejected", () => {
+  const result = runWithEnv({ FRONTEND_ORIGIN: "https://app.example.com?x=1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FRONTEND_ORIGIN.*no path, query, fragment/);
+});
+
+test("a FRONTEND_ORIGIN with a fragment is rejected", () => {
+  const result = runWithEnv({ FRONTEND_ORIGIN: "https://app.example.com#section" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FRONTEND_ORIGIN.*no path, query, fragment/);
+});
+
+test("a FRONTEND_ORIGIN with embedded credentials is rejected", () => {
+  const result = runWithEnv({ FRONTEND_ORIGIN: "https://user:pass@app.example.com" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FRONTEND_ORIGIN.*no path, query, fragment/);
+});
+
 test("production refuses to start with an http:// APP_PUBLIC_URL", () => {
   const result = runWithEnv({ APP_PUBLIC_URL: "http://app.example.com" });
   assert.notEqual(result.status, 0);
@@ -163,6 +194,36 @@ test("a same-site custom-domain topology (app.<domain> / api.<domain>) is accept
     API_PUBLIC_URL: "https://api.eset.example",
   });
   assert.equal(result.status, 0, result.stderr);
+});
+
+test("independent vercel.app hosts are rejected the same way as onrender.com", () => {
+  const result = runWithEnv({
+    FRONTEND_ORIGIN: "https://esdms-frontend.vercel.app",
+    APP_PUBLIC_URL: "https://esdms-frontend.vercel.app",
+    API_PUBLIC_URL: "https://esdms-api.vercel.app",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /are not same-site/);
+});
+
+// A naive "last two labels" registrable-domain heuristic gets this pair
+// backwards: it would treat these as the same site ("com.pk") when they
+// are two different customers' domains. PSL-aware resolution must not.
+test("same-site validation is public-suffix-aware, not a naive last-two-labels heuristic: multi-label suffix (.com.pk) same-customer accepted, different-customer rejected", () => {
+  const sameCustomer = runWithEnv({
+    FRONTEND_ORIGIN: "https://app.company.com.pk",
+    APP_PUBLIC_URL: "https://app.company.com.pk",
+    API_PUBLIC_URL: "https://api.company.com.pk",
+  });
+  assert.equal(sameCustomer.status, 0, sameCustomer.stderr);
+
+  const differentCustomers = runWithEnv({
+    FRONTEND_ORIGIN: "https://app.customer-a.com.pk",
+    APP_PUBLIC_URL: "https://app.customer-a.com.pk",
+    API_PUBLIC_URL: "https://api.customer-b.com.pk",
+  });
+  assert.notEqual(differentCustomers.status, 0);
+  assert.match(differentCustomers.stderr, /are not same-site/);
 });
 
 test("SUPABASE_URL with embedded credentials is rejected", () => {

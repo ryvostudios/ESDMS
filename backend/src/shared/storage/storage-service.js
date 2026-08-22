@@ -81,8 +81,20 @@ export class StorageTimeoutError extends Error {
 // safe; a bucket name is operator-configured (env var), so it gets the
 // same treatment as any other config value that ends up in a URL path —
 // reject anything that isn't a plain, unambiguous name before it's ever
-// used to build a request.
+// used to build a request. "/" is already excluded by the character
+// class (no path separators, so "../bucket", "bucket/child", "/bucket",
+// "bucket/" are all rejected by this alone) — but "." and ".." are each,
+// on their own, made of only allowed characters. Per RFC 3986 dot-segment
+// removal, a path segment that IS exactly "." or ".." is special
+// (normalized away / walks up a directory) even though nothing in it is
+// individually a "bad" character, so those two exact values need their
+// own explicit rejection.
 const SAFE_BUCKET_NAME = /^[a-zA-Z0-9._-]+$/;
+const DOT_SEGMENT_BUCKET_NAMES = new Set([".", ".."]);
+
+function isValidBucketName(bucket) {
+  return Boolean(bucket) && SAFE_BUCKET_NAME.test(bucket) && !DOT_SEGMENT_BUCKET_NAMES.has(bucket);
+}
 
 // Production-ready private storage. Talks to Supabase Storage's plain HTTP
 // API directly (rather than pulling in @supabase/supabase-js) — uploading,
@@ -105,7 +117,7 @@ export class SupabaseStorageProvider {
       throw new Error(`Invalid SUPABASE_URL: "${url}".`);
     }
 
-    if (!bucket || !SAFE_BUCKET_NAME.test(bucket)) {
+    if (!isValidBucketName(bucket)) {
       throw new Error(`Invalid SUPABASE_STORAGE_BUCKET: "${bucket}".`);
     }
 
@@ -123,17 +135,22 @@ export class SupabaseStorageProvider {
     return `${this.#baseUrl}/storage/v1/object/${this.#bucket}/${storageKey}`;
   }
 
-  // Bounds every request so a network/storage outage can't hold this call
-  // — and any DB transaction/row lock a caller is holding alongside it —
-  // open indefinitely. AbortController's reason isn't used in the thrown
-  // error (it would just be a generic AbortError); the operation name and
-  // configured timeout are enough to act on.
-  async #fetchWithTimeout(url, options, operation) {
+  // Bounds the ENTIRE operation — request, response headers, AND response
+  // body consumption — so a network/storage outage can't hold this call
+  // (and any DB transaction/row lock a caller holds alongside it) open
+  // indefinitely. The timer is only cleared once `run` fully settles, not
+  // as soon as fetch() itself resolves: a server that sends headers and
+  // then stalls the body is exactly the case this must still catch. If
+  // the timer fires mid-body-read, aborting the controller fails the
+  // in-flight `.text()`/`.arrayBuffer()` read with an AbortError the same
+  // way it would fail an in-flight fetch() — both are converted to
+  // StorageTimeoutError below.
+  async #withTimeout(operation, run) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
 
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      return await run(controller.signal);
     } catch (error) {
       if (error.name === "AbortError") {
         throw new StorageTimeoutError(operation, this.#timeoutMs);
@@ -147,53 +164,52 @@ export class SupabaseStorageProvider {
   async save(buffer, params) {
     const storageKey = generateStorageKey(params);
 
-    const response = await this.#fetchWithTimeout(
-      this.#objectUrl(storageKey),
-      {
+    return this.#withTimeout("upload", async (signal) => {
+      const response = await fetch(this.#objectUrl(storageKey), {
         method: "POST",
         headers: { ...this.#headers, "Content-Type": "application/octet-stream" },
         body: buffer,
-      },
-      "upload",
-    );
+        signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(`Supabase Storage upload failed (${response.status}): ${await response.text()}`);
-    }
+      if (!response.ok) {
+        throw new Error(`Supabase Storage upload failed (${response.status}): ${await response.text()}`);
+      }
 
-    return {
-      storageKey,
-      checksumSha256: crypto.createHash("sha256").update(buffer).digest("hex"),
-      sizeBytes: buffer.length,
-    };
+      return {
+        storageKey,
+        checksumSha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+        sizeBytes: buffer.length,
+      };
+    });
   }
 
   async read(storageKey) {
-    const response = await this.#fetchWithTimeout(
-      this.#objectUrl(storageKey),
-      { headers: this.#headers },
-      "download",
-    );
+    return this.#withTimeout("download", async (signal) => {
+      const response = await fetch(this.#objectUrl(storageKey), { headers: this.#headers, signal });
 
-    if (!response.ok) {
-      throw new Error(`Supabase Storage download failed (${response.status}): ${await response.text()}`);
-    }
+      if (!response.ok) {
+        throw new Error(`Supabase Storage download failed (${response.status}): ${await response.text()}`);
+      }
 
-    return Buffer.from(await response.arrayBuffer());
+      return Buffer.from(await response.arrayBuffer());
+    });
   }
 
   // Same never-throws contract as LocalStorageProvider.remove.
   async remove(storageKey) {
     try {
-      const response = await this.#fetchWithTimeout(
-        this.#objectUrl(storageKey),
-        { method: "DELETE", headers: this.#headers },
-        "delete",
-      );
+      await this.#withTimeout("delete", async (signal) => {
+        const response = await fetch(this.#objectUrl(storageKey), {
+          method: "DELETE",
+          headers: this.#headers,
+          signal,
+        });
 
-      if (!response.ok && response.status !== 404) {
-        console.error(`Failed to clean up orphaned file ${storageKey}: HTTP ${response.status}`);
-      }
+        if (!response.ok && response.status !== 404) {
+          console.error(`Failed to clean up orphaned file ${storageKey}: HTTP ${response.status}`);
+        }
+      });
     } catch (error) {
       console.error(`Failed to clean up orphaned file ${storageKey}:`, error.message);
     }

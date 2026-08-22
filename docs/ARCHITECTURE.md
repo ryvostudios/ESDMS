@@ -374,18 +374,22 @@ Current stage:
 **Gate Pass MVP built and security-hardened; not yet deployed**
 
 The Gate Pass module (schema, backend workflow/PDF/QR/outbox, frontend UI,
-guard workflow, PWA) is implemented end-to-end, followed by three
+guard workflow, PWA) is implemented end-to-end, followed by four
 independent security/architecture reviews and fix passes addressing their
 findings — see `docs/DECISIONS.md` for what changed and why, and
 `docs/MODULES.md` for per-module status. Deployment readiness work across
-the three passes covers: configurable `HOST` binding; a config-selected
+those passes covers: configurable `HOST` binding; a config-selected
 storage provider (`local` for dev/single-instance, `supabase` for
-production) with a bounded request timeout; fail-fast production config
-validation (`src/config/env.js`), including same-site cookie topology
-validation between `FRONTEND_ORIGIN` and the new `API_PUBLIC_URL`; row-
-locked cancellation/finalization concurrency handling; and a stale-lease
-outbox worker that distinguishes internal (safely reclaimed) from external
-delivery (never blindly resent) jobs.
+production) with a request timeout covering full response-body
+consumption, not just headers; fail-fast production config validation
+(`src/config/env.js`), including public-suffix-aware (`tldts`) same-site
+cookie topology validation between `FRONTEND_ORIGIN` and `API_PUBLIC_URL`,
+both required to be bare origins (no path/query/fragment/credentials);
+row-locked cancellation/finalization concurrency handling, including
+compensating storage cleanup if the DB transaction fails at any point
+after upload, even at `COMMIT` itself; and a stale-lease outbox worker
+that distinguishes internal (safely reclaimed) from external delivery
+(never blindly resent) jobs.
 
 No production deployment exists yet; deployment is explicitly gated on
 independent re-review of the fix passes. Even once code review concludes,

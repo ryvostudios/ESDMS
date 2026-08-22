@@ -11,7 +11,7 @@ The platform is being designed so that individual business modules can be develo
 ## Development Status
 
 Gate Pass MVP implemented end-to-end (backend, frontend, PWA, tests) and
-subsequently hardened through three independent security/architecture
+subsequently hardened through four independent security/architecture
 review and fix passes — see `docs/DECISIONS.md` for what changed and why.
 
 No production deployment exists yet: deployment is explicitly gated on

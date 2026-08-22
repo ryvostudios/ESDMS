@@ -30,6 +30,7 @@
     "pdfkit": "^0.19.1",
     "pg": "^8.16.3",
     "qrcode": "^1.5.4",
+    "tldts": "^7.4.10",
     "zod": "^4.4.3"
   },
   "devDependencies": {

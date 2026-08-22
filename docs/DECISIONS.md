@@ -1221,3 +1221,115 @@ adding a masking library.
 ### Status
 
 Accepted.
+
+---
+
+## 2026-08-22 — Same-Site Validation Uses `tldts` (Real Public Suffix List), Not a Homemade Heuristic
+
+### Decision
+
+Replaced the hand-maintained "last two labels, with a hardcoded list of
+known multi-tenant PaaS suffixes" heuristic in `registrableSite()`
+(`src/config/env.js`) with [`tldts`](https://www.npmjs.com/package/tldts)'s
+`getDomain(hostname, { allowPrivateDomains: true })`, computing the real
+eTLD+1 against the Mozilla Public Suffix List. Added as a production
+(runtime) dependency — it's needed at server startup, not just for
+tooling/tests.
+
+### Reason
+
+The naive heuristic was actively wrong for multi-label public suffixes:
+it would treat `app.customer-a.com.pk` and `api.customer-b.com.pk` — two
+different customers' domains — as the same site, while getting
+`app.company.com.pk` / `api.company.com.pk` (the same customer) right
+only by the same wrong reasoning. `tldts` with `allowPrivateDomains: true`
+also naturally covers the platform-suffix case (onrender.com, vercel.app,
+etc. are PSL "private section" entries) without this codebase maintaining
+its own list, which the previous heuristic did as a separate, parallel
+mechanism.
+
+### Status
+
+Accepted. `npm audit` clean; `tldts` has no further runtime dependencies
+of its own.
+
+---
+
+## 2026-08-22 — Supabase Storage Timeout Extended to Cover Full Response Body Consumption
+
+### Decision
+
+`SupabaseStorageProvider`'s `AbortController`-based timeout previously
+cleared its timer as soon as `fetch()` itself resolved (response headers
+received), before `.text()`/`.arrayBuffer()` had been called to consume
+the body. Restructured so the same timer stays armed for the entire
+operation — request, headers, AND body consumption — via a `#withTimeout`
+helper that wraps the whole per-call async function, not just the
+`fetch()` call inside it.
+
+### Reason
+
+A server that sends response headers and then stalls mid-body was
+previously not covered by the timeout at all — exactly the failure mode
+the timeout exists to prevent (an outage holding a DB row lock open
+indefinitely during PDF finalization). Real `fetch`/undici ties an
+in-flight body read to the same `AbortSignal` the request itself used, so
+extending the timer's coverage was sufficient; no additional API surface
+was needed.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Supabase Bucket Name Rejects Exact Dot-Segments
+
+### Decision
+
+`SupabaseStorageProvider`'s bucket name validation now explicitly rejects
+the exact values `.` and `..`, in addition to the existing character-class
+restriction (which already rejects `/`, spaces, and anything else outside
+`[a-zA-Z0-9._-]`).
+
+### Reason
+
+Per RFC 3986 dot-segment removal, a URL path segment that IS exactly `.`
+or `..` is special (normalized away, or walks up a directory) even though
+every individual character in it is otherwise "safe" and passes the
+existing character-class check. Nothing else needed tightening — ordinary
+bucket names with dots/underscores/hyphens remain valid.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — PDF Finalization Cleans Up an Uploaded Object on Any Transaction Failure, Not Just `insertFile`
+
+### Decision
+
+`processApprovalPdfJob`'s compensating-cleanup logic (delete the newly
+uploaded PDF object if the DB write fails) was previously scoped only to
+`repo.insertFile` throwing. Widened to cover the entire window from
+`storageService.save()` through the transaction's own `COMMIT` — tracked
+via a variable in the outer function scope, checked in a `try/catch`
+around the whole `withTransaction(...)` call, since `COMMIT` runs only
+after the transaction's callback has already returned successfully (see
+`withTransaction`), meaning a `COMMIT`-time failure can't be caught by
+anything inside that callback.
+
+### Reason
+
+A DB failure at `COMMIT` — after `insertFile`, `enqueue`, and the rawToken
+update had all already "succeeded" inside the callback — previously left
+the uploaded object with no compensating cleanup at all, since the
+original `try/catch` had already exited normally by that point. Only an
+object uploaded by the specific failed attempt is ever deleted; an
+already-committed, already-referenced PDF found via `findLatestPdfFile` is
+never touched.
+
+### Status
+
+Accepted.

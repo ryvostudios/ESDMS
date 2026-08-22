@@ -282,6 +282,16 @@ test("return_photo_file_id referencing a DEPARTURE_PHOTO file is rejected (wrong
   );
 });
 
+test("return_photo_file_id referencing an APPROVED_PDF file is rejected", async () => {
+  const draft = await insertDraftGatePass(pool);
+  const pdfId = await insertGatePassFile(pool, draft.id, "APPROVED_PDF");
+
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET return_photo_file_id = $1 WHERE id = $2", [pdfId, draft.id]),
+    /must reference a gate_pass_files row with file_type = RETURN_PHOTO/,
+  );
+});
+
 test("correct departure/return photo type references are accepted", async () => {
   const draft = await insertDraftGatePass(pool);
   const departurePhotoId = await insertGatePassFile(pool, draft.id, "DEPARTURE_PHOTO");

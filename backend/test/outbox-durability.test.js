@@ -12,6 +12,7 @@ import {
 } from "../src/shared/notifications/outbox.repository.js";
 import { withTransaction } from "../src/shared/db/with-transaction.js";
 import { processApprovalPdfJob } from "../src/modules/gate-pass/gate-pass.service.js";
+import { storageService } from "../src/shared/storage/storage-service.js";
 
 let server;
 let users;
@@ -442,4 +443,73 @@ test("finalization and cancellation racing for the same Gate Pass row never leav
     assert.equal(finalizationResult.status, "VOID");
     assert.equal(jobRow.rows[0].status, "VOID");
   }
+});
+
+test("finalization cleans up the newly uploaded PDF object if the DB transaction fails at COMMIT — after the callback already succeeded", async (t) => {
+  const id = await createApprovedDraft();
+  const [claimed] = await claimBatch("SYSTEM", 1);
+
+  // Force the COMMIT statement itself to fail — the exact scenario this
+  // fix targets: the transaction callback (insertFile, enqueue, the
+  // rawToken UPDATE) all succeed, but the transaction never actually
+  // lands. withTransaction's own ROLLBACK on that failure is real Postgres
+  // behavior; only the COMMIT call is intercepted here.
+  // pool.connect() is used two different ways in this codebase: promise
+  // style with no arguments (withTransaction, awaited directly) and
+  // Node-callback style (pg-pool's own internal pool.query() convenience
+  // method calls `this.connect((err, client) => {...})` for every
+  // plain, non-transactional query — e.g. repo.findItemsByGatePassId,
+  // called partway through this same job). A mock that only implements
+  // the promise style silently never invokes that callback, hanging
+  // pool.query() forever. Only the ONE promise-style call — the
+  // transaction's own client — needs poisoning; every callback-style call
+  // is passed straight through untouched.
+  const realConnect = pool.connect.bind(pool);
+  let poisonedTransactionClient = false;
+  t.mock.method(pool, "connect", (callback) => {
+    if (typeof callback === "function") {
+      return realConnect(callback);
+    }
+
+    return (async () => {
+      const client = await realConnect();
+      if (!poisonedTransactionClient) {
+        poisonedTransactionClient = true;
+        const realQuery = client.query.bind(client);
+        client.query = (text, ...args) => {
+          if (text === "COMMIT") {
+            throw new Error("simulated COMMIT failure");
+          }
+          return realQuery(text, ...args);
+        };
+      }
+      return client;
+    })();
+  });
+
+  const originalRemove = storageService.remove.bind(storageService);
+  let removedStorageKey = null;
+  t.mock.method(storageService, "remove", async (storageKey) => {
+    removedStorageKey = storageKey;
+    return originalRemove(storageKey);
+  });
+
+  await assert.rejects(processApprovalPdfJob(claimed), /simulated COMMIT failure/);
+
+  t.mock.reset();
+
+  // The original failure is preserved (asserted above via assert.rejects)
+  // — cleanup must not have swallowed or replaced it.
+
+  // Nothing committed: no PDF file row exists for this Gate Pass.
+  const pdfFiles = await pool.query(
+    "SELECT count(*)::int AS n FROM gate_pass_files WHERE gate_pass_id = $1 AND file_type = 'APPROVED_PDF'",
+    [id],
+  );
+  assert.equal(pdfFiles.rows[0].n, 0);
+
+  // The uploaded-but-now-unreferenced object was identified and deleted —
+  // not left as an orphan in storage forever.
+  assert.ok(removedStorageKey, "expected the newly uploaded object to be cleaned up");
+  await assert.rejects(storageService.read(removedStorageKey), /ENOENT|no such file/);
 });

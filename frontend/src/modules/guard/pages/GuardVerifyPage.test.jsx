@@ -48,12 +48,12 @@ describe("GuardVerifyPage QR token lifecycle", () => {
       );
     });
 
-    for (let i = 0; i < localStorage.length; i++) {
-      const value = localStorage.getItem(localStorage.key(i));
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const value = window.localStorage.getItem(window.localStorage.key(i));
       expect(value).not.toContain("raw-secret-token-abc123");
     }
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const value = sessionStorage.getItem(sessionStorage.key(i));
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const value = window.sessionStorage.getItem(window.sessionStorage.key(i));
       expect(value).not.toContain("raw-secret-token-abc123");
     }
   });
