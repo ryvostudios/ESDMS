@@ -374,13 +374,16 @@ Current stage:
 **Gate Pass MVP built and security-hardened; not yet deployed**
 
 The Gate Pass module (schema, backend workflow/PDF/QR/outbox, frontend UI,
-guard workflow, PWA) is implemented end-to-end, followed by an independent
-security/architecture review and a fix pass addressing its findings — see
+guard workflow, PWA) is implemented end-to-end, followed by two independent
+security/architecture reviews and fix passes addressing their findings — see
 `docs/DECISIONS.md` for what changed and why, and `docs/MODULES.md` for
-per-module status.
+per-module status. The second pass also raised the backend's deployment
+readiness: configurable `HOST` binding, a config-selected storage provider
+(`local` for dev/single-instance, `supabase` for production), and fail-fast
+production config validation (`src/config/env.js`).
 
 No production deployment exists yet; deployment is explicitly gated on
-independent re-review of the fix pass.
+independent re-review of the fix passes.
 
 Inventory and all other modules listed in `docs/MODULES.md` remain
 unstarted, per the "Inventory must not begin before Gate Pass MVP

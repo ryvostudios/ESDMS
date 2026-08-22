@@ -1,8 +1,12 @@
+import jwt from "jsonwebtoken";
 import { loginUser } from "./auth.service.js";
 import { loginSchema } from "./auth.validation.js";
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, UnauthorizedError } from "../../shared/errors/app-error.js";
 import { setSessionCookie, clearSessionCookie } from "../../shared/http/session-cookie.js";
+import { extractToken } from "../../middleware/authenticate.js";
+import { bumpSessionVersion } from "../../shared/users/user-profile.repository.js";
+import config from "../../config/env.js";
 
 export const login = asyncHandler(async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
@@ -20,18 +24,40 @@ export const login = asyncHandler(async (req, res) => {
     throw new UnauthorizedError("Invalid email or password.");
   }
 
-  // The browser app authenticates via this cookie and never reads/stores
-  // the token field below — that field exists for non-browser API clients
-  // (scripts, this project's own test suite). See docs/DECISIONS.md.
+  // The browser authenticates via this HttpOnly cookie alone — the JWT
+  // itself is never put in the response body. A script reading the login
+  // response (XSS, a misconfigured logging proxy, browser devtools network
+  // tab left open) gets the user's profile, not a bearer credential it
+  // could replay. See docs/DECISIONS.md.
   setSessionCookie(res, result.token);
 
   return res.status(200).json({
     success: true,
-    data: result,
+    data: { user: result.user },
   });
 });
 
 export const logout = asyncHandler(async (req, res) => {
+  // Best-effort real revocation: if the request still carries a token that
+  // verifies (even one close to expiry), bump that user's session_version
+  // so it — and any other still-valid token for them — is rejected on its
+  // next use. An invalid/missing/expired token isn't an error here: logout
+  // is idempotent, the outcome the caller wants (no working session) is
+  // already true.
+  const token = extractToken(req);
+
+  if (token) {
+    try {
+      const payload = jwt.verify(token, config.jwtSecret, {
+        issuer: config.jwtIssuer,
+        audience: config.jwtAudience,
+      });
+      await bumpSessionVersion(payload.sub);
+    } catch {
+      // Nothing to revoke — already unusable.
+    }
+  }
+
   clearSessionCookie(res);
 
   return res.status(200).json({ success: true, data: null });

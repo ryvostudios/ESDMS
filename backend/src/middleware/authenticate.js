@@ -8,8 +8,10 @@ import { UnauthorizedError } from "../shared/errors/app-error.js";
 // Authorization header remains supported for non-browser API clients (CI,
 // scripts, this project's own test suite) — see docs/DECISIONS.md for why
 // both are kept rather than removing bearer support outright. The cookie
-// is checked first since it's what the real product UI uses.
-function extractToken(req) {
+// is checked first since it's what the real product UI uses. Exported so
+// logout (see auth.controller.js) can identify whose session to revoke
+// without duplicating this extraction logic.
+export function extractToken(req) {
   const cookieToken = readSessionCookie(req);
   if (cookieToken) return cookieToken;
 
@@ -40,6 +42,14 @@ export async function authenticate(req, res, next) {
   const user = await getUserProfileById(payload.sub);
 
   if (!isProfileActive(user)) {
+    return next(new UnauthorizedError());
+  }
+
+  // Session revocation: a token's "sv" claim must match the user's
+  // *current* session_version. Logout bumps it, so a captured/replayed
+  // token from before logout fails here even though its signature and
+  // expiry are both still perfectly valid.
+  if (payload.sv !== user.session_version) {
     return next(new UnauthorizedError());
   }
 

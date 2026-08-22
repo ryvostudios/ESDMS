@@ -8,8 +8,8 @@ async function startServer() {
     await checkDatabaseConnection();
     console.log("PostgreSQL connected");
 
-    const server = app.listen(config.port, "127.0.0.1", () => {
-      console.log(`E-Set API running on http://127.0.0.1:${config.port}`);
+    const server = app.listen(config.port, config.host, () => {
+      console.log(`E-Set API running on http://${config.host}:${config.port}`);
     });
 
     const stopOutboxProcessor = startOutboxProcessor();

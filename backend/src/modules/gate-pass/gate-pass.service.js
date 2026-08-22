@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { storageService } from "../../shared/storage/storage-service.js";
-import { enqueue } from "../../shared/notifications/outbox.repository.js";
-import { registerSystemJobHandler } from "../../shared/notifications/outbox.processor.js";
+import { enqueue, voidPending } from "../../shared/notifications/outbox.repository.js";
+import { registerSystemJobHandler, registerEntityRecheckHandler } from "../../shared/notifications/outbox.processor.js";
 import { NotFoundError, ForbiddenError, ConflictError, ValidationError } from "../../shared/errors/app-error.js";
 import {
   isWithinGatePassScope,
@@ -31,12 +31,18 @@ export async function getGatePassDetail(actor, id) {
     throw new NotFoundError("Gate Pass not found.");
   }
 
-  const [items, auditLog] = await Promise.all([
+  const [items, auditLog, pdfFile] = await Promise.all([
     repo.findItemsByGatePassId(id),
     repo.findAuditLogByGatePassId(id),
+    // Cheap regardless of status — a row that was never approved simply
+    // has none. This is the Fix #1 (demo blocker) readiness signal: the
+    // frontend must never enable "View PDF" purely because status is
+    // APPROVED, since the durable background job (see
+    // processApprovalPdfJob) may not have run yet.
+    repo.findLatestPdfFile(id),
   ]);
 
-  return { gatePass, items, auditLog };
+  return { gatePass, items, auditLog, documentReady: Boolean(pdfFile) };
 }
 
 export async function listGatePasses(actor, filters) {
@@ -149,6 +155,12 @@ async function runTransition(actor, id, transitionName, extra = {}) {
         reason: extra.reason,
         status: definition.to,
       });
+      // Defense-in-depth layer 1 (see outbox.repository.js voidPending):
+      // an approval that hasn't finished generating its PDF/WhatsApp
+      // delivery yet must never produce either after the pass is
+      // cancelled — a driver must never receive an "approved" document
+      // for a trip that's already off.
+      await voidPending(client, "GATE_PASS", id);
     } else {
       await repo.updateStatus(client, id, definition.to);
     }
@@ -170,6 +182,7 @@ async function runTransition(actor, id, transitionName, extra = {}) {
           entityType: "GATE_PASS",
           entityId: id,
           recipientRole: "GATE_GUARD",
+          recipientSiteId: gatePass.site_id,
           payload: {
             gatePassNumber: gatePass.gate_pass_number,
             driverName: gatePass.driver_name,
@@ -192,6 +205,7 @@ async function runTransition(actor, id, transitionName, extra = {}) {
           eventType: "GENERATE_APPROVAL_PDF",
           entityType: "GATE_PASS",
           entityId: id,
+          recipientSiteId: gatePass.site_id,
           idempotencyKey: `generate-approval-pdf:${id}`,
           payload: {
             rawToken: approvalToken,
@@ -217,10 +231,17 @@ async function runTransition(actor, id, transitionName, extra = {}) {
 // Runs on a retryable worker, possibly more than once for the same job —
 // idempotent by re-deriving its own "already done?" check from durable
 // state (an existing APPROVED_PDF file row) rather than trusting anything
-// about its own prior attempts.
+// about its own prior attempts. Returns the status the processor should
+// record for this outbox row (see outbox.processor.js).
 async function processApprovalPdfJob(item) {
   const gatePassId = item.entity_id;
+  const outcome = { status: "SENT" };
 
+  // Cancellation defense-in-depth layer 2 (voidPending at cancel time is
+  // layer 1) lives once, generically, in outbox.processor.js's
+  // stillDeliverable gate — it already ran before this handler was ever
+  // called, for every channel/job type keyed off a Gate Pass, so this
+  // handler doesn't need its own copy of the same check.
   await withTransaction(async (client) => {
     const gatePass = await repo.findById(gatePassId);
 
@@ -275,6 +296,7 @@ async function processApprovalPdfJob(item) {
         entityType: "GATE_PASS",
         entityId: gatePassId,
         recipientPhone: gatePass.driver_phone,
+        recipientSiteId: gatePass.site_id,
         idempotencyKey: `whatsapp-approval:${gatePassId}`,
         payload: {
           storageKey,
@@ -283,10 +305,30 @@ async function processApprovalPdfJob(item) {
         },
       },
     ]);
+
+    // Raw token minimization (Fix #11): the QR/PDF has now been generated
+    // from it — nothing further ever needs the plaintext value again, so
+    // it's erased from this job's own row rather than retained
+    // indefinitely. (No-op if a prior, already-committed attempt already
+    // did this — see the storageKey branch above.)
+    await client.query(`UPDATE notification_outbox SET payload = payload - 'rawToken' WHERE id = $1`, [
+      item.id,
+    ]);
   });
+
+  return outcome;
 }
 
 registerSystemJobHandler("GENERATE_APPROVAL_PDF", processApprovalPdfJob);
+
+// Fix #6 defense-in-depth layer 2, shared by every channel/job type keyed
+// off a Gate Pass (currently SYSTEM PDF generation and the WHATSAPP send
+// that follows it): a cancelled pass is never deliverable, no matter which
+// job is asking.
+registerEntityRecheckHandler("GATE_PASS", async (gatePassId) => {
+  const gatePass = await repo.findById(gatePassId);
+  return Boolean(gatePass) && gatePass.status !== GATE_PASS_STATUS.CANCELLED;
+});
 
 export const submitGatePass = (actor, id) => runTransition(actor, id, "submit");
 export const approveGatePass = (actor, id) => runTransition(actor, id, "approve");

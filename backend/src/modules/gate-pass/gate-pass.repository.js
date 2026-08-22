@@ -1,4 +1,5 @@
 import pool from "../../config/database.js";
+import { currentYearInAppTimezone } from "../../shared/time/app-timezone.js";
 
 const DETAIL_COLUMNS = `
   gp.id, gp.gate_pass_number, gp.status, gp.site_id, gp.issuing_department_id, d.name AS issuing_department_name,
@@ -8,8 +9,10 @@ const DETAIL_COLUMNS = `
   gp.approved_by_user_id, au.full_name AS approved_by_name, gp.approved_at,
   gp.rejected_by_user_id, gp.rejected_at, gp.rejection_reason,
   gp.cancelled_by_user_id, gp.cancelled_at, gp.cancellation_reason,
-  gp.departure_odometer, gp.departure_at, gp.departure_by_user_id,
-  gp.return_odometer, gp.return_at, gp.return_by_user_id, gp.return_remarks,
+  gp.departure_odometer, gp.departure_at, gp.departure_by_user_id, du.full_name AS departure_by_name,
+  gp.departure_photo_file_id,
+  gp.return_odometer, gp.return_at, gp.return_by_user_id, ru.full_name AS return_by_name, gp.return_remarks,
+  gp.return_photo_file_id,
   gp.distance_km, gp.created_at, gp.updated_at
 `;
 
@@ -18,6 +21,8 @@ const DETAIL_FROM = `
   JOIN departments d ON d.id = gp.issuing_department_id
   JOIN users cu ON cu.id = gp.created_by_user_id
   LEFT JOIN users au ON au.id = gp.approved_by_user_id
+  LEFT JOIN users du ON du.id = gp.departure_by_user_id
+  LEFT JOIN users ru ON ru.id = gp.return_by_user_id
 `;
 
 // Data-minimized: no requested_by, remarks, job_order_id, rejection/
@@ -29,7 +34,7 @@ const GUARD_COLUMNS = `
 `;
 
 export async function nextGatePassNumber(client) {
-  const year = new Date().getFullYear();
+  const year = currentYearInAppTimezone();
 
   const result = await client.query(
     `INSERT INTO gate_pass_number_counters (year, last_value)
@@ -265,11 +270,17 @@ export async function findByVerificationTokenHash(tokenHash, siteId) {
   return result.rows[0] || null;
 }
 
+// Same operational-state boundary as searchForGuard: a Guard's direct/
+// refetch lookup by id must never disclose a Gate Pass outside APPROVED /
+// VEHICLE_OUTSIDE just because the caller happens to know its UUID — a
+// DRAFT, PENDING_APPROVAL, REJECTED, or CANCELLED record is invisible to
+// Guard here exactly as it already is from search.
 export async function findByIdForGuard(id, siteId) {
-  const result = await pool.query(`SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.id = $1 AND gp.site_id = $2`, [
-    id,
-    siteId,
-  ]);
+  const result = await pool.query(
+    `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM}
+     WHERE gp.id = $1 AND gp.site_id = $2 AND gp.status IN ('APPROVED', 'VEHICLE_OUTSIDE')`,
+    [id, siteId],
+  );
 
   return result.rows[0] || null;
 }

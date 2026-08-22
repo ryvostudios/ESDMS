@@ -99,6 +99,9 @@ export async function seedUsers() {
       "TEAM_LEAD",
       { siteId: otherSite, departmentId: otherSiteDepartment },
     ),
+    otherSiteGuard: await insertUser("guard-othersite@test.eset.local", "Test Other Site Guard", "GATE_GUARD", {
+      siteId: otherSite,
+    }),
     departmentA,
     departmentB,
     mainSite,
@@ -115,6 +118,7 @@ export async function login(baseUrl, email, password = TEST_PASSWORD) {
   });
 
   const body = await response.json();
+  const setCookie = response.headers.get("set-cookie");
 
-  return { status: response.status, body };
+  return { status: response.status, body, cookie: setCookie ? setCookie.split(";")[0] : null };
 }

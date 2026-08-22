@@ -18,20 +18,20 @@ export function GuardActionPage() {
   const { id } = useParams();
   const location = useLocation();
 
-  // Navigating here from the dashboard/search already has the row in hand
-  // — reuse it instead of an extra round trip. A refresh or direct link
-  // loses this state entirely, which the effect below covers.
+  // Navigation state is an optimistic skeleton ONLY — it makes the loading
+  // message name the actual Gate Pass instead of a bare spinner, nothing
+  // more. Whether EXIT/RETURN is even offered always comes from the fetch
+  // below, on every visit, not just a refresh — a second Guard could have
+  // recorded the exit between when this list was fetched and now, and this
+  // page must catch that before ever showing an action form, not after the
+  // first Guard has already uploaded a photo.
   const navigationGatePass = location.state?.gatePass?.id === id ? location.state.gatePass : null;
 
-  const [gatePass, setGatePass] = useState(navigationGatePass);
-  const [status, setStatus] = useState(navigationGatePass ? "ready" : "loading");
+  const [gatePass, setGatePass] = useState(null);
+  const [status, setStatus] = useState("loading");
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (navigationGatePass) {
-      return;
-    }
-
     let cancelled = false;
 
     getGuardGatePass(id)
@@ -51,7 +51,6 @@ export function GuardActionPage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const { allowedAction, reason } = gatePass ? classify(gatePass.status) : {};
@@ -59,7 +58,9 @@ export function GuardActionPage() {
   return (
     <div>
       <PageHeader title="Gate Pass" />
-      {status === "loading" && <LoadingState message="Loading…" />}
+      {status === "loading" && (
+        <LoadingState message={navigationGatePass ? `Confirming ${navigationGatePass.gatePassNumber}…` : "Loading…"} />
+      )}
       {status === "error" && <ErrorState message={error} />}
       {status === "ready" && <GuardActionView gatePass={gatePass} allowedAction={allowedAction} reason={reason} />}
     </div>

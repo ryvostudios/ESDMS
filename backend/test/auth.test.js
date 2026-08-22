@@ -16,13 +16,14 @@ after(async () => {
   await pool.end();
 });
 
-test("valid login returns a token and user profile", async () => {
-  const { status, body } = await login(server.baseUrl, "admin@test.eset.local");
+test("valid login sets the session cookie and returns the user profile, with NO token field", async () => {
+  const { status, body, cookie } = await login(server.baseUrl, "admin@test.eset.local");
 
   assert.equal(status, 200);
   assert.equal(body.success, true);
-  assert.ok(body.data.token);
+  assert.equal(body.data.token, undefined, "the JWT must never appear in the login JSON response");
   assert.equal(body.data.user.role, "ADMIN");
+  assert.ok(cookie, "expected a session cookie to be set");
 });
 
 test("invalid password is rejected without leaking which part was wrong", async () => {
@@ -47,7 +48,7 @@ test("inactive user cannot log in", async () => {
   assert.equal(body.error.message, "Invalid email or password.");
 });
 
-test("/auth/me without a token is rejected", async () => {
+test("/auth/me without a session is rejected", async () => {
   const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
     headers: { Origin: "http://localhost:5173" },
   });
@@ -57,9 +58,9 @@ test("/auth/me without a token is rejected", async () => {
   assert.equal(body.error.code, "UNAUTHORIZED");
 });
 
-test("/auth/me with a malformed token is rejected", async () => {
+test("/auth/me with a malformed session cookie is rejected", async () => {
   const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
-    headers: { Authorization: "Bearer not-a-real-token", Origin: "http://localhost:5173" },
+    headers: { Cookie: "esdms_session=not-a-real-token", Origin: "http://localhost:5173" },
   });
   const body = await response.json();
 
@@ -67,11 +68,11 @@ test("/auth/me with a malformed token is rejected", async () => {
   assert.equal(body.error.code, "UNAUTHORIZED");
 });
 
-test("/auth/me with a valid token returns the authenticated user", async () => {
-  const { body: loginBody } = await login(server.baseUrl, "admin@test.eset.local");
+test("/auth/me with a valid session returns the authenticated user", async () => {
+  const { cookie } = await login(server.baseUrl, "admin@test.eset.local");
 
   const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${loginBody.data.token}`, Origin: "http://localhost:5173" },
+    headers: { Cookie: cookie, Origin: "http://localhost:5173" },
   });
   const body = await response.json();
 
@@ -83,13 +84,13 @@ test("/auth/me with a valid token returns the authenticated user", async () => {
   assert.equal(body.data.user.email, "admin@test.eset.local");
 });
 
-test("a token for a user who is deactivated after login is rejected on next use", async () => {
-  const { body: loginBody } = await login(server.baseUrl, "teamlead@test.eset.local");
+test("a session stays rejected when the user is deactivated after login", async () => {
+  const { cookie } = await login(server.baseUrl, "teamlead@test.eset.local");
 
   await pool.query("UPDATE users SET is_active = false WHERE id = $1", [users.teamLead]);
 
   const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${loginBody.data.token}`, Origin: "http://localhost:5173" },
+    headers: { Cookie: cookie, Origin: "http://localhost:5173" },
   });
 
   assert.equal(response.status, 401);
@@ -97,8 +98,8 @@ test("a token for a user who is deactivated after login is rejected on next use"
   await pool.query("UPDATE users SET is_active = true WHERE id = $1", [users.teamLead]);
 });
 
-test("a token stays rejected when its ROLE is deactivated, even though the user account itself is still active", async () => {
-  const { body: loginBody } = await login(server.baseUrl, "teamlead@test.eset.local");
+test("a session stays rejected when its ROLE is deactivated, even though the user account itself is still active", async () => {
+  const { cookie } = await login(server.baseUrl, "teamlead@test.eset.local");
 
   await pool.query(
     "UPDATE roles SET is_active = false WHERE id = (SELECT role_id FROM users WHERE id = $1)",
@@ -107,7 +108,7 @@ test("a token stays rejected when its ROLE is deactivated, even though the user 
 
   try {
     const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${loginBody.data.token}`, Origin: "http://localhost:5173" },
+      headers: { Cookie: cookie, Origin: "http://localhost:5173" },
     });
 
     assert.equal(response.status, 401);
@@ -117,6 +118,29 @@ test("a token stays rejected when its ROLE is deactivated, even though the user 
   } finally {
     await pool.query(
       "UPDATE roles SET is_active = true WHERE id = (SELECT role_id FROM users WHERE id = $1)",
+      [users.teamLead],
+    );
+  }
+});
+
+test("a session stays rejected when its SITE is deactivated, even though user and role are still active", async () => {
+  const { cookie } = await login(server.baseUrl, "teamlead@test.eset.local");
+
+  await pool.query("UPDATE sites SET is_active = false WHERE id = (SELECT site_id FROM users WHERE id = $1)", [
+    users.teamLead,
+  ]);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
+      headers: { Cookie: cookie, Origin: "http://localhost:5173" },
+    });
+    assert.equal(response.status, 401);
+
+    const loginAttempt = await login(server.baseUrl, "teamlead@test.eset.local");
+    assert.equal(loginAttempt.status, 401);
+  } finally {
+    await pool.query(
+      "UPDATE sites SET is_active = true WHERE id = (SELECT site_id FROM users WHERE id = $1)",
       [users.teamLead],
     );
   }
@@ -146,23 +170,35 @@ test("login sets an HttpOnly, SameSite=Lax session cookie that /auth/me accepts 
   assert.equal(meBody.data.user.email, "admin@test.eset.local");
 });
 
-test("logout clears the session cookie", async () => {
-  const loginResponse = await fetch(`${server.baseUrl}/api/v1/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Origin: "http://localhost:5173" },
-    body: JSON.stringify({ email: "admin@test.eset.local", password: TEST_PASSWORD }),
-  });
-  const cookiePair = loginResponse.headers.get("set-cookie").split(";")[0];
+test("logout clears the session cookie AND revokes it — a replayed pre-logout session is rejected", async () => {
+  const { cookie } = await login(server.baseUrl, "admin@test.eset.local");
 
   const logoutResponse = await fetch(`${server.baseUrl}/api/v1/auth/logout`, {
     method: "POST",
-    headers: { Origin: "http://localhost:5173", Cookie: cookiePair },
+    headers: { Origin: "http://localhost:5173", Cookie: cookie },
   });
 
   const clearedCookie = logoutResponse.headers.get("set-cookie");
   assert.equal(logoutResponse.status, 200);
   assert.match(clearedCookie, /esdms_session=;/);
   assert.match(clearedCookie, /Expires=Thu, 01 Jan 1970/i);
+
+  // The old cookie value itself — captured before logout, exactly as a
+  // thief who stole it earlier would have it — must no longer work, even
+  // though its signature and expiry are both still perfectly valid.
+  const replay = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
+    headers: { Origin: "http://localhost:5173", Cookie: cookie },
+  });
+  assert.equal(replay.status, 401);
+});
+
+test("logout with no session (already logged out, or never logged in) still succeeds", async () => {
+  const response = await fetch(`${server.baseUrl}/api/v1/auth/logout`, {
+    method: "POST",
+    headers: { Origin: "http://localhost:5173" },
+  });
+
+  assert.equal(response.status, 200);
 });
 
 test("CORS rejects an unrecognized origin", async () => {

@@ -44,6 +44,10 @@ table yet. This is intentionally an isolated assumption in the authorization
 layer so it can be swapped for a real team-membership model later without
 touching the workflow/service code.
 
+Submitting a Gate Pass for a department other than the Team Lead's own is
+**rejected** (403), not silently reassigned to their department — see
+`resolveCreateDepartmentId` in `gate-pass.authorization.js`.
+
 ### ADMIN
 - Create, save/edit draft, submit, approve, reject, cancel (where the
   workflow state permits), view all operational Gate Passes, approval queue,
@@ -168,6 +172,15 @@ DRAFT -> PENDING_APPROVAL -> APPROVED -> VEHICLE_OUTSIDE -> COMPLETED
    Guard notification and attempts WhatsApp delivery. WhatsApp
    success/failure never invalidates the already-committed approval.
 
+PDF generation is asynchronous (a durable outbox job, not part of the
+approval request/response). The Gate Pass detail API exposes a
+`documentReady` flag distinct from `status === "APPROVED"`; the frontend
+polls on a bounded interval and shows a "Generating…" indicator until it
+flips true, rather than assuming the PDF exists the moment the status
+changes. Cancelling a Gate Pass before the worker has run voids the pending
+PDF/WhatsApp jobs — a cancelled pass can never later produce a stale
+delivery.
+
 ### Exit (Guard)
 Requires: departure odometer, departure photo, authenticated Guard, server
 timestamp. `APPROVED -> VEHICLE_OUTSIDE`. Duplicate exit attempts rejected
@@ -184,10 +197,17 @@ COMPLETED`. Duplicate return attempts rejected.
 
 ## 5. QR verification
 
-- QR encodes a **deep link URL** (e.g. `https://<app>/guard/verify/<token>`)
-  containing an opaque, cryptographically random token — never a raw DB id,
-  never sensitive pass data. Any phone camera app can scan and open it; no
-  in-app camera-scanning library is required.
+- QR encodes a **deep link URL** with the token in the URL **fragment**
+  (e.g. `https://<app>/guard/verify#<token>`), never a path segment or query
+  string — fragments are never sent to the server by the browser and don't
+  land in access logs or `Referer` headers. The token is an opaque,
+  cryptographically random value — never a raw DB id, never sensitive pass
+  data. Any phone camera app can scan and open it; no in-app camera-scanning
+  library is required. The frontend reads the fragment once, submits it to
+  the backend in a POST body, then strips it from the address bar via
+  `history.replaceState` so it doesn't persist in browser history. Only a
+  hash of the token is stored server-side; the raw token is also erased from
+  the durable outbox job payload once the PDF has been generated.
 - The same QR is presented at both exit and return — the backend decides
   which action is available from current state (`APPROVED` → show Exit,
   `VEHICLE_OUTSIDE` → show Return, anything else → refuse with a clear
@@ -207,6 +227,13 @@ Mandatory at both exit and return (departure photo, return photo). Stored
 via the storage abstraction (see below), never trusting the client-provided
 filename, validated by MIME type and size.
 
+Admin and Site Manager can review departure/return evidence after the fact
+on the Gate Pass detail page (odometer, timestamp, recording Guard, "View
+Photo"). The detail API exposes only safe metadata (file id, not a storage
+path); the photo itself downloads through the existing authorized
+`GET /gate-passes/:id/files/:fileId` endpoint, which re-checks scope. This
+does not broaden Guard file access.
+
 ---
 
 ## 7. Files / storage architecture
@@ -215,12 +242,15 @@ PostgreSQL stores structured data + object **metadata** only
 (`storage_key`, `mime_type`, `size_bytes`, `checksum_sha256`, owning entity,
 creator, timestamp) — never a permanent public URL as the security model.
 
-A `StorageService` interface abstracts the actual bytes. For this demo, a
-local-disk provider implements it (files live outside any static/public web
-root; access is only via an authenticated, authorized backend endpoint that
-streams the file after checking permission — never a static file mount).
-Swapping in an S3-compatible provider later requires no business-logic
-changes.
+A `StorageService` interface abstracts the actual bytes. The concrete
+provider is selected by `STORAGE_PROVIDER`: `local` (disk, outside any
+static/public web root — dev/test/single-instance demo only) or `supabase`
+(Supabase Storage private bucket via its REST API). Access is always via an
+authenticated, authorized backend endpoint that streams the file after
+checking permission — never a static file mount. Production configuration
+validation refuses to start with `STORAGE_PROVIDER=local` unless explicitly
+overridden, since local disk storage does not survive a redeploy or scale
+past one instance. No real Supabase project has been connected yet.
 
 ---
 
@@ -229,8 +259,19 @@ changes.
 Approval writes an outbox row inside the same transaction as the state
 change; delivery (Guard in-app notification, Driver WhatsApp) happens in a
 background step **after** commit, so external delivery availability never
-gates approval. Delivery state (`PENDING` / `SENT` / `FAILED` /
-`SIMULATED`) is tracked per outbox row with retry support.
+gates approval. Delivery state (`PENDING` / `PROCESSING` / `SENT` /
+`FAILED` / `VOID` / `SIMULATED`) is tracked per outbox row with retry
+support.
+
+Every outbox row carries an authoritative `recipient_site_id` derived from
+the Gate Pass, never a frontend-supplied filter — a Guard notification is
+only visible to the same site. Jobs are claimed atomically
+(`FOR UPDATE SKIP LOCKED`); a worker that crashes mid-job eventually loses
+its lease and the job is reclaimed. Cancelling a Gate Pass voids any still-
+pending job in the same transaction, plus a defense-in-depth re-check before
+a worker actually generates or sends, so a cancel-before-worker-runs race
+can never produce a stale delivery. WhatsApp sends carry a stable
+idempotency key through to the provider.
 
 A `WhatsAppProvider` interface is implemented by a demo/local provider when
 real Meta WhatsApp Business Cloud API credentials are not configured. The

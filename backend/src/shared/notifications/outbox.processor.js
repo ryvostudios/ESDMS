@@ -14,6 +14,22 @@ export function registerSystemJobHandler(eventType, handler) {
   systemJobHandlers.set(eventType, handler);
 }
 
+// Same reasoning, applied to a second concern: before actually delivering
+// ANY channel's job, the owning domain gets one more chance to say "this
+// entity is no longer in a deliverable state" (e.g. a Gate Pass cancelled
+// after its WhatsApp job was already claimed by a worker — see Fix #6).
+// Returns true if still safe to deliver.
+const entityRecheckHandlers = new Map();
+
+export function registerEntityRecheckHandler(entityType, handler) {
+  entityRecheckHandlers.set(entityType, handler);
+}
+
+async function stillDeliverable(item) {
+  const recheck = entityRecheckHandlers.get(item.entity_type);
+  return !recheck || (await recheck(item.entity_id));
+}
+
 const BATCH_SIZE = 20;
 
 // Drains the channel fully rather than grabbing one static batch per tick —
@@ -27,6 +43,11 @@ async function drain(channel, processItem) {
 
     for (const item of claimed) {
       try {
+        if (!(await stillDeliverable(item))) {
+          await markDelivered(pool, item.id, "VOID", null);
+          continue;
+        }
+
         const { status, providerMessageId = null } = await processItem(item);
         await markDelivered(pool, item.id, status, providerMessageId);
       } catch (error) {
@@ -44,11 +65,16 @@ async function processWhatsAppOnce() {
   await drain("WHATSAPP", async (item) => {
     const documentBuffer = await storageService.read(item.payload.storageKey);
 
+    // A stable key derived from this outbox row, not a fresh random value
+    // per attempt — a real provider can use it to recognize "I already
+    // accepted this exact send" across a worker crash-and-retry instead of
+    // dispatching a second real message. See docs/DECISIONS.md.
     return whatsAppProvider.sendDocument({
       toPhone: item.recipient_phone,
       documentBuffer,
       filename: item.payload.filename,
       caption: item.payload.caption,
+      idempotencyKey: item.idempotency_key,
     });
   });
 }
@@ -65,9 +91,9 @@ async function processSystemOnce() {
     // write domain rows and/or enqueue a follow-up job atomically with
     // marking this one SENT) — retried freely since it re-derives its
     // work from durable state rather than trusting a prior partial run.
-    await handler(item);
-
-    return { status: "SENT" };
+    // It returns the status this job should be recorded with (normally
+    // SENT, or VOID if it detected its own cancellation race).
+    return handler(item);
   });
 }
 
@@ -81,11 +107,34 @@ async function processOnce() {
   await processWhatsAppOnce();
 }
 
-export function startOutboxProcessor(intervalMs = 30_000) {
-  const timer = setInterval(() => {
-    processOnce().catch((error) => console.error("Outbox processor error:", error));
-  }, intervalMs);
+// A run already in flight (own tick still draining, or the initial
+// kick-off below) must never overlap with another — two concurrent drains
+// of the same channel would both be claiming with FOR UPDATE SKIP LOCKED
+// safely, but there is no reason to ever run them concurrently, and
+// overlap would make "is the queue actually idle" harder to reason about.
+let running = false;
 
+async function processOnceNonOverlapping() {
+  if (running) return;
+  running = true;
+
+  try {
+    await processOnce();
+  } catch (error) {
+    console.error("Outbox processor error:", error);
+  } finally {
+    running = false;
+  }
+}
+
+export function startOutboxProcessor(intervalMs = 30_000) {
+  // Run once immediately on startup rather than waiting out the first
+  // interval — a server restart (deploy, crash recovery) must not leave a
+  // freshly-approved Gate Pass's PDF pending for up to intervalMs with
+  // nothing to prompt it sooner.
+  processOnceNonOverlapping();
+
+  const timer = setInterval(processOnceNonOverlapping, intervalMs);
   timer.unref();
 
   return () => clearInterval(timer);

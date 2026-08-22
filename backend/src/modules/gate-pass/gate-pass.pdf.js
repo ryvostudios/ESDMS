@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
+import { formatDate, formatDateTime } from "../../shared/time/app-timezone.js";
 
 function collectPdfBuffer(doc) {
   return new Promise((resolve, reject) => {
@@ -34,7 +35,7 @@ export async function generateGatePassPdf(gatePass, items, verificationUrl) {
   const leftX = doc.x;
   const topY = doc.y;
 
-  row(doc, "Date", new Date(gatePass.created_at).toLocaleDateString());
+  row(doc, "Date", formatDate(gatePass.created_at));
   row(doc, "Issuing Department", gatePass.issuing_department_name);
   row(doc, "Requested By", gatePass.requested_by);
   row(doc, "Issued To / Destination", gatePass.destination);
@@ -43,7 +44,7 @@ export async function generateGatePassPdf(gatePass, items, verificationUrl) {
   if (gatePass.job_order_id) row(doc, "Job Order ID", gatePass.job_order_id);
   row(doc, "Purpose", gatePass.purpose.replaceAll("_", " "));
   if (gatePass.expected_return_date) {
-    row(doc, "Expected Return Date", new Date(gatePass.expected_return_date).toLocaleDateString());
+    row(doc, "Expected Return Date", formatDate(gatePass.expected_return_date));
   }
 
   doc.image(qrImage, leftX + columnWidth + 40, topY, { width: 160 });
@@ -71,13 +72,29 @@ export async function generateGatePassPdf(gatePass, items, verificationUrl) {
 
   doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
 
+  const rowGap = 6;
+
   for (const item of items) {
+    const cells = [
+      { text: item.description, x: cols[0], width: 190 },
+      { text: item.part_number || "—", x: cols[1], width: 90 },
+      { text: String(item.quantity), x: cols[2], width: 70 },
+      { text: item.unit || "—", x: cols[3], width: 70 },
+    ];
+    // Row height follows the tallest wrapped cell (long descriptions/part
+    // numbers wrap to multiple lines) instead of a fixed moveDown, which
+    // otherwise lets a wrapped cell overlap the next row.
+    const rowHeight = Math.max(...cells.map((cell) => doc.heightOfString(cell.text, { width: cell.width })));
+
+    if (doc.y + rowHeight > doc.page.height - doc.page.margins.bottom) {
+      doc.addPage();
+    }
+
     const y = doc.y;
-    doc.text(item.description, cols[0], y, { width: 190 });
-    doc.text(item.part_number || "—", cols[1], y, { width: 90 });
-    doc.text(String(item.quantity), cols[2], y, { width: 70 });
-    doc.text(item.unit || "—", cols[3], y, { width: 70 });
-    doc.moveDown(0.6);
+    for (const cell of cells) {
+      doc.text(cell.text, cell.x, y, { width: cell.width });
+    }
+    doc.y = y + rowHeight + rowGap;
   }
 
   doc.moveDown(1);
@@ -88,7 +105,7 @@ export async function generateGatePassPdf(gatePass, items, verificationUrl) {
   doc.moveDown(0.5);
   row(doc, "Created By", gatePass.created_by_name);
   row(doc, "Approved By", gatePass.approved_by_name);
-  row(doc, "Approved At", gatePass.approved_at ? new Date(gatePass.approved_at).toLocaleString() : "—");
+  row(doc, "Approved At", gatePass.approved_at ? formatDateTime(gatePass.approved_at) : "—");
 
   doc.end();
 

@@ -17,16 +17,18 @@ export async function loginUser(email, password) {
   const normalizedEmail = email.trim().toLowerCase();
 
   const result = await pool.query(
-    `SELECT u.id, u.password_hash, u.is_active, r.is_active AS role_is_active
+    `SELECT u.id, u.password_hash, u.is_active, r.is_active AS role_is_active, s.is_active AS site_is_active
      FROM users u
      JOIN roles r ON r.id = u.role_id
+     JOIN sites s ON s.id = u.site_id
      WHERE LOWER(u.email) = $1
      LIMIT 1`,
     [normalizedEmail],
   );
 
   const authRow = result.rows[0];
-  const isAccountUsable = Boolean(authRow) && authRow.is_active && authRow.role_is_active;
+  const isAccountUsable =
+    Boolean(authRow) && authRow.is_active && authRow.role_is_active && authRow.site_is_active;
 
   // Always verify against something — real hash if usable, dummy hash if
   // not — so this call takes the same time either way.
@@ -45,6 +47,11 @@ export async function loginUser(email, password) {
     {
       sub: profile.id,
       role: profile.role,
+      // Compared against the user's current session_version on every
+      // authenticated request — logout bumps it, which invalidates this
+      // exact token (and every other one issued before the bump) even
+      // though it's still cryptographically valid and unexpired.
+      sv: profile.session_version,
     },
     config.jwtSecret,
     {

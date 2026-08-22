@@ -49,6 +49,10 @@ export function downloadGatePassPdf(id) {
   return apiClient.getBlob(`/gate-passes/${id}/pdf`);
 }
 
+export function downloadGatePassFile(id, fileId) {
+  return apiClient.getBlob(`/gate-passes/${id}/files/${fileId}`);
+}
+
 export function listDepartments() {
   return apiClient.get("/departments");
 }

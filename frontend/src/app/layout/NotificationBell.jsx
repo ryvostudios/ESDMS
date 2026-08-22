@@ -30,6 +30,8 @@ export function NotificationBell() {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [hasUnseen, setHasUnseen] = useState(false);
+  const wrapperRef = useRef(null);
+  const buttonRef = useRef(null);
   const panelRef = useRef(null);
 
   useEffect(() => {
@@ -63,13 +65,28 @@ export function NotificationBell() {
     if (!open) return undefined;
 
     function handleClickOutside(event) {
-      if (panelRef.current && !panelRef.current.contains(event.target)) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
         setOpen(false);
       }
     }
 
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
+
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) panelRef.current?.focus();
   }, [open]);
 
   function handleToggle() {
@@ -84,14 +101,22 @@ export function NotificationBell() {
   }
 
   return (
-    <div className={styles.wrapper} ref={panelRef}>
-      <button type="button" className={styles.button} onClick={handleToggle} aria-label="Notifications">
+    <div className={styles.wrapper} ref={wrapperRef}>
+      <button
+        type="button"
+        ref={buttonRef}
+        className={styles.button}
+        onClick={handleToggle}
+        aria-label="Notifications"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
         <BellIcon />
         {hasUnseen && <span className={styles.dot} aria-hidden="true" />}
       </button>
 
       {open && (
-        <div className={styles.panel} role="menu">
+        <div className={styles.panel} role="menu" aria-label="Notifications" ref={panelRef} tabIndex={-1}>
           <div className={styles.panelHeader}>Notifications</div>
           {notifications.length === 0 ? (
             <p className={styles.empty}>No notifications yet.</p>

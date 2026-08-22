@@ -1,5 +1,19 @@
-// Interface: any provider implements sendDocument({ toPhone, documentBuffer,
-// filename, caption }) -> { status: "SENT" | "SIMULATED", providerMessageId }.
+// Interface: any provider implements
+// sendDocument({ toPhone, documentBuffer, filename, caption, idempotencyKey })
+// -> { status: "SENT" | "SIMULATED" | "UNCERTAIN", providerMessageId }.
+//
+// idempotencyKey is derived from the outbox row (see outbox.processor.js)
+// and stays the same across every retry of the same job — a real provider
+// that supports idempotent requests (Meta's Cloud API accepts a client
+// message ID for this) can use it to recognize "I already accepted this
+// exact send" after a worker crash-and-retry, instead of dispatching a
+// second real message.
+//
+// UNCERTAIN means the provider's own response didn't confirm accept vs.
+// reject before the request ended (timeout, connection drop mid-response)
+// — genuinely unknown, not a retryable failure. A caller must never
+// silently retry-as-fresh on UNCERTAIN; see outbox.processor.js.
+//
 // No real Meta WhatsApp Business Cloud API credentials are configured for
 // this demo, so DemoWhatsAppProvider is used. It must never report "SENT" —
 // only "SIMULATED" — so nobody mistakes a demo run for a real delivery.
@@ -13,8 +27,10 @@ function redactPhone(phone) {
 }
 
 export class DemoWhatsAppProvider {
-  async sendDocument({ toPhone }) {
-    console.log(`[whatsapp:demo] Simulated document delivery to ${redactPhone(toPhone)}`);
+  async sendDocument({ toPhone, idempotencyKey }) {
+    console.log(
+      `[whatsapp:demo] Simulated document delivery to ${redactPhone(toPhone)} (idempotencyKey=${idempotencyKey})`,
+    );
 
     return {
       status: "SIMULATED",

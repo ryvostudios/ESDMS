@@ -16,10 +16,10 @@ after(async () => {
 });
 
 async function permissionsFor(email) {
-  const { body } = await login(server.baseUrl, email);
+  const { cookie } = await login(server.baseUrl, email);
 
   const response = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
-    headers: { Authorization: `Bearer ${body.data.token}`, Origin: "http://localhost:5173" },
+    headers: { Cookie: cookie, Origin: "http://localhost:5173" },
   });
   const meBody = await response.json();
 

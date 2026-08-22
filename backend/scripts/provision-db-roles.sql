@@ -9,6 +9,15 @@
 --
 -- Edit the password below before running.
 
+-- Postgres grants CREATE on the "public" schema to the PUBLIC pseudo-role
+-- by default (on PG < 15) — every role, including esdms_runtime below, has
+-- schema-object-creation rights it never needed until this is revoked at
+-- the PUBLIC level. Revoking CREATE from esdms_runtime alone (further
+-- down) is not enough on its own: a role's effective privileges are the
+-- union of what's granted to it directly AND to PUBLIC, so PUBLIC's own
+-- grant would still apply regardless.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'esdms_runtime') THEN
@@ -32,10 +41,37 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO esdms_runtime;
 
--- Defense in depth: this role must never be able to alter schema, even
--- though it was never granted CREATE explicitly above.
+-- Defense in depth: explicit even after the PUBLIC-level revoke above —
+-- this role must never be able to alter schema under any path.
 REVOKE CREATE ON SCHEMA public FROM esdms_runtime;
 
 -- After running this, set the production DATABASE_URL to use this role
 -- (esdms_runtime) and its password, while MIGRATION_DATABASE_URL keeps
--- using the owner role for all future `npm run migrate:up` runs.
+-- using the owner role for all future `npm run migrate:up:prod` runs.
+
+-- --------------------------------------------------------------------
+-- Verification — confirms what was actually granted, not just what this
+-- script intended. Run standalone any time with:
+--   psql "$MIGRATION_DATABASE_URL" \
+--     -c "\df" -c "select ..." -- or just re-run this whole file; the
+--     grants above are idempotent (GRANT/REVOKE, not INSERT).
+-- --------------------------------------------------------------------
+
+-- Role attributes: every column here must read false/f except rolcanlogin.
+SELECT
+  rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolcanlogin
+FROM pg_roles
+WHERE rolname = 'esdms_runtime';
+
+-- Table-level effective privileges: expect SELECT/INSERT/UPDATE/DELETE
+-- only — no TRUNCATE, REFERENCES, or TRIGGER, and no rows at all for a
+-- role that has DDL rights, since DDL isn't a table-level privilege.
+SELECT table_name, privilege_type
+FROM information_schema.role_table_grants
+WHERE grantee = 'esdms_runtime'
+ORDER BY table_name, privilege_type;
+
+-- Schema-level: expect has_usage = true, has_create = false.
+SELECT
+  has_schema_privilege('esdms_runtime', 'public', 'USAGE') AS has_usage,
+  has_schema_privilege('esdms_runtime', 'public', 'CREATE') AS has_create;

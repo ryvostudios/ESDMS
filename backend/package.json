@@ -10,6 +10,7 @@
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "migrate:up:prod": "node-pg-migrate up -d MIGRATION_DATABASE_URL",
+    "user:create-admin": "node scripts/create-admin-user.js",
     "test": "DOTENV_CONFIG_PATH=.env.test node --test --test-concurrency=1 test/*.test.js"
   },
   "private": true,

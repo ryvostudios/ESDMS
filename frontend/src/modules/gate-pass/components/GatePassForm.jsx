@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { useDepartments } from "../hooks/useDepartments.js";
 import { GATE_PASS_PURPOSES } from "../constants.js";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
@@ -50,8 +51,23 @@ function validate(values, items) {
 }
 
 export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmit }) {
+  const { user, hasPermission } = useAuth();
   const { departments, status: departmentsStatus } = useDepartments();
-  const [values, setValues] = useState(() => ({ ...defaultValues(), ...initialValues }));
+
+  // A Team Lead (no site-wide scope) can only ever file under their own
+  // department — the backend explicitly rejects anything else (Fix #10)
+  // instead of silently substituting it, so the picker is locked to that
+  // one department rather than letting them choose, submit, and be told
+  // no. `user` is already available synchronously (this form only ever
+  // renders once authenticated), so this is plain derived initial state,
+  // not something that needs an effect to apply after the fact.
+  const isDepartmentLocked = !hasPermission("gate_pass.view_site");
+
+  const [values, setValues] = useState(() => ({
+    ...defaultValues(),
+    ...(isDepartmentLocked ? { issuingDepartmentId: user.departmentId } : {}),
+    ...initialValues,
+  }));
   const [items, setItems] = useState(() => initialItems?.length ? initialItems : [{ ...EMPTY_ITEM }]);
   const [fieldErrors, setFieldErrors] = useState({});
   const [itemErrors, setItemErrors] = useState([]);
@@ -125,7 +141,7 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
               value={values.issuingDepartmentId}
               onChange={(event) => updateField("issuingDepartmentId", event.target.value)}
               error={fieldErrors.issuingDepartmentId}
-              disabled={submitting || departmentsStatus === "loading"}
+              disabled={submitting || departmentsStatus === "loading" || isDepartmentLocked}
             >
               <option value="">Select department</option>
               {departments.map((department) => (

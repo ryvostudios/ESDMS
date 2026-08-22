@@ -24,7 +24,7 @@ export const create = asyncHandler(async (req, res) => {
   const id = await service.createGatePass(req.user, input);
   const detail = await service.getGatePassDetail(req.user, id);
 
-  res.status(201).json({ success: true, data: toDetailDto(detail.gatePass, detail.items, detail.auditLog) });
+  res.status(201).json({ success: true, data: toDetailDto(detail.gatePass, detail.items, detail.auditLog, detail.documentReady) });
 });
 
 export const list = asyncHandler(async (req, res) => {
@@ -40,7 +40,7 @@ export const list = asyncHandler(async (req, res) => {
 
 export const detail = asyncHandler(async (req, res) => {
   const result = await service.getGatePassDetail(req.user, req.params.id);
-  res.status(200).json({ success: true, data: toDetailDto(result.gatePass, result.items, result.auditLog) });
+  res.status(200).json({ success: true, data: toDetailDto(result.gatePass, result.items, result.auditLog, result.documentReady) });
 });
 
 export const updateDraft = asyncHandler(async (req, res) => {
@@ -48,12 +48,12 @@ export const updateDraft = asyncHandler(async (req, res) => {
   await service.updateDraft(req.user, req.params.id, input);
   const result = await service.getGatePassDetail(req.user, req.params.id);
 
-  res.status(200).json({ success: true, data: toDetailDto(result.gatePass, result.items, result.auditLog) });
+  res.status(200).json({ success: true, data: toDetailDto(result.gatePass, result.items, result.auditLog, result.documentReady) });
 });
 
 async function respondWithDetail(req, res, statusCode = 200) {
   const result = await service.getGatePassDetail(req.user, req.params.id);
-  res.status(statusCode).json({ success: true, data: toDetailDto(result.gatePass, result.items, result.auditLog) });
+  res.status(statusCode).json({ success: true, data: toDetailDto(result.gatePass, result.items, result.auditLog, result.documentReady) });
 }
 
 export const submit = asyncHandler(async (req, res) => {

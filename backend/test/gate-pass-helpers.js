@@ -13,21 +13,34 @@ export function buildCreatePayload(overrides = {}) {
   };
 }
 
+// Despite the name (kept to avoid an expensive rename across every test
+// file's ~50 call sites), login no longer returns a bearer token at all
+// (Fix #7 — see docs/DECISIONS.md) — this authenticates the same way the
+// real browser does, by capturing the HttpOnly session cookie from the
+// login response and handing it back as a plain "name=value" pair for
+// apiRequest to send as a Cookie header.
 export async function authHeader(baseUrl, email, password = TEST_PASSWORD) {
   const response = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: "http://localhost:5173" },
     body: JSON.stringify({ email, password }),
   });
-  const body = await response.json();
 
-  return `Bearer ${body.data.token}`;
+  const setCookie = response.headers.get("set-cookie");
+  if (!setCookie) {
+    throw new Error(`Login failed for ${email}: no session cookie in response.`);
+  }
+
+  return setCookie.split(";")[0];
 }
 
+// `token` here is a Cookie header value (see authHeader above), not a
+// bearer token — kept as the option name since every test file already
+// passes `{ token: tokens.xxx }`.
 export async function apiRequest(baseUrl, method, path, { token, body, isForm } = {}) {
   const headers = { Origin: "http://localhost:5173" };
 
-  if (token) headers.Authorization = token;
+  if (token) headers.Cookie = token;
   if (body && !isForm) headers["Content-Type"] = "application/json";
 
   const response = await fetch(`${baseUrl}${path}`, {

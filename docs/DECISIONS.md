@@ -458,3 +458,412 @@ Postgres instance, as the owner role, before pointing production
 `DATABASE_URL` at the restricted runtime role — not yet run against any
 real deployment, since deployment itself is out of scope until independent
 re-review of this fix pass is complete.
+
+---
+
+## 2026-08-22 — Second Review Pass: Deployment Readiness and Defense-in-Depth
+
+### Decision
+
+A second, independent security/architecture review examined the codebase
+after the first fix pass. The entries below record its notable decisions.
+Superseded/extended prior entries are left unmodified per this document's
+own rule; see each entry for what it changes.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Configurable HOST Binding for PaaS Deployment
+
+### Decision
+
+The backend now binds to a configurable `HOST` (`src/config/env.js`,
+`src/server.js`), defaulting to `127.0.0.1` in development and `0.0.0.0` in
+production, instead of a hardcoded `127.0.0.1`.
+
+### Reason
+
+Render (and most PaaS platforms) route public traffic to the container over
+its internal network; a server bound only to `127.0.0.1` is unreachable from
+outside the container, which would have made a Render deploy silently fail
+to receive traffic.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Storage Provider Selected by Configuration; Production Requires Durable Storage
+
+### Decision
+
+`StorageService` now selects its concrete provider from `STORAGE_PROVIDER`
+(`local` or `supabase`) instead of always using the local-disk provider.
+`SupabaseStorageProvider` talks to Supabase Storage's REST API via plain
+`fetch()` (no new SDK dependency). Production configuration validation
+refuses to start with `STORAGE_PROVIDER=local` unless explicitly overridden
+to `local-single-instance-accepted-risk`. Supabase credentials are variable
+names only in `.env.example`; no real Supabase project has been connected.
+
+### Reason
+
+The local-disk provider was previously used unconditionally, including in
+what would become a production build — on a redeploy or a multi-instance
+PaaS deployment, on-disk evidence photos and generated PDFs would silently
+disappear. Config-driven selection lets local disk remain the correct choice
+for development/tests while making production storage an explicit,
+fail-fast decision rather than an accident.
+
+### Status
+
+Accepted. Real Supabase connection remains out of scope until deployment is
+authorized.
+
+---
+
+## 2026-08-22 — Notifications Scoped by Site, Not Just Role
+
+### Decision
+
+`notification_outbox` gained a `recipient_site_id` column, derived
+authoritatively from the Gate Pass at enqueue time (never trusted from a
+frontend filter). In-app notification listing requires either an exact
+`recipient_user_id` match or a `(recipient_role, recipient_site_id)` match.
+
+### Reason
+
+A Guard notification addressed only by `recipientRole=GATE_GUARD` was
+effectively visible to every Guard at every site — the first review pass's
+site model (departments, Gate Passes, users) was never extended to the
+notification outbox. This closes that gap consistently with the existing
+site-scoping rule everywhere else.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Outbox Worker: Stale-Lease Reclamation and Entity-Recheck Registry
+
+### Decision
+
+`claimBatch` now reclaims `PROCESSING` rows whose lease (`locked_at`) has
+expired, in addition to `PENDING`/`FAILED` rows, via the same
+`FOR UPDATE SKIP LOCKED` claim query — a worker that crashes mid-job no
+longer leaves that job stuck forever. A generic entity-recheck registry
+(`registerEntityRecheckHandler` in `outbox.processor.js`, mirroring the
+existing system-job-handler registry) lets any channel (SYSTEM, WHATSAPP)
+re-verify its underlying entity is still in a deliverable state immediately
+before acting, independent of the specific job type. The Gate Pass module
+registers a recheck that voids the job if the pass has been cancelled.
+Cancellation also voids any still-`PENDING`/`FAILED` job directly, in the
+same transaction as the cancellation itself — the recheck registry is a
+second, independent layer for the job already claimed by a worker when
+cancellation happens. WhatsApp sends now carry the job's `idempotency_key`
+through to the provider call.
+
+### Reason
+
+Two related gaps: (1) a worker crash left `PROCESSING` rows permanently
+stuck, since the original claim query only ever looked at `PENDING`/
+`FAILED`; (2) approving then immediately cancelling a Gate Pass before the
+worker ran could still result in a PDF being generated and a WhatsApp
+message being sent for a pass that was, by the time of delivery, cancelled.
+A single voidPending() call at cancellation time isn't sufficient on its
+own, since a job may already be claimed (`PROCESSING`) by a worker when
+cancellation happens — hence the second, generic re-check layer.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Login No Longer Returns the JWT in the JSON Body
+
+### Decision
+
+`POST /auth/login` returns the user/profile in its JSON response but no
+longer includes the raw JWT as a field — the token exists only in the
+`HttpOnly` session cookie already set by the same response. Existing tests
+were updated to assert the token field's absence rather than preserving it
+for compatibility.
+
+### Reason
+
+The prior fix pass moved browser authentication to an `HttpOnly` cookie
+specifically so an XSS in any dependency couldn't exfiltrate the session
+token — but the login response still handed the same token back in
+inspectable JSON, undermining that protection for any code path that read
+the response body.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Session Revocation via `session_version`
+
+### Decision
+
+Added a `session_version` integer column on `users`, embedded in the JWT as
+an `sv` claim at login and compared against the live database value on
+every authenticated request. Logout increments `session_version`, which
+immediately invalidates every outstanding token for that user.
+
+### Reason
+
+Previously, clearing the session cookie on logout did nothing to the JWT
+itself — a copy of the token (e.g. captured before logout) would remain
+valid until its 8-hour expiry regardless of logout. Of the two options
+usually used for this (a sessions/JTI table for per-device revocation, or a
+single version counter for coarse user-wide revocation), the counter was
+chosen as the simpler mechanism; the coarser "logout ends every session for
+that user" trade-off is reasonable here and arguably desirable for a shared
+Guard kiosk device.
+
+### Status
+
+Accepted. Per-device revocation can be added later as a sessions table
+without changing the JWT's shape if ever required.
+
+---
+
+## 2026-08-22 — Guard Direct-ID Fetch Discloses Only Actionable States
+
+### Decision
+
+`GET /guard/:id` (used for refresh/deep-link access) now only returns a
+Gate Pass when it is same-site **and** in `APPROVED` or `VEHICLE_OUTSIDE`
+state; every other state or a cross-site id returns not-found rather than
+the record.
+
+### Reason
+
+The endpoint previously returned any same-site Gate Pass by id regardless
+of its state — a Guard could look up a `DRAFT`, `PENDING_APPROVAL`,
+`REJECTED`, or `CANCELLED` pass's details, which is more disclosure than
+the Guard role's data-minimization principle (`docs/GATE_PASS_SPEC.md` §1)
+allows, even though no Guard action was actually available on those states.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Guard Navigation Always Refetches Authoritative State
+
+### Decision
+
+Guard action pages (`GuardActionPage.jsx`) always refetch the Gate Pass on
+mount/id-change instead of trusting React Router `location.state` to enable
+EXIT/RETURN actions. Nav state is used only to render a nicer loading
+message while the authoritative fetch is in flight.
+
+### Reason
+
+Using nav state to skip the initial fetch meant a Guard who navigated from
+a list/search screen could see EXIT/RETURN enabled based on state that was
+already stale by the time they acted — e.g. another Guard had already
+recorded the exit in the interim — risking a wasted evidence-photo upload
+against a transition the backend would then reject anyway. The backend was
+always the final authority; this fixes the frontend to match on first
+render, not just on retry-after-rejection.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Production Configuration Validated Fail-Fast at Startup
+
+### Decision
+
+`validateProductionConfig()` (`src/config/env.js`) runs once at module load
+when `NODE_ENV=production`, checking `FRONTEND_ORIGIN`/`APP_PUBLIC_URL` are
+`https://`, `STORAGE_PROVIDER` isn't the unacknowledged local default,
+required Supabase variables are present when `STORAGE_PROVIDER=supabase`,
+and `TRUST_PROXY_HOPS` is set explicitly (no default in production) — never
+`app.set("trust proxy", true)` blindly, since that would trust every
+`X-Forwarded-*` header from an arbitrary client sitting in front of a
+misconfigured proxy count. All violations are collected into a single
+thrown error rather than failing on the first one found.
+
+### Reason
+
+A production deploy with a misconfigured environment variable should fail
+loudly at startup, not silently run with a weaker security posture (HTTP
+QR links, non-durable storage, a trust-proxy setting that lets a client
+spoof its own IP for rate limiting).
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Database Relational Coherence Enforced by Composite Foreign Keys
+
+### Decision
+
+Added composite `UNIQUE`/`FOREIGN KEY` constraints instead of triggers:
+a user's `department_id` must belong to the user's own `site_id`; a Gate
+Pass's `issuing_department_id` must belong to the Gate Pass's own
+`site_id`; `departure_photo_file_id`/`return_photo_file_id` must reference
+a `gate_pass_files` row that actually belongs to that Gate Pass (evidence
+files can't be swapped between passes); `gate_pass_items` is unique per
+`(gate_pass_id, line_no)`; `gate_pass_files` is unique per
+`(gate_pass_id, file_type, version)`.
+
+### Reason
+
+Application-level checks alone can't guarantee these invariants against a
+future code path that forgets to enforce them (or a direct data fix). A
+composite foreign key is enforced by Postgres itself, unconditionally,
+which is both stronger and a smaller diff than a bespoke trigger for each
+case — using magic per-table triggers was deliberately avoided in favor of
+this narrower, standard mechanism.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Evidence Photo Validation Stays Signature-Based, Not a Decode/Re-encode Pipeline
+
+### Decision
+
+Evidence photo uploads continue to be validated against their real file
+signature bytes (`src/modules/gate-pass/gate-pass.upload.js`) rather than
+adding a full image-decoding/re-encoding library (e.g. `sharp`). The
+remaining risk — a file whose magic bytes are genuine JPEG/PNG/WebP but
+whose payload is crafted to exploit a bug in whatever downstream tool
+eventually renders it — is accepted and documented rather than engineered
+away this pass.
+
+### Reason
+
+The review (LOW severity) explicitly allowed documenting this risk instead
+of building a decode/re-encode pipeline "if practical." A decode/re-encode
+library adds a native-binary dependency that complicates the Render build,
+for a threat that requires a rendering-side vulnerability to matter — these
+files are private, authorization-gated, and viewed only by authenticated
+staff through the app's own `<img>`/download flow, not embedded in any
+public or XSS-prone context. Adding the dependency now is not justified by
+the actual exposure.
+
+### Status
+
+Accepted as a documented residual LOW risk. Revisit if evidence photos are
+ever exposed more broadly (e.g. public sharing, third-party rendering).
+
+---
+
+## 2026-08-22 — Deterministic Business Timezone for Numbering and Display
+
+### Decision
+
+Added `APP_TIMEZONE` (default `Asia/Karachi`) and a shared
+`src/shared/time/app-timezone.js` helper. The Gate Pass number's year
+(`nextGatePassNumber`) and the dates printed on the generated PDF are now
+derived via `Intl.DateTimeFormat` pinned to `APP_TIMEZONE`, not the host
+process's local timezone (`new Date().getFullYear()` previously). All
+timestamps remain stored as UTC/`timestamptz` — only derivation/display
+changed.
+
+### Reason
+
+A Render host may run in UTC or any other zone; a Gate Pass created near
+midnight in the business's actual timezone must not be numbered into the
+wrong year, and a printed document's dates must not silently shift
+depending on which region happened to run the process that generated it.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — PDF Item Table Rows Size to Their Tallest Wrapped Cell
+
+### Decision
+
+The Gate Pass PDF's items table (`src/modules/gate-pass/gate-pass.pdf.js`)
+now measures each cell's wrapped height via `doc.heightOfString()` before
+drawing, advances `doc.y` by the tallest cell in that row plus a fixed
+gap, and inserts a page break when a row wouldn't fit before the bottom
+margin. Previously every row advanced by a fixed `moveDown(0.6)`
+regardless of how many lines a long description or part number actually
+wrapped to, which let a wrapped cell overlap the next row.
+
+### Reason
+
+Real job-order descriptions and part numbers vary in length; a fixed row
+height only worked by coincidence for short values.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Health Endpoint Split into Liveness and Readiness
+
+### Decision
+
+`GET /api/v1/health` stays a pure liveness check (process is up, no
+dependency calls). Added `GET /api/v1/health/ready`, which runs `SELECT 1`
+against the database and returns 503 (with no underlying error detail) if
+that fails.
+
+### Reason
+
+A liveness check that also touches the database means a slow/degraded
+database causes an orchestrator to kill and restart an otherwise-healthy
+process — the two failure modes need to be distinguishable. Readiness
+never leaks DB error text publicly.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — First Admin User Provisioned via a Server-Side CLI Script, Not a Registration Endpoint
+
+### Decision
+
+Added `scripts/create-admin-user.js` (`npm run user:create-admin`), which
+inserts a single `ADMIN` user directly via the database pool after
+validating email/password/site with `zod` and hashing the password with
+`argon2`. It supports a non-interactive mode (`ADMIN_EMAIL`,
+`ADMIN_FULL_NAME`, `ADMIN_PASSWORD`, optional `ADMIN_SITE_CODE` env vars)
+for scripted first-deploys and an interactive prompt fallback. There is no
+browser-facing registration endpoint, and no default/seeded admin account
+ships with the system — a fresh database has zero users until this script
+is run.
+
+### Reason
+
+A public self-registration endpoint or a hardcoded default admin account
+are both a standing attack surface (or, for a shared default credential,
+an outright vulnerability) for a system with no other gate before the
+first account exists. Requiring server-side execution (Render Shell / a
+one-off job) means creating the first account requires the same access
+level as deploying the system in the first place.
+
+### Status
+
+Accepted. There is currently no in-app UI/API for creating *additional*
+users of any role beyond this first admin — every account is still
+provisioned server-side. Tracked as a known gap for a real multi-user
+rollout, not addressed this pass.

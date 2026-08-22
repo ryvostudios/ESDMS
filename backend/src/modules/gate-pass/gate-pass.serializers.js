@@ -1,8 +1,13 @@
-export function toDetailDto(gatePass, items = [], auditLog = []) {
+export function toDetailDto(gatePass, items = [], auditLog = [], documentReady = false) {
   return {
     id: gatePass.id,
     gatePassNumber: gatePass.gate_pass_number,
     status: gatePass.status,
+    // Whether the APPROVED_PDF file actually exists yet — distinct from
+    // status APPROVED-or-later, since PDF generation is an async
+    // background job (see gate-pass.service.js processApprovalPdfJob).
+    // The frontend must gate "View PDF" on this, not on status alone.
+    documentReady,
     issuingDepartmentId: gatePass.issuing_department_id,
     issuingDepartmentName: gatePass.issuing_department_name,
     requestedBy: gatePass.requested_by,
@@ -29,6 +34,28 @@ export function toDetailDto(gatePass, items = [], auditLog = []) {
     returnAt: gatePass.return_at,
     returnRemarks: gatePass.return_remarks,
     distanceKm: gatePass.distance_km,
+    // Metadata only — never a storage path. "View Photo" downloads through
+    // the existing authorized GET /:id/files/:fileId endpoint, which
+    // re-checks scope and file ownership itself; this id is not a
+    // capability on its own.
+    departureEvidence: gatePass.departure_photo_file_id
+      ? {
+          fileId: gatePass.departure_photo_file_id,
+          odometer: gatePass.departure_odometer,
+          recordedAt: gatePass.departure_at,
+          recordedByUserId: gatePass.departure_by_user_id,
+          recordedByName: gatePass.departure_by_name,
+        }
+      : null,
+    returnEvidence: gatePass.return_photo_file_id
+      ? {
+          fileId: gatePass.return_photo_file_id,
+          odometer: gatePass.return_odometer,
+          recordedAt: gatePass.return_at,
+          recordedByUserId: gatePass.return_by_user_id,
+          recordedByName: gatePass.return_by_name,
+        }
+      : null,
     createdAt: gatePass.created_at,
     updatedAt: gatePass.updated_at,
     items: items.map((item) => ({

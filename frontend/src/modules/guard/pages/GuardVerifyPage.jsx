@@ -9,6 +9,10 @@ export function GuardVerifyPage() {
   // query string — the browser never sends a fragment to the server, so it
   // never appears in access/proxy logs when this page's link is opened.
   // Read once on mount; it never changes without a full page navigation.
+  // Kept only in this component's memory from here on — never written to
+  // localStorage/sessionStorage, which would outlive the verification
+  // itself and leave a long-lived copy of a bearer-equivalent credential
+  // sitting in the browser.
   const [token] = useState(() => window.location.hash.slice(1));
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState(token ? "loading" : "error");
@@ -18,6 +22,12 @@ export function GuardVerifyPage() {
     if (!token) {
       return undefined;
     }
+
+    // Strip the token from the visible URL/browser history immediately,
+    // before even sending it anywhere — someone reading over the Guard's
+    // shoulder, a shared-device browser history, or a screenshot of the
+    // address bar must never see it once this page has loaded.
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
 
     let cancelled = false;
 

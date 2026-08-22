@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { cloneElement, forwardRef, isValidElement } from "react";
 import styles from "./FormField.module.css";
 
 export const Input = forwardRef(function Input({ className, error, ...rest }, ref) {
@@ -21,6 +21,16 @@ export const Select = forwardRef(function Select({ className, error, children, .
 });
 
 export function FormField({ label, htmlFor, required, error, hint, children }) {
+  // Links the input to its own hint/error text so a screen reader announces
+  // it alongside the field, not just visually beside it.
+  const describedById = error ? `${htmlFor}-error` : hint ? `${htmlFor}-hint` : undefined;
+  const control =
+    isValidElement(children) && describedById
+      ? cloneElement(children, {
+          "aria-describedby": [children.props["aria-describedby"], describedById].filter(Boolean).join(" "),
+        })
+      : children;
+
   return (
     <div className={styles.field}>
       <label htmlFor={htmlFor} className={styles.label}>
@@ -32,10 +42,14 @@ export function FormField({ label, htmlFor, required, error, hint, children }) {
           </span>
         )}
       </label>
-      {children}
-      {hint && !error && <p className={styles.hint}>{hint}</p>}
+      {control}
+      {hint && !error && (
+        <p id={`${htmlFor}-hint`} className={styles.hint}>
+          {hint}
+        </p>
+      )}
       {error && (
-        <p className={styles.error} role="alert">
+        <p id={`${htmlFor}-error`} className={styles.error} role="alert">
           {error}
         </p>
       )}

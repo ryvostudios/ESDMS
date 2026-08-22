@@ -8,14 +8,17 @@ test("demo WhatsApp provider redacts the phone number in its log output", async 
   console.log = (message) => logs.push(message);
 
   try {
-    await new DemoWhatsAppProvider().sendDocument({ toPhone: "+923001234567" });
+    await new DemoWhatsAppProvider().sendDocument({
+      toPhone: "+923001234567",
+      idempotencyKey: "whatsapp-approval:test",
+    });
   } finally {
     console.log = originalLog;
   }
 
   assert.equal(logs.length, 1);
   assert.ok(!logs[0].includes("+923001234567"), "full phone number must not appear in logs");
-  assert.match(logs[0], /\*\*\*4567$/);
+  assert.match(logs[0], /\*\*\*4567/);
 });
 
 test("demo WhatsApp provider never reports a real SENT status", async () => {

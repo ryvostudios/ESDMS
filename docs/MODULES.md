@@ -47,9 +47,13 @@ Planned shared capabilities include:
 
 Current status:
 
-**Foundation in progress**
+**Implemented**
 
-Application-level shared services have not yet been implemented.
+Authentication (cookie session + revocation), users/roles/departments/sites,
+authorization, audit logging, notification outbox (in-app + WhatsApp,
+site-scoped), file/evidence storage (local + Supabase-ready), and security
+middleware are implemented and used by Gate Pass. Reporting/export remains
+unstarted.
 
 ---
 
@@ -116,9 +120,13 @@ Detailed business rules belong in:
 
 Current status:
 
-**Specification / foundation stage**
+**Implemented, security-hardened (two independent review/fix passes); not
+yet deployed**
 
-Gate Pass business functionality has not yet been implemented.
+Full lifecycle (create → approve → guard exit/return → complete), PDF/QR
+generation, WhatsApp delivery (demo provider), evidence photos, audit log,
+and PWA are implemented end-to-end. See `docs/DECISIONS.md` for what the two
+review passes changed and why, and §15 below for the summary table.
 
 ---
 
@@ -308,7 +316,7 @@ This sequence may change only through an explicit documented project decision.
 | Frontend | Implemented (React/Vite, PWA) |
 | Backend | Implemented (Node/Express, `/api/v1`) |
 | PostgreSQL integration | Implemented (node-pg-migrate) |
-| Authentication | Implemented — HttpOnly cookie session (browser) + Bearer (non-browser clients) |
+| Authentication | Implemented — HttpOnly cookie session (browser) + Bearer (non-browser clients), with `session_version`-based revocation |
 | Authorization | Implemented — RBAC, department/site scope |
 | Gate Pass | Implemented, security-hardened; not yet deployed |
 | Inventory | Not started (per §14 sequencing) |

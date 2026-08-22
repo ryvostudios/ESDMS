@@ -3,8 +3,11 @@ import { NavList } from "./NavList.jsx";
 import { CloseIcon } from "../../shared/icons.jsx";
 import styles from "./MobileNav.module.css";
 
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function MobileNav({ open, onClose, triggerRef }) {
   const closeButtonRef = useRef(null);
+  const drawerRef = useRef(null);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -14,6 +17,25 @@ export function MobileNav({ open, onClose, triggerRef }) {
     function handleKeyDown(event) {
       if (event.key === "Escape") {
         onClose();
+        return;
+      }
+
+      // Focus trap: while the drawer is open, Tab/Shift+Tab must stay
+      // within it rather than escaping into the backdrop-covered page.
+      if (event.key === "Tab") {
+        const focusable = Array.from(drawerRef.current?.querySelectorAll(FOCUSABLE_SELECTOR) ?? []);
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     }
 
@@ -33,7 +55,7 @@ export function MobileNav({ open, onClose, triggerRef }) {
   return (
     <>
       <div className={styles.backdrop} onClick={onClose} />
-      <div className={styles.drawer} role="dialog" aria-modal="true" aria-label="Navigation menu">
+      <div className={styles.drawer} role="dialog" aria-modal="true" aria-label="Navigation menu" ref={drawerRef}>
         <div className={styles.header}>
           <div className={styles.brand}>
             <span className={styles.brandMark} aria-hidden="true">

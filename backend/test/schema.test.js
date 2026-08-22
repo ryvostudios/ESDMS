@@ -199,3 +199,76 @@ test("verification_token_hash uniqueness only applies to non-null values", async
   // Both rows have NULL verification_token_hash — must not collide.
   assert.ok(true);
 });
+
+test("a user's department must belong to the user's own site (composite FK)", async () => {
+  await assert.rejects(
+    pool.query(
+      `UPDATE users SET department_id = $1 WHERE id = $2`,
+      [users.otherSiteDepartment, users.teamLead],
+    ),
+    /violates foreign key constraint|users_department_site_fkey/,
+  );
+});
+
+test("a Gate Pass's issuing department must belong to the Gate Pass's own site (composite FK)", async () => {
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO gate_passes
+         (gate_pass_number, issuing_department_id, requested_by, destination,
+          driver_name, driver_phone, vehicle_registration, purpose, created_by_user_id, site_id)
+       VALUES ($1, $2, 'Test Requester', 'Test Site', 'Test Driver', '+10000000000', 'ABC-XSITE', 'SAMPLE', $3, $4)`,
+      [await nextGatePassNumber(pool), users.otherSiteDepartment, users.teamLead, siteId],
+    ),
+    /violates foreign key constraint|gate_passes_department_site_fkey/,
+  );
+});
+
+test("a Gate Pass's evidence photo pointer must reference a file that actually belongs to it (ownership FK)", async () => {
+  const draft = await insertDraftGatePass(pool);
+  const otherDraft = await insertDraftGatePass(pool);
+
+  const file = await pool.query(
+    `INSERT INTO gate_pass_files
+       (gate_pass_id, file_type, storage_key, mime_type, size_bytes, checksum_sha256, version, created_by_user_id)
+     VALUES ($1, 'DEPARTURE_PHOTO', 'gate-pass/x/departure/' || gen_random_uuid() || '.jpg', 'image/jpeg', 10, repeat('a', 64), 1, $2)
+     RETURNING id`,
+    [otherDraft.id, users.guard],
+  );
+
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET departure_photo_file_id = $1 WHERE id = $2", [file.rows[0].id, draft.id]),
+    /violates foreign key constraint|gate_passes_departure_photo_ownership_fkey/,
+  );
+});
+
+test("gate_pass_items rejects a duplicate line_no within the same Gate Pass", async () => {
+  const draft = await insertDraftGatePass(pool);
+
+  await pool.query(
+    `INSERT INTO gate_pass_items (gate_pass_id, line_no, description, quantity) VALUES ($1, 1, 'First', 1)`,
+    [draft.id],
+  );
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO gate_pass_items (gate_pass_id, line_no, description, quantity) VALUES ($1, 1, 'Duplicate', 1)`,
+      [draft.id],
+    ),
+    /violates unique constraint|gate_pass_items_gate_pass_id_line_no_key/,
+  );
+});
+
+test("gate_pass_files rejects a duplicate (gate_pass_id, file_type, version)", async () => {
+  const draft = await insertDraftGatePass(pool);
+
+  const insertPdf = () =>
+    pool.query(
+      `INSERT INTO gate_pass_files
+         (gate_pass_id, file_type, storage_key, mime_type, size_bytes, checksum_sha256, version, created_by_user_id)
+       VALUES ($1, 'APPROVED_PDF', 'gate-pass/x/pdf/' || gen_random_uuid() || '.pdf', 'application/pdf', 10, repeat('b', 64), 1, $2)`,
+      [draft.id, users.admin],
+    );
+
+  await insertPdf();
+  await assert.rejects(insertPdf(), /violates unique constraint|gate_pass_files_gate_pass_id_type_version_key/);
+});

@@ -31,12 +31,22 @@ export function isWithinGatePassScope(user, gatePass) {
 }
 
 // Which department a NEW Gate Pass is created under. For an actor without
-// site-wide scope (Team Lead), client input is ignored entirely and the
-// actor's own department is assigned server-side — the simplest and safest
-// way to guarantee they can never choose arbitrary department ownership.
+// site-wide scope (Team Lead), submitting any department other than their
+// own is an explicit, visible denial — not a silent server-side override.
+// Silently substituting was safe against ownership escalation but hid a
+// real correctness/UX problem: a Team Lead who genuinely believed they
+// were filing under a different department got no indication their intent
+// was discarded. The frontend already only ever offers a Team Lead their
+// own department (see useDepartments.js), so this should never actually
+// trigger from the real UI — it exists for a client that sends something
+// else anyway (a bug, a manual API call).
 export function resolveCreateDepartmentId(actor, requestedDepartmentId) {
   if (actor.permissions.has("gate_pass.view_site")) {
     return requestedDepartmentId;
+  }
+
+  if (requestedDepartmentId !== actor.departmentId) {
+    throw new ForbiddenError("You can only create a Gate Pass for your own department.");
   }
 
   return actor.departmentId;

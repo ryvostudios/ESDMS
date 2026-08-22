@@ -236,6 +236,23 @@ test("full gate workflow: approve -> guard verify -> exit -> return, with distan
   const detail = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${draft.id}`, { token: tokens.admin });
   assert.equal(detail.body.data.distanceKm, 250);
   assert.equal(detail.body.data.auditLog.length, 4); // CREATE, APPROVE, EXIT, RETURN
+
+  // Evidence review (Admin/Site Manager): metadata only, no storage path,
+  // downloadable through the authorized file endpoint.
+  assert.equal(detail.body.data.departureEvidence.odometer, 1000);
+  assert.equal(detail.body.data.departureEvidence.recordedByName, "Test Guard");
+  assert.ok(detail.body.data.departureEvidence.fileId);
+  assert.equal(detail.body.data.departureEvidence.storageKey, undefined);
+  assert.equal(detail.body.data.returnEvidence.odometer, 1250);
+  assert.ok(detail.body.data.returnEvidence.fileId);
+
+  const departurePhoto = await apiRequest(
+    server.baseUrl,
+    "GET",
+    `/api/v1/gate-passes/${draft.id}/files/${detail.body.data.departureEvidence.fileId}`,
+    { token: tokens.admin },
+  );
+  assert.equal(departurePhoto.status, 200);
 });
 
 test("exit is rejected before approval (still DRAFT/PENDING)", async () => {
@@ -352,6 +369,61 @@ test("guard can fetch a Gate Pass by id directly (refresh/deep-link, not just vi
   assert.equal(result.body.data.status, "APPROVED");
   // Same data-minimized shape as search/dashboard/verify.
   assert.equal(result.body.data.requestedBy, undefined);
+});
+
+test("guard direct-id fetch discloses only APPROVED and VEHICLE_OUTSIDE — every other state is invisible", async () => {
+  const draftOnly = await createDraft(tokens.admin);
+  const draftResult = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${draftOnly.id}`, {
+    token: tokens.guard,
+  });
+  assert.equal(draftResult.status, 404, "DRAFT must not be disclosed to Guard");
+
+  const pending = await createDraft(tokens.teamLead);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${pending.id}/submit`, { token: tokens.teamLead });
+  const pendingResult = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${pending.id}`, {
+    token: tokens.guard,
+  });
+  assert.equal(pendingResult.status, 404, "PENDING_APPROVAL must not be disclosed to Guard");
+
+  const rejected = await createDraft(tokens.teamLead);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${rejected.id}/submit`, { token: tokens.teamLead });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${rejected.id}/reject`, {
+    token: tokens.siteManager,
+    body: { reason: "Not approved." },
+  });
+  const rejectedResult = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${rejected.id}`, {
+    token: tokens.guard,
+  });
+  assert.equal(rejectedResult.status, 404, "REJECTED must not be disclosed to Guard");
+
+  const cancelled = await createDraft(tokens.admin);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${cancelled.id}/cancel`, {
+    token: tokens.admin,
+    body: { reason: "No longer needed." },
+  });
+  const cancelledResult = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${cancelled.id}`, {
+    token: tokens.guard,
+  });
+  assert.equal(cancelledResult.status, 404, "CANCELLED must not be disclosed to Guard");
+
+  const approved = await createDraft(tokens.admin);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${approved.id}/approve`, { token: tokens.admin });
+  const approvedResult = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${approved.id}`, {
+    token: tokens.guard,
+  });
+  assert.equal(approvedResult.status, 200, "APPROVED must be visible to Guard");
+
+  const outside = await createDraft(tokens.admin);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${outside.id}/approve`, { token: tokens.admin });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${outside.id}/exit`, {
+    token: tokens.guard,
+    body: buildPhotoForm({ odometer: 100 }),
+    isForm: true,
+  });
+  const outsideResult = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${outside.id}`, {
+    token: tokens.guard,
+  });
+  assert.equal(outsideResult.status, 200, "VEHICLE_OUTSIDE must be visible to Guard");
 });
 
 test("guard verify token travels in the POST body, not the URL — the old GET-with-token-in-path route is gone", async () => {
