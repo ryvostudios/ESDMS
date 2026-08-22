@@ -304,16 +304,19 @@ This sequence may change only through an explicit documented project decision.
 
 | Area | Status |
 |---|---|
-| Repository foundation | In progress |
-| Frontend | Not scaffolded |
-| Backend | Not scaffolded |
-| PostgreSQL integration | Not implemented |
-| Authentication | Not implemented |
-| Authorization | Not implemented |
-| Gate Pass | Specification / foundation |
-| Inventory | Planned |
-| Procurement | Planned |
-| Fleet | Planned |
-| Maintenance | Planned |
-| HSE | Planned |
-| Workforce / Attendance | Planned |
+| Repository foundation | Established |
+| Frontend | Implemented (React/Vite, PWA) |
+| Backend | Implemented (Node/Express, `/api/v1`) |
+| PostgreSQL integration | Implemented (node-pg-migrate) |
+| Authentication | Implemented — HttpOnly cookie session (browser) + Bearer (non-browser clients) |
+| Authorization | Implemented — RBAC, department/site scope |
+| Gate Pass | Implemented, security-hardened; not yet deployed |
+| Inventory | Not started (per §14 sequencing) |
+| Procurement | Not started |
+| Fleet | Not started |
+| Maintenance | Not started |
+| HSE | Not started |
+| Workforce / Attendance | Not started |
+
+See `docs/DECISIONS.md` for the specific decisions behind the Gate Pass
+implementation and its subsequent security fix pass.

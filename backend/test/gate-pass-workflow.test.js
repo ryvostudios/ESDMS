@@ -1,9 +1,14 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import pool from "../src/config/database.js";
 import { startTestServer, seedUsers } from "./setup.js";
-import { authHeader, apiRequest, buildCreatePayload, buildPhotoForm } from "./gate-pass-helpers.js";
+import { authHeader, apiRequest, buildCreatePayload, buildPhotoForm, buildFakePhotoForm } from "./gate-pass-helpers.js";
 import * as gatePassService from "../src/modules/gate-pass/gate-pass.service.js";
+import config from "../src/config/env.js";
+
+const storageDir = path.resolve(config.storageDir);
 
 let server;
 let users;
@@ -106,6 +111,24 @@ test("cannot approve twice (state machine rejects the second attempt)", async ()
   assert.equal(secondApprove.status, 409);
 });
 
+test("concurrent approve requests for the same Gate Pass: exactly one wins (real row lock, not a sequential fake)", async () => {
+  const draft = await createDraft(tokens.admin);
+
+  const [first, second] = await Promise.all([
+    apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/approve`, { token: tokens.admin }),
+    apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/approve`, { token: tokens.admin }),
+  ]);
+
+  const statuses = [first.status, second.status].sort();
+  assert.deepEqual(statuses, [200, 409], "one concurrent approve must succeed and the other must be rejected");
+
+  const finalCount = await pool.query(
+    "SELECT count(*)::int AS n FROM gate_pass_audit_log WHERE gate_pass_id = $1 AND action = 'APPROVE'",
+    [draft.id],
+  );
+  assert.equal(finalCount.rows[0].n, 1, "exactly one APPROVE audit row — the row lock must serialize the race");
+});
+
 test("SITE_MANAGER rejects a pending Gate Pass with a reason", async () => {
   const draft = await createDraft(tokens.teamLead);
   await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/submit`, { token: tokens.teamLead });
@@ -153,12 +176,17 @@ test("full gate workflow: approve -> guard verify -> exit -> return, with distan
 
   // Direct service call to capture the raw verification token — production
   // API responses never expose it; only the generated PDF/QR does.
-  const admin = { id: users.admin, permissions: new Set(["gate_pass.approve", "gate_pass.view_site"]) };
+  const admin = {
+    id: users.admin,
+    siteId: users.mainSite,
+    permissions: new Set(["gate_pass.approve", "gate_pass.view_site"]),
+  };
   const { verificationToken } = await gatePassService.approveGatePass(admin, draft.id);
   assert.ok(verificationToken);
 
-  const verify = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/verify/${verificationToken}`, {
+  const verify = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes/guard/verify", {
     token: tokens.guard,
+    body: { token: verificationToken },
   });
 
   assert.equal(verify.status, 200);
@@ -239,6 +267,39 @@ test("evidence photo is required for exit", async () => {
   assert.equal(exit.status, 400);
 });
 
+test("exit rejects a file whose bytes don't match its declared image type", async () => {
+  const draft = await createDraft(tokens.admin);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/approve`, { token: tokens.admin });
+
+  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/exit`, {
+    token: tokens.guard,
+    body: buildFakePhotoForm({ odometer: 100 }),
+    isForm: true,
+  });
+
+  assert.equal(exit.status, 400, JSON.stringify(exit.body));
+});
+
+test("a rejected exit attempt leaves no orphaned evidence file on disk", async () => {
+  // Still DRAFT/PENDING (never approved) — exit must be rejected for state,
+  // but only after the photo would otherwise have already been written.
+  const draft = await createDraft(tokens.admin);
+
+  const beforeDir = await fs.readdir(path.join(storageDir, "gate-pass", draft.id, "departure")).catch(() => []);
+  assert.equal(beforeDir.length, 0);
+
+  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/exit`, {
+    token: tokens.guard,
+    body: buildPhotoForm({ odometer: 100 }),
+    isForm: true,
+  });
+
+  assert.equal(exit.status, 409);
+
+  const afterDir = await fs.readdir(path.join(storageDir, "gate-pass", draft.id, "departure")).catch(() => []);
+  assert.equal(afterDir.length, 0, "exit rejected for state must not leave an orphaned file on disk");
+});
+
 test("malformed UUID in path is rejected, not 500", async () => {
   const result = await apiRequest(server.baseUrl, "GET", "/api/v1/gate-passes/not-a-uuid", { token: tokens.admin });
   assert.ok([400, 404].includes(result.status), `expected 400/404, got ${result.status}`);
@@ -276,4 +337,37 @@ test("guard search only returns state-appropriate, data-minimized results", asyn
   );
   assert.equal(afterApproval.body.data.length, 1);
   assert.equal(afterApproval.body.data[0].requestedBy, undefined);
+});
+
+test("guard can fetch a Gate Pass by id directly (refresh/deep-link, not just via nav state)", async () => {
+  const draft = await createDraft(tokens.admin);
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/approve`, { token: tokens.admin });
+
+  const result = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/guard/${draft.id}`, {
+    token: tokens.guard,
+  });
+
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.data.id, draft.id);
+  assert.equal(result.body.data.status, "APPROVED");
+  // Same data-minimized shape as search/dashboard/verify.
+  assert.equal(result.body.data.requestedBy, undefined);
+});
+
+test("guard verify token travels in the POST body, not the URL — the old GET-with-token-in-path route is gone", async () => {
+  const draft = await createDraft(tokens.admin);
+  const admin = {
+    id: users.admin,
+    siteId: users.mainSite,
+    permissions: new Set(["gate_pass.approve", "gate_pass.view_site"]),
+  };
+  const { verificationToken } = await gatePassService.approveGatePass(admin, draft.id);
+
+  const oldStyleGet = await apiRequest(
+    server.baseUrl,
+    "GET",
+    `/api/v1/gate-passes/guard/verify/${verificationToken}`,
+    { token: tokens.guard },
+  );
+  assert.notEqual(oldStyleGet.status, 200);
 });

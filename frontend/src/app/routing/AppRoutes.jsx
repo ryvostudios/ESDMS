@@ -77,7 +77,7 @@ export function AppRoutes() {
           }
         />
         <Route
-          path="/guard/verify/:token"
+          path="/guard/verify"
           element={
             <PermissionRoute permissions={GUARD_PERMISSIONS}>
               <GuardVerifyPage />

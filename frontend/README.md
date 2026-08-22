@@ -1,16 +1,37 @@
-# React + Vite
+# E-Set Digital Management System — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite Progressive Web App for the Gate Pass module. See the
+repository root `README.md` and `docs/` for the wider project.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+cp .env.example .env   # set VITE_API_URL to the backend's /api/v1 base
+npm install
+npm run dev
+```
 
-## React Compiler
+## Scripts
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `npm run dev` — dev server with HMR
+- `npm run build` — production build (also generates the PWA service worker)
+- `npm run preview` — serve the production build locally
+- `npm run lint` — ESLint
+- `npm test` — Vitest + Testing Library (`vitest.config.js`)
 
-## Expanding the ESLint configuration
+## Structure
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `src/app/` — routing, layout, app shell
+- `src/core/` — auth context, API client, environment config (cross-module)
+- `src/modules/<module>/` — one directory per business module (currently
+  `gate-pass`, `guard`, `auth`), each with its own `pages/`, `components/`,
+  `api.js`
+- `src/shared/` — design-system components, hooks, and utilities used
+  across modules
+
+## Auth
+
+The app authenticates via an HttpOnly session cookie the backend sets on
+login (`credentials: "include"` on every request) — this client never
+stores or attaches a token itself. See `docs/DECISIONS.md` in the repo
+root.

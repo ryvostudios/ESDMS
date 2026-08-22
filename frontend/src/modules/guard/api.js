@@ -9,7 +9,11 @@ export function searchGuard(query) {
 }
 
 export function verifyByToken(token) {
-  return apiClient.get(`/gate-passes/guard/verify/${encodeURIComponent(token)}`);
+  return apiClient.post("/gate-passes/guard/verify", { token });
+}
+
+export function getGuardGatePass(id) {
+  return apiClient.get(`/gate-passes/guard/${id}`);
 }
 
 function buildEvidenceForm({ odometer, photo, remarks }) {

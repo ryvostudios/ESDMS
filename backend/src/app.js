@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import cookieParser from "cookie-parser";
 import config from "./config/env.js";
 import healthRoutes from "./routes/health.routes.js";
 import authRoutes from "./modules/auth/auth.routes.js";
@@ -13,7 +14,14 @@ import { ForbiddenError } from "./shared/errors/app-error.js";
 
 const app = express();
 
+// Must be set before anything reads req.ip (rate limiters, logging) or
+// checks req.secure — an unset/blind trust-proxy config would let a client
+// spoof X-Forwarded-For and either defeat IP-based rate limiting or make
+// every request behind the real proxy look like it came from one IP.
+app.set("trust proxy", config.trustProxyHops);
+
 app.use(helmet());
+app.use(cookieParser());
 
 app.use(
   cors({

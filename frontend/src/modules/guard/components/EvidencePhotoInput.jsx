@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CameraIcon, CloseIcon } from "../../../shared/icons.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { ALLOWED_PHOTO_MIME_TYPES, MAX_EVIDENCE_PHOTO_BYTES } from "../constants.js";
@@ -7,6 +7,16 @@ import styles from "./EvidencePhotoInput.module.css";
 export function EvidencePhotoInput({ value, onChange, disabled }) {
   const inputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+
+  // Single place that owns previewUrl's lifetime: this runs its cleanup
+  // (revoking the *previous* URL) both when previewUrl changes to a new
+  // one — replacing a photo without explicitly removing it first — and on
+  // unmount, so a blob URL never outlives what it's a preview for.
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   function handleFileSelect(event) {
     const file = event.target.files?.[0];
@@ -27,7 +37,6 @@ export function EvidencePhotoInput({ value, onChange, disabled }) {
   }
 
   function handleRemove() {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     onChange(null, null);
     if (inputRef.current) inputRef.current.value = "";

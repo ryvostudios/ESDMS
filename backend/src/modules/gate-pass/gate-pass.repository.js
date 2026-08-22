@@ -1,7 +1,7 @@
 import pool from "../../config/database.js";
 
 const DETAIL_COLUMNS = `
-  gp.id, gp.gate_pass_number, gp.status, gp.issuing_department_id, d.name AS issuing_department_name,
+  gp.id, gp.gate_pass_number, gp.status, gp.site_id, gp.issuing_department_id, d.name AS issuing_department_name,
   gp.requested_by, gp.destination, gp.driver_name, gp.driver_phone, gp.vehicle_registration,
   gp.job_order_id, gp.purpose, gp.expected_return_date, gp.remarks,
   gp.created_by_user_id, cu.full_name AS created_by_name,
@@ -42,17 +42,17 @@ export async function nextGatePassNumber(client) {
   return `ESD-${year}-${String(result.rows[0].last_value).padStart(6, "0")}`;
 }
 
-export async function insertDraft(client, gatePassNumber, actorId, input) {
+export async function insertDraft(client, gatePassNumber, actorId, siteId, departmentId, input) {
   const result = await client.query(
     `INSERT INTO gate_passes
        (gate_pass_number, issuing_department_id, requested_by, destination,
         driver_name, driver_phone, vehicle_registration, job_order_id, purpose,
-        expected_return_date, remarks, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        expected_return_date, remarks, created_by_user_id, site_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING id`,
     [
       gatePassNumber,
-      input.issuingDepartmentId,
+      departmentId,
       input.requestedBy,
       input.destination,
       input.driverName,
@@ -63,6 +63,7 @@ export async function insertDraft(client, gatePassNumber, actorId, input) {
       input.expectedReturnDate || null,
       input.remarks || null,
       actorId,
+      siteId,
     ],
   );
 
@@ -115,7 +116,7 @@ export async function lockById(client, id) {
   const result = await client.query(
     `SELECT id, gate_pass_number, status, issuing_department_id, created_by_user_id,
             driver_name, driver_phone, vehicle_registration, destination, purpose,
-            departure_odometer
+            departure_odometer, site_id
      FROM gate_passes WHERE id = $1 FOR UPDATE`,
     [id],
   );
@@ -233,8 +234,8 @@ export async function findFileById(fileId) {
   return result.rows[0] || null;
 }
 
-export async function findLatestPdfFile(gatePassId) {
-  const result = await pool.query(
+export async function findLatestPdfFile(gatePassId, client = pool) {
+  const result = await client.query(
     `SELECT id, storage_key, mime_type, version
      FROM gate_pass_files
      WHERE gate_pass_id = $1 AND file_type = 'APPROVED_PDF'
@@ -255,19 +256,29 @@ export async function nextPdfVersion(gatePassId) {
   return result.rows[0].next_version;
 }
 
-export async function findByVerificationTokenHash(tokenHash) {
+export async function findByVerificationTokenHash(tokenHash, siteId) {
   const result = await pool.query(
-    `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.verification_token_hash = $1`,
-    [tokenHash],
+    `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.verification_token_hash = $1 AND gp.site_id = $2`,
+    [tokenHash, siteId],
   );
 
   return result.rows[0] || null;
 }
 
-export async function searchForGuard(query) {
+export async function findByIdForGuard(id, siteId) {
+  const result = await pool.query(`SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.id = $1 AND gp.site_id = $2`, [
+    id,
+    siteId,
+  ]);
+
+  return result.rows[0] || null;
+}
+
+export async function searchForGuard(query, siteId) {
   const result = await pool.query(
     `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM}
-     WHERE gp.status IN ('APPROVED', 'VEHICLE_OUTSIDE')
+     WHERE gp.site_id = $2
+       AND gp.status IN ('APPROVED', 'VEHICLE_OUTSIDE')
        AND (
          gp.gate_pass_number ILIKE $1 OR
          gp.vehicle_registration ILIKE $1 OR
@@ -275,26 +286,28 @@ export async function searchForGuard(query) {
        )
      ORDER BY gp.approved_at DESC
      LIMIT 20`,
-    [`%${query}%`],
+    [`%${query}%`, siteId],
   );
 
   return result.rows;
 }
 
-export async function guardDashboard(guardUserId) {
+export async function guardDashboard(guardUserId, siteId) {
   const [newlyApproved, vehiclesOutside, recentActivity] = await Promise.all([
     pool.query(
-      `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.status = 'APPROVED' ORDER BY gp.approved_at DESC LIMIT 20`,
+      `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.site_id = $1 AND gp.status = 'APPROVED' ORDER BY gp.approved_at DESC LIMIT 20`,
+      [siteId],
     ),
     pool.query(
-      `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.status = 'VEHICLE_OUTSIDE' ORDER BY gp.departure_at DESC LIMIT 20`,
+      `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM} WHERE gp.site_id = $1 AND gp.status = 'VEHICLE_OUTSIDE' ORDER BY gp.departure_at DESC LIMIT 20`,
+      [siteId],
     ),
     pool.query(
       `SELECT ${GUARD_COLUMNS} ${DETAIL_FROM}
-       WHERE gp.departure_by_user_id = $1 OR gp.return_by_user_id = $1
+       WHERE gp.site_id = $1 AND (gp.departure_by_user_id = $2 OR gp.return_by_user_id = $2)
        ORDER BY GREATEST(COALESCE(gp.return_at, gp.departure_at), gp.departure_at) DESC
        LIMIT 20`,
-      [guardUserId],
+      [siteId, guardUserId],
     ),
   ]);
 
@@ -308,6 +321,9 @@ export async function guardDashboard(guardUserId) {
 export async function listForScope(user, { status, search, page, pageSize }) {
   const conditions = [];
   const values = [];
+
+  values.push(user.siteId);
+  conditions.push(`gp.site_id = $${values.length}`);
 
   if (!user.permissions.has("gate_pass.view_site")) {
     values.push(user.departmentId);

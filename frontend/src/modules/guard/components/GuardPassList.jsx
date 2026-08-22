@@ -1,10 +1,8 @@
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { GatePassStatusBadge } from "../../gate-pass/components/GatePassStatusBadge.jsx";
 import styles from "./GuardPassList.module.css";
 
 export function GuardPassList({ rows, emptyMessage }) {
-  const navigate = useNavigate();
-
   if (rows.length === 0) {
     return <p className={styles.empty}>{emptyMessage}</p>;
   }
@@ -12,10 +10,11 @@ export function GuardPassList({ rows, emptyMessage }) {
   return (
     <div className={styles.list}>
       {rows.map((gatePass) => (
-        <div
+        <Link
           key={gatePass.id}
+          to={`/guard/gate-passes/${gatePass.id}`}
+          state={{ gatePass }}
           className={styles.row}
-          onClick={() => navigate(`/guard/gate-passes/${gatePass.id}`, { state: { gatePass } })}
         >
           <div className={styles.info}>
             <span className={styles.number}>{gatePass.gatePassNumber}</span>
@@ -24,7 +23,7 @@ export function GuardPassList({ rows, emptyMessage }) {
             </span>
           </div>
           <GatePassStatusBadge status={gatePass.status} />
-        </div>
+        </Link>
       ))}
     </div>
   );

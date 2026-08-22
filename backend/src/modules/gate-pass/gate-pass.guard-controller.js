@@ -3,7 +3,12 @@ import { ValidationError } from "../../shared/errors/app-error.js";
 import * as service from "./gate-pass.service.js";
 import { toGuardDto } from "./gate-pass.serializers.js";
 import { extractPhoto } from "./gate-pass.upload.js";
-import { exitActionSchema, returnActionSchema, guardSearchQuerySchema } from "./gate-pass.validation.js";
+import {
+  exitActionSchema,
+  returnActionSchema,
+  guardSearchQuerySchema,
+  guardVerifySchema,
+} from "./gate-pass.validation.js";
 
 function parseBody(schema, body) {
   const parsed = schema.safeParse(body);
@@ -30,13 +35,24 @@ export const dashboard = asyncHandler(async (req, res) => {
 
 export const search = asyncHandler(async (req, res) => {
   const { query } = parseBody(guardSearchQuerySchema, req.query);
-  const rows = await service.searchForGuard(query);
+  const rows = await service.searchForGuard(req.user, query);
 
   res.status(200).json({ success: true, data: rows.map(toGuardDto) });
 });
 
+export const getById = asyncHandler(async (req, res) => {
+  const gatePass = await service.getGuardGatePass(req.user, req.params.id);
+
+  res.status(200).json({ success: true, data: toGuardDto(gatePass) });
+});
+
 export const verify = asyncHandler(async (req, res) => {
-  const result = await service.getVerificationDetail(req.params.token);
+  // POST with the token in the body, not GET with it in the URL — a raw
+  // verification token in a URL path/query would be captured by ordinary
+  // server/proxy access logs and browser history. The comparison itself is
+  // already hashed server-side (see gate-pass.service.js hashToken).
+  const { token } = parseBody(guardVerifySchema, req.body);
+  const result = await service.getVerificationDetail(req.user, token);
 
   res.status(200).json({
     success: true,

@@ -50,6 +50,7 @@ local-storage/
 
 # Database dumps / backups
 *.sql
+!backend/scripts/*.sql
 *.dump
 *.backup
 backups/

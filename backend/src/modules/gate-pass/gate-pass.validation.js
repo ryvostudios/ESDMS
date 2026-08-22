@@ -54,4 +54,8 @@ export const guardSearchQuerySchema = z.object({
   query: z.string().trim().min(1).max(100),
 });
 
+export const guardVerifySchema = z.object({
+  token: z.string().trim().min(1).max(200),
+});
+
 export const uuidParam = uuid;

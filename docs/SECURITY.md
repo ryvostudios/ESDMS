@@ -1,8 +1,3 @@
-### 2. `docs/SECURITY.md`
-
-Now open `docs/SECURITY.md` and paste:
-
-```markdown
 # E-Set Digital Management System
 ## Security Requirements
 
@@ -146,3 +141,27 @@ Example threat:
 /api/v1/gate-passes/123
 must not become unauthorized access simply by changing it to:
 /api/v1/gate-passes/124
+```
+
+Enforced in this codebase by `isWithinGatePassScope` (site check, then role-scoped department check) called from every service function that loads a Gate Pass by id — see `src/modules/gate-pass/gate-pass.authorization.js`.
+
+---
+
+## 8. Database Transport Security and Privilege Boundary
+
+### 8.1 Transport (TLS)
+
+The application must never connect to its production database over an unencrypted or unverified connection.
+
+- In production (`NODE_ENV=production`), the runtime Postgres pool (`src/config/database.js`) requires TLS with certificate verification (`ssl: { rejectUnauthorized: true }`), not merely an encrypted-but-unverified connection.
+- Local development connects to a local Postgres instance with no TLS, since `NODE_ENV` is not `production` there.
+- The production Postgres instance itself must never be reachable on a public, unauthenticated port. When using Supabase, use its pooled/managed connection endpoint, not a raw exposed database port.
+
+### 8.2 Privilege Boundary (Runtime vs. Migration)
+
+The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
+
+- `MIGRATION_DATABASE_URL` — an owner-level role, used only to run `node-pg-migrate` (schema changes: `CREATE`/`ALTER`/`DROP TABLE`, etc.). Never used by the running API process.
+- `DATABASE_URL` — the runtime role the API process actually connects as. Grants are limited to `SELECT`, `INSERT`, `UPDATE`, `DELETE` on application tables and `USAGE`/`SELECT` on sequences. It must not have `SUPERUSER`, `CREATEDB`, or `CREATEROLE`, and must not be able to `CREATE`/`ALTER`/`DROP` any table.
+
+`scripts/provision-db-roles.sql` contains the exact `GRANT`/`REVOKE` statements to create and lock down the runtime role against a fresh schema. Run it once per environment, as the owner role, after migrations have created the schema. See `docs/DECISIONS.md` for the reasoning.

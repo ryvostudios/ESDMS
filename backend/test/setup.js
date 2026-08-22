@@ -18,6 +18,28 @@ export async function startTestServer() {
   };
 }
 
+async function upsertSite(code, name) {
+  const result = await pool.query(
+    `INSERT INTO sites (code, name) VALUES ($1, $2)
+     ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
+     RETURNING id`,
+    [code, name],
+  );
+
+  return result.rows[0].id;
+}
+
+async function upsertDepartment(name, siteId) {
+  const result = await pool.query(
+    `INSERT INTO departments (name, site_id) VALUES ($1, $2)
+     ON CONFLICT (site_id, name) DO UPDATE SET name = EXCLUDED.name
+     RETURNING id`,
+    [name, siteId],
+  );
+
+  return result.rows[0].id;
+}
+
 // Deterministic per-suite users. Test DB is dedicated (eset_test) — safe to
 // reset users between runs.
 export async function seedUsers() {
@@ -26,24 +48,36 @@ export async function seedUsers() {
   const roles = await pool.query("SELECT id, name FROM roles");
   const roleIdByName = Object.fromEntries(roles.rows.map((r) => [r.name, r.id]));
 
-  const departments = await pool.query("SELECT id FROM departments ORDER BY name LIMIT 2");
+  const mainSite = await upsertSite("MAIN", "E-Set — Main Site");
+  const otherSite = await upsertSite("TEST-SECONDARY", "Test Secondary Site");
+
+  const departments = await pool.query("SELECT id FROM departments WHERE site_id = $1 ORDER BY name LIMIT 2", [
+    mainSite,
+  ]);
   const [departmentA, departmentB] = departments.rows.map((row) => row.id);
+  const otherSiteDepartment = await upsertDepartment("Test Secondary Dept", otherSite);
 
   // Upsert instead of delete+insert: node's test runner may run multiple
   // test files concurrently, and a delete+insert race between files
   // sharing this fixture set trips the unique email constraint.
-  async function insertUser(email, fullName, roleName, { isActive = true, departmentId = null } = {}) {
+  async function insertUser(
+    email,
+    fullName,
+    roleName,
+    { isActive = true, departmentId = null, siteId = mainSite } = {},
+  ) {
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash, full_name, role_id, is_active, department_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO users (email, password_hash, full_name, role_id, is_active, department_id, site_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (email) DO UPDATE SET
          password_hash = EXCLUDED.password_hash,
          full_name = EXCLUDED.full_name,
          role_id = EXCLUDED.role_id,
          is_active = EXCLUDED.is_active,
-         department_id = EXCLUDED.department_id
+         department_id = EXCLUDED.department_id,
+         site_id = EXCLUDED.site_id
        RETURNING id`,
-      [email, passwordHash, fullName, roleIdByName[roleName], isActive, departmentId],
+      [email, passwordHash, fullName, roleIdByName[roleName], isActive, departmentId, siteId],
     );
 
     return result.rows[0].id;
@@ -56,8 +90,20 @@ export async function seedUsers() {
     teamLeadOtherDept: await insertUser("teamlead2@test.eset.local", "Test Team Lead 2", "TEAM_LEAD", { departmentId: departmentB }),
     guard: await insertUser("guard@test.eset.local", "Test Guard", "GATE_GUARD"),
     inactive: await insertUser("inactive@test.eset.local", "Test Inactive", "TEAM_LEAD", { isActive: false }),
+    otherSiteAdmin: await insertUser("admin-othersite@test.eset.local", "Test Other Site Admin", "ADMIN", {
+      siteId: otherSite,
+    }),
+    otherSiteTeamLead: await insertUser(
+      "teamlead-othersite@test.eset.local",
+      "Test Other Site Team Lead",
+      "TEAM_LEAD",
+      { siteId: otherSite, departmentId: otherSiteDepartment },
+    ),
     departmentA,
     departmentB,
+    mainSite,
+    otherSite,
+    otherSiteDepartment,
   };
 }
 

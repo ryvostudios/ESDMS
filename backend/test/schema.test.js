@@ -5,11 +5,12 @@ import { seedUsers } from "./setup.js";
 
 let users;
 let departmentId;
+let siteId;
 
 before(async () => {
   users = await seedUsers();
-  const dept = await pool.query("SELECT id FROM departments LIMIT 1");
-  departmentId = dept.rows[0].id;
+  departmentId = users.departmentA;
+  siteId = users.mainSite;
 });
 
 after(async () => {
@@ -36,10 +37,10 @@ async function insertDraftGatePass(client, overrides = {}) {
   const result = await client.query(
     `INSERT INTO gate_passes
        (gate_pass_number, issuing_department_id, requested_by, destination,
-        driver_name, driver_phone, vehicle_registration, purpose, created_by_user_id)
-     VALUES ($1, $2, 'Test Requester', 'Test Site', 'Test Driver', '+10000000000', 'ABC-123', 'SAMPLE', $3)
+        driver_name, driver_phone, vehicle_registration, purpose, created_by_user_id, site_id)
+     VALUES ($1, $2, 'Test Requester', 'Test Site', 'Test Driver', '+10000000000', 'ABC-123', 'SAMPLE', $3, $4)
      RETURNING id, status`,
-    [gatePassNumber, departmentId, users.teamLead],
+    [gatePassNumber, departmentId, users.teamLead, siteId],
   );
 
   return result.rows[0];
@@ -77,9 +78,9 @@ test("gate_passes rejects an invalid status via CHECK constraint", async () => {
     pool.query(
       `INSERT INTO gate_passes
          (gate_pass_number, status, issuing_department_id, requested_by, destination,
-          driver_name, driver_phone, vehicle_registration, purpose, created_by_user_id)
-       VALUES ($1, 'NOT_A_REAL_STATUS', $2, 'Test', 'Test', 'Test', '+1', 'ABC-1', 'SAMPLE', $3)`,
-      [gatePassNumber, departmentId, users.teamLead],
+          driver_name, driver_phone, vehicle_registration, purpose, created_by_user_id, site_id)
+       VALUES ($1, 'NOT_A_REAL_STATUS', $2, 'Test', 'Test', 'Test', '+1', 'ABC-1', 'SAMPLE', $3, $4)`,
+      [gatePassNumber, departmentId, users.teamLead, siteId],
     ),
     /violates check constraint/,
   );
@@ -149,6 +150,44 @@ test("gate_pass_items requires a positive quantity", async () => {
       `INSERT INTO gate_pass_items (gate_pass_id, line_no, description, quantity)
        VALUES ($1, 1, 'Test item', 0)`,
       [draft.id],
+    ),
+    /violates check constraint/,
+  );
+});
+
+test("gate_passes rejects APPROVED status without approval fields set", async () => {
+  const draft = await insertDraftGatePass(pool);
+
+  await assert.rejects(
+    pool.query(`UPDATE gate_passes SET status = 'APPROVED' WHERE id = $1`, [draft.id]),
+    /violates check constraint/,
+  );
+});
+
+test("gate_passes rejects REJECTED status without a rejection reason", async () => {
+  const draft = await insertDraftGatePass(pool);
+
+  await assert.rejects(
+    pool.query(
+      `UPDATE gate_passes
+         SET status = 'REJECTED', rejected_by_user_id = $2, rejected_at = now()
+       WHERE id = $1`,
+      [draft.id, users.siteManager],
+    ),
+    /violates check constraint/,
+  );
+});
+
+test("gate_passes rejects COMPLETED status without departure/return evidence fields set", async () => {
+  const draft = await insertDraftGatePass(pool);
+
+  await assert.rejects(
+    pool.query(
+      `UPDATE gate_passes
+         SET status = 'COMPLETED', approved_by_user_id = $2, approved_at = now(),
+             verification_token_hash = 'deadbeef'
+       WHERE id = $1`,
+      [draft.id, users.admin],
     ),
     /violates check constraint/,
   );

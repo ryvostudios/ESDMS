@@ -371,8 +371,17 @@ Inventory must not begin before Gate Pass MVP stabilization and review.
 
 Current stage:
 
-**Foundation**
+**Gate Pass MVP built and security-hardened; not yet deployed**
 
-The repository and development standards are being established.
+The Gate Pass module (schema, backend workflow/PDF/QR/outbox, frontend UI,
+guard workflow, PWA) is implemented end-to-end, followed by an independent
+security/architecture review and a fix pass addressing its findings — see
+`docs/DECISIONS.md` for what changed and why, and `docs/MODULES.md` for
+per-module status.
 
-No application business functionality is considered implemented yet.
+No production deployment exists yet; deployment is explicitly gated on
+independent re-review of the fix pass.
+
+Inventory and all other modules listed in `docs/MODULES.md` remain
+unstarted, per the "Inventory must not begin before Gate Pass MVP
+stabilization" rule above.

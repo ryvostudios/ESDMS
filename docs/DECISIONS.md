@@ -339,3 +339,122 @@ blocked entirely.
 Accepted as placeholder — replace via a real migration once management
 supplies the actual department list. Renaming/adding departments is a data
 change, not a schema change.
+
+---
+
+## 2026-08-22 — First-Class Site Model Added
+
+### Decision
+
+Added a `sites` table and `site_id` on `users`, `departments`, and
+`gate_passes` (nullable-then-backfilled-then-`NOT NULL`, via migration).
+`isWithinGatePassScope` now checks site first, absolutely — no role grants
+cross-site access. Department name uniqueness became `(site_id, name)`
+instead of a global unique name.
+
+### Reason
+
+An independent security review found the schema and authorization layer had
+no multi-site concept at all, while the org is genuinely multi-site — every
+department/Gate Pass query was implicitly single-tenant. Retrofitting now,
+before Inventory or other modules build on the same gap, is cheaper than
+migrating live data later.
+
+### Status
+
+Accepted. All Gate Pass reads/writes, department master data, guard search,
+QR verification, and file access are site-scoped.
+
+---
+
+## 2026-08-22 — Switched Browser Auth From Bearer/sessionStorage to HttpOnly Cookie
+
+### Decision
+
+Supersedes the 2026-08-22 "JWT Bearer Auth Kept" entry above (left
+unmodified per this document's own rule). The frontend no longer stores a
+token in `sessionStorage` or attaches `Authorization: Bearer` itself; the
+backend sets an `HttpOnly`, `SameSite=Lax`, `Secure`-in-production session
+cookie on login (`src/shared/http/session-cookie.js`), and all frontend
+`fetch` calls use `credentials: "include"`. `Authorization: Bearer` support
+is kept server-side for non-browser clients (scripts, this project's own
+test suite).
+
+### Reason
+
+An independent security review flagged `sessionStorage` as readable by any
+injected script for the life of the token — a real XSS in any dependency
+would be a full session-token exfiltration, which an `HttpOnly` cookie
+structurally prevents. `SameSite=Lax` on a JSON-only API (no HTML
+form/simple cross-site request can trigger a state-changing call with the
+cookie attached) covers CSRF without needing a separate token.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Approval PDF Generation Moved to a Durable Outbox Job
+
+### Decision
+
+`POST /gate-passes/:id/approve` no longer generates the PDF and enqueues
+the WhatsApp delivery inline, after the approval transaction commits. It
+enqueues a `SYSTEM` / `GENERATE_APPROVAL_PDF` outbox job in the *same*
+transaction as the approval itself. A background worker (extending the
+existing outbox poller) claims and processes that job — idempotently: it
+re-derives "already done?" from whether an `APPROVED_PDF` file row already
+exists, rather than trusting its own prior attempts, so a retry after a
+partial failure is always safe. The outbox itself gained atomic claiming
+(`FOR UPDATE SKIP LOCKED`, a `PROCESSING` status with a `locked_at` lease so
+a crashed worker's claim eventually times out and becomes reclaimable) and
+an `idempotency_key` column (`ON CONFLICT DO NOTHING`) so a job's own
+retry can't double-enqueue its follow-up job.
+
+### Reason
+
+An independent security review found that if PDF generation or its storage
+write failed after the approval status change had already committed, the
+HTTP response to the approver was a misleading `500` (the approval had, in
+fact, already succeeded) — encouraging a confusing retry against an
+already-approved record. Making the job itself as durable as the approval
+(same transaction) means approving a Gate Pass can no longer fail because
+of downstream PDF/WhatsApp trouble, and a crashed process before the worker
+runs never silently drops the PDF.
+
+### Status
+
+Accepted.
+
+---
+
+## 2026-08-22 — Database Privilege Boundary and Verified TLS for Production
+
+### Decision
+
+Two separate Postgres credentials: `MIGRATION_DATABASE_URL` (schema-owner
+role, used only by `node-pg-migrate`) and `DATABASE_URL` (the runtime role
+the API process actually connects as, granted only `SELECT`/`INSERT`/
+`UPDATE`/`DELETE` on application tables — no `SUPERUSER`/`CREATEDB`/
+`CREATEROLE`, no DDL). `scripts/provision-db-roles.sql` contains the exact
+grants to set this up once per environment. In production
+(`NODE_ENV=production`), the runtime Postgres pool requires TLS with
+certificate verification (`ssl: { rejectUnauthorized: true }`), not just an
+encrypted-but-unverified connection.
+
+### Reason
+
+An independent security review flagged that the application had no
+privilege boundary — a compromised app process (e.g. via a future SQL
+injection bug) would otherwise be able to alter schema or create roles, not
+just read/write data — and no verified transport encryption was configured
+for a production Postgres connection (e.g. Supabase).
+
+### Status
+
+Accepted. `scripts/provision-db-roles.sql` must be run against the target
+Postgres instance, as the owner role, before pointing production
+`DATABASE_URL` at the restricted runtime role — not yet run against any
+real deployment, since deployment itself is out of scope until independent
+re-review of this fix pass is complete.

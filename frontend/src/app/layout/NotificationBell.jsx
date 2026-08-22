@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { listNotifications } from "../../core/api/notifications.js";
+import { useAuth } from "../../core/auth/AuthContext.jsx";
 import { BellIcon } from "../../shared/icons.jsx";
 import styles from "./NotificationBell.module.css";
 
-const LAST_VIEWED_KEY = "esdms.notifications.lastViewedAt";
 const POLL_INTERVAL_MS = 30_000;
+
+// Per-user, not a single shared key — this app runs on shared devices (a
+// gate kiosk/tablet across shifts), and a global key would leak one user's
+// "seen" state to whoever logs in next.
+function lastViewedKey(userId) {
+  return `esdms.notifications.lastViewedAt.${userId}`;
+}
 
 function describe(notification) {
   if (notification.eventType === "GATE_PASS_APPROVED") {
@@ -19,6 +26,7 @@ function describe(notification) {
 }
 
 export function NotificationBell() {
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [hasUnseen, setHasUnseen] = useState(false);
@@ -34,7 +42,7 @@ export function NotificationBell() {
 
           setNotifications(response.data);
 
-          const lastViewedAt = localStorage.getItem(LAST_VIEWED_KEY);
+          const lastViewedAt = localStorage.getItem(lastViewedKey(user.id));
           const newest = response.data[0]?.createdAt;
           setHasUnseen(Boolean(newest) && (!lastViewedAt || new Date(newest) > new Date(lastViewedAt)));
         })
@@ -49,7 +57,7 @@ export function NotificationBell() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [user.id]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -70,7 +78,7 @@ export function NotificationBell() {
     if (!open) {
       setHasUnseen(false);
       if (notifications[0]) {
-        localStorage.setItem(LAST_VIEWED_KEY, notifications[0].createdAt);
+        localStorage.setItem(lastViewedKey(user.id), notifications[0].createdAt);
       }
     }
   }

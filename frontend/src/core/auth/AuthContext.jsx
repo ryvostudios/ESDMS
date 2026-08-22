@@ -3,69 +3,46 @@ import { apiClient, configureApiClient } from "../api/client.js";
 
 const AuthContext = createContext(null);
 
-// sessionStorage (not localStorage) so a reload survives within the same
-// tab but the token never persists once the tab/browser closes — see
-// docs/DECISIONS.md ("JWT Bearer Auth Kept; Storage Strategy Hardened").
-const SESSION_KEY = "esdms.session.token";
-
+// Auth lives entirely in the HttpOnly Secure session cookie the backend
+// sets on login — this client never stores or attaches a token itself
+// (fetch calls carry it via credentials: "include"). On mount, the only
+// way to know whether a session exists is to ask the server.
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
-  // 'loading' only while a stored token still needs server verification;
-  // computed lazily so there is no stored token, we start unauthenticated
-  // immediately instead of setting state from inside an effect.
-  const [status, setStatus] = useState(() =>
-    sessionStorage.getItem(SESSION_KEY) ? "loading" : "unauthenticated",
-  );
-
-  const applySession = useCallback((nextToken, nextUser) => {
-    sessionStorage.setItem(SESSION_KEY, nextToken);
-    setToken(nextToken);
-    setUser(nextUser);
-    setStatus("authenticated");
-  }, []);
+  const [status, setStatus] = useState("loading");
 
   const clearSession = useCallback(() => {
-    sessionStorage.removeItem(SESSION_KEY);
-    setToken(null);
     setUser(null);
     setStatus("unauthenticated");
   }, []);
 
   useEffect(() => {
-    configureApiClient({ getToken: () => token, onUnauthorized: clearSession });
-  }, [token, clearSession]);
+    configureApiClient({ onUnauthorized: clearSession });
+  }, [clearSession]);
 
   useEffect(() => {
-    const stored = sessionStorage.getItem(SESSION_KEY);
-
-    if (!stored) {
-      return;
-    }
-
-    // Never trust a stored token blindly — verify it against the server
-    // before treating the session as active.
     apiClient
-      .get("/auth/me", { token: stored, suppressUnauthorizedHandling: true })
-      .then((response) => applySession(stored, response.data.user))
+      .get("/auth/me", { suppressUnauthorizedHandling: true })
+      .then((response) => {
+        setUser(response.data.user);
+        setStatus("authenticated");
+      })
       .catch(() => clearSession());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const login = useCallback(
-    async (email, password) => {
-      const response = await apiClient.post(
-        "/auth/login",
-        { email, password },
-        { suppressUnauthorizedHandling: true },
-      );
-      applySession(response.data.token, response.data.user);
-    },
-    [applySession],
-  );
+  const login = useCallback(async (email, password) => {
+    const response = await apiClient.post(
+      "/auth/login",
+      { email, password },
+      { suppressUnauthorizedHandling: true },
+    );
+    setUser(response.data.user);
+    setStatus("authenticated");
+  }, []);
 
   const logout = useCallback(() => {
-    clearSession();
+    apiClient.post("/auth/logout", undefined, { suppressUnauthorizedHandling: true }).finally(clearSession);
   }, [clearSession]);
 
   const hasPermission = useCallback(
@@ -74,8 +51,8 @@ export function AuthProvider({ children }) {
   );
 
   const value = useMemo(
-    () => ({ token, user, status, login, logout, hasPermission }),
-    [token, user, status, login, logout, hasPermission],
+    () => ({ user, status, login, logout, hasPermission }),
+    [user, status, login, logout, hasPermission],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,8 +1,9 @@
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useLocation, useParams } from "react-router-dom";
+import { getGuardGatePass } from "../api.js";
 import { GuardActionView } from "../components/GuardActionView.jsx";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
-import { EmptyState } from "../../../shared/components/StatePanel.jsx";
-import { Button } from "../../../shared/components/Button.jsx";
+import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
 
 // Client-side classification only for display purposes — the exit/return
 // endpoints independently re-check current state server-side, so a stale
@@ -16,29 +17,51 @@ function classify(status) {
 export function GuardActionPage() {
   const { id } = useParams();
   const location = useLocation();
-  const navigate = useNavigate();
 
-  const gatePass = location.state?.gatePass;
+  // Navigating here from the dashboard/search already has the row in hand
+  // — reuse it instead of an extra round trip. A refresh or direct link
+  // loses this state entirely, which the effect below covers.
+  const navigationGatePass = location.state?.gatePass?.id === id ? location.state.gatePass : null;
 
-  if (!gatePass || gatePass.id !== id) {
-    return (
-      <div>
-        <PageHeader title="Gate Pass" />
-        <EmptyState
-          title="Open this from the Gate dashboard"
-          message="This page needs to be reached from a dashboard or search result — reloading directly isn't supported yet."
-          action={<Button onClick={() => navigate("/guard")}>Back to Gate</Button>}
-        />
-      </div>
-    );
-  }
+  const [gatePass, setGatePass] = useState(navigationGatePass);
+  const [status, setStatus] = useState(navigationGatePass ? "ready" : "loading");
+  const [error, setError] = useState(null);
 
-  const { allowedAction, reason } = classify(gatePass.status);
+  useEffect(() => {
+    if (navigationGatePass) {
+      return;
+    }
+
+    let cancelled = false;
+
+    getGuardGatePass(id)
+      .then((response) => {
+        if (!cancelled) {
+          setGatePass(response.data);
+          setStatus("ready");
+        }
+      })
+      .catch((requestError) => {
+        if (!cancelled) {
+          setError(requestError.message || "Unable to load this Gate Pass.");
+          setStatus("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const { allowedAction, reason } = gatePass ? classify(gatePass.status) : {};
 
   return (
     <div>
       <PageHeader title="Gate Pass" />
-      <GuardActionView gatePass={gatePass} allowedAction={allowedAction} reason={reason} />
+      {status === "loading" && <LoadingState message="Loading…" />}
+      {status === "error" && <ErrorState message={error} />}
+      {status === "ready" && <GuardActionView gatePass={gatePass} allowedAction={allowedAction} reason={reason} />}
     </div>
   );
 }

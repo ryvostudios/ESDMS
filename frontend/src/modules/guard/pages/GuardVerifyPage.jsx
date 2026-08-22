@@ -1,17 +1,24 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { verifyByToken } from "../api.js";
 import { GuardActionView } from "../components/GuardActionView.jsx";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
 
 export function GuardVerifyPage() {
-  const { token } = useParams();
+  // The token travels as a URL fragment (#token), not a path segment or
+  // query string — the browser never sends a fragment to the server, so it
+  // never appears in access/proxy logs when this page's link is opened.
+  // Read once on mount; it never changes without a full page navigation.
+  const [token] = useState(() => window.location.hash.slice(1));
   const [result, setResult] = useState(null);
-  const [status, setStatus] = useState("loading");
-  const [error, setError] = useState(null);
+  const [status, setStatus] = useState(token ? "loading" : "error");
+  const [error, setError] = useState(token ? null : "This link is missing its verification code.");
 
   useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
     let cancelled = false;
 
     verifyByToken(token)

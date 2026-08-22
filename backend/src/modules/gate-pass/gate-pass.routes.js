@@ -24,10 +24,15 @@ router.get(
   requirePermission("gate_pass.verify", "gate_pass.exit", "gate_pass.return"),
   guardController.search,
 );
-router.get(
-  "/guard/verify/:token",
+router.post(
+  "/guard/verify",
   requirePermission("gate_pass.verify", "gate_pass.exit", "gate_pass.return"),
   guardController.verify,
+);
+router.get(
+  "/guard/:id",
+  requirePermission("gate_pass.verify", "gate_pass.exit", "gate_pass.return"),
+  guardController.getById,
 );
 
 router.post("/", requirePermission("gate_pass.create"), controller.create);

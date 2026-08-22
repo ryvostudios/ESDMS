@@ -46,6 +46,19 @@ export class LocalStorageProvider {
   async read(storageKey) {
     return fs.readFile(assertSafeKey(storageKey));
   }
+
+  // Compensating cleanup for a file whose owning DB write failed after the
+  // bytes already landed on disk — never throws, so it can never mask the
+  // original error the caller is already unwinding from.
+  async remove(storageKey) {
+    try {
+      await fs.unlink(assertSafeKey(storageKey));
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.error(`Failed to clean up orphaned file ${storageKey}:`, error);
+      }
+    }
+  }
 }
 
 export const storageService = new LocalStorageProvider();

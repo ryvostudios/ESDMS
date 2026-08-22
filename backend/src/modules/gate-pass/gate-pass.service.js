@@ -2,8 +2,14 @@ import crypto from "node:crypto";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { storageService } from "../../shared/storage/storage-service.js";
 import { enqueue } from "../../shared/notifications/outbox.repository.js";
+import { registerSystemJobHandler } from "../../shared/notifications/outbox.processor.js";
 import { NotFoundError, ForbiddenError, ConflictError, ValidationError } from "../../shared/errors/app-error.js";
-import { isWithinGatePassScope } from "./gate-pass.authorization.js";
+import {
+  isWithinGatePassScope,
+  resolveCreateDepartmentId,
+  assertDepartmentChangeAllowed,
+  assertDepartmentUsable,
+} from "./gate-pass.authorization.js";
 import { TRANSITIONS, GATE_PASS_STATUS } from "./gate-pass.constants.js";
 import { generateGatePassPdf } from "./gate-pass.pdf.js";
 import * as repo from "./gate-pass.repository.js";
@@ -38,9 +44,15 @@ export async function listGatePasses(actor, filters) {
 }
 
 export async function createGatePass(actor, input) {
+  // Resolved and validated *before* any row is written — a rejected
+  // department never gets as far as an insert, so there is no ghost
+  // cross-department row to clean up afterward.
+  const departmentId = resolveCreateDepartmentId(actor, input.issuingDepartmentId);
+  await assertDepartmentUsable(actor, departmentId);
+
   return withTransaction(async (client) => {
     const gatePassNumber = await repo.nextGatePassNumber(client);
-    const id = await repo.insertDraft(client, gatePassNumber, actor.id, input);
+    const id = await repo.insertDraft(client, gatePassNumber, actor.id, actor.siteId, departmentId, input);
     await repo.insertItems(client, id, input.items);
     await repo.insertAuditLog(client, {
       gatePassId: id,
@@ -67,6 +79,14 @@ export async function updateDraft(actor, id, input) {
 
     if (gatePass.status !== GATE_PASS_STATUS.DRAFT) {
       throw new ConflictError("Only a Gate Pass in DRAFT can be edited.");
+    }
+
+    if (input.issuingDepartmentId !== undefined) {
+      // An explicit, visible denial — not a silent override — since the
+      // actor is knowingly trying to change a field on a record that
+      // already exists.
+      assertDepartmentChangeAllowed(actor, input.issuingDepartmentId);
+      await assertDepartmentUsable(actor, input.issuingDepartmentId);
     }
 
     await repo.updateDraftFields(client, id, input);
@@ -159,12 +179,30 @@ async function runTransition(actor, id, transitionName, extra = {}) {
             approvedAt: new Date().toISOString(),
           },
         },
+        // PDF generation + WhatsApp delivery are real work (render, disk
+        // I/O, an external API) that must never gate this transition or
+        // its HTTP response on their success — enqueued here, in the same
+        // transaction as the approval itself, so the job is exactly as
+        // durable as the approval: if this commits, the job WILL
+        // eventually run, even across a crash/restart before it does.
+        // Approving never again fails or half-succeeds because a PDF
+        // render or storage write downstream had a problem.
+        {
+          channel: "SYSTEM",
+          eventType: "GENERATE_APPROVAL_PDF",
+          entityType: "GATE_PASS",
+          entityId: id,
+          idempotencyKey: `generate-approval-pdf:${id}`,
+          payload: {
+            rawToken: approvalToken,
+            approvedByUserId: actor.id,
+          },
+        },
       ]);
     }
   });
 
   if (transitionName === "approve") {
-    await finalizeApproval(actor, id, approvalToken);
     // Returned to the calling service function (not the HTTP layer — the
     // controller never forwards this) so tests can exercise the real
     // guard-verification flow without needing a QR decoder. Production
@@ -175,41 +213,69 @@ async function runTransition(actor, id, transitionName, extra = {}) {
   return {};
 }
 
-// PDF generation + WhatsApp outbox row happen after commit so external
-// work (or a slow PDF render) never holds the row lock or blocks the
-// approval transaction itself.
-async function finalizeApproval(actor, id, rawToken) {
-  const [gatePass, items] = await Promise.all([repo.findById(id), repo.findItemsByGatePassId(id)]);
-  const verificationUrl = `${config.appPublicUrl}/guard/verify/${rawToken}`;
-
-  const pdfBuffer = await generateGatePassPdf(gatePass, items, verificationUrl);
-  const version = await repo.nextPdfVersion(id);
-
-  const { storageKey, checksumSha256, sizeBytes } = await storageService.save(pdfBuffer, {
-    gatePassId: id,
-    category: "pdf",
-    extension: "pdf",
-  });
+// Outbox job handler for GENERATE_APPROVAL_PDF (see runTransition above).
+// Runs on a retryable worker, possibly more than once for the same job —
+// idempotent by re-deriving its own "already done?" check from durable
+// state (an existing APPROVED_PDF file row) rather than trusting anything
+// about its own prior attempts.
+async function processApprovalPdfJob(item) {
+  const gatePassId = item.entity_id;
 
   await withTransaction(async (client) => {
-    await repo.insertFile(client, {
-      gatePassId: id,
-      fileType: "APPROVED_PDF",
-      storageKey,
-      mimeType: "application/pdf",
-      sizeBytes,
-      checksumSha256,
-      version,
-      createdByUserId: actor.id,
-    });
+    const gatePass = await repo.findById(gatePassId);
 
+    if (!gatePass) {
+      // Should be unreachable — gate_passes forbids DELETE — but never
+      // silently retry forever against a target that can't exist.
+      return;
+    }
+
+    // Re-derive "already done?" from durable state instead of trusting
+    // anything about this job's own prior attempts — safe to run twice.
+    const existing = await repo.findLatestPdfFile(gatePassId, client);
+    let storageKey = existing?.storage_key;
+
+    if (!storageKey) {
+      const items = await repo.findItemsByGatePassId(gatePassId);
+      // A URL fragment, not a path segment: the browser never sends it to
+      // any server, so it never lands in access/proxy logs when the QR
+      // code is scanned and opened. The frontend reads it client-side and
+      // POSTs it to the backend once, in the request body.
+      const verificationUrl = `${config.appPublicUrl}/guard/verify#${item.payload.rawToken}`;
+      const pdfBuffer = await generateGatePassPdf(gatePass, items, verificationUrl);
+      const version = await repo.nextPdfVersion(gatePassId);
+      const saved = await storageService.save(pdfBuffer, { gatePassId, category: "pdf", extension: "pdf" });
+      storageKey = saved.storageKey;
+
+      try {
+        await repo.insertFile(client, {
+          gatePassId,
+          fileType: "APPROVED_PDF",
+          storageKey: saved.storageKey,
+          mimeType: "application/pdf",
+          sizeBytes: saved.sizeBytes,
+          checksumSha256: saved.checksumSha256,
+          version,
+          createdByUserId: item.payload.approvedByUserId,
+        });
+      } catch (error) {
+        await storageService.remove(saved.storageKey);
+        throw error;
+      }
+    }
+
+    // Idempotent via idempotency_key regardless of which branch above ran
+    // — a retry after the PDF row already exists just re-issues this as a
+    // guaranteed-safe no-op rather than needing its own "already sent?"
+    // check.
     await enqueue(client, [
       {
         channel: "WHATSAPP",
         eventType: "GATE_PASS_APPROVED",
         entityType: "GATE_PASS",
-        entityId: id,
+        entityId: gatePassId,
         recipientPhone: gatePass.driver_phone,
+        idempotencyKey: `whatsapp-approval:${gatePassId}`,
         payload: {
           storageKey,
           filename: `${gatePass.gate_pass_number}.pdf`,
@@ -220,13 +286,15 @@ async function finalizeApproval(actor, id, rawToken) {
   });
 }
 
+registerSystemJobHandler("GENERATE_APPROVAL_PDF", processApprovalPdfJob);
+
 export const submitGatePass = (actor, id) => runTransition(actor, id, "submit");
 export const approveGatePass = (actor, id) => runTransition(actor, id, "approve");
 export const rejectGatePass = (actor, id, reason) => runTransition(actor, id, "reject", { reason });
 export const cancelGatePass = (actor, id, reason) => runTransition(actor, id, "cancel", { reason });
 
-export async function getVerificationDetail(rawToken) {
-  const gatePass = await repo.findByVerificationTokenHash(hashToken(rawToken));
+export async function getVerificationDetail(actor, rawToken) {
+  const gatePass = await repo.findByVerificationTokenHash(hashToken(rawToken), actor.siteId);
 
   if (!gatePass) {
     throw new NotFoundError("Gate Pass not found for this verification code.");
@@ -246,12 +314,25 @@ export async function getVerificationDetail(rawToken) {
   return { gatePass, allowedAction, reason };
 }
 
-export async function searchForGuard(query) {
-  return repo.searchForGuard(query);
+export async function searchForGuard(actor, query) {
+  return repo.searchForGuard(query, actor.siteId);
+}
+
+// Backs a direct refresh/deep-link of the guard exit/return action page —
+// the frontend previously relied entirely on React Router navigation state,
+// which is gone on reload. Same data-minimized shape as search/dashboard.
+export async function getGuardGatePass(actor, id) {
+  const gatePass = await repo.findByIdForGuard(id, actor.siteId);
+
+  if (!gatePass) {
+    throw new NotFoundError("Gate Pass not found.");
+  }
+
+  return gatePass;
 }
 
 export async function getGuardDashboard(actor) {
-  return repo.guardDashboard(actor.id);
+  return repo.guardDashboard(actor.id, actor.siteId);
 }
 
 export async function recordExit(actor, id, { odometer, photo }) {
@@ -263,47 +344,62 @@ export async function recordExit(actor, id, { odometer, photo }) {
     throw new ValidationError("A departure photo is required.");
   }
 
-  const { storageKey, checksumSha256, sizeBytes } = await storageService.save(photo.buffer, {
-    gatePassId: id,
-    category: "departure",
-    extension: photo.extension,
-  });
+  // Every state-dependent check runs, under the row lock, before a single
+  // byte is written to disk — a rejected transition never creates a file
+  // nothing will ever reference. If the write to disk succeeds but the
+  // transaction that was going to reference it doesn't, the compensating
+  // remove() below cleans it up rather than leaking it.
+  let storageKey;
 
-  await withTransaction(async (client) => {
-    const gatePass = await repo.lockById(client, id);
+  try {
+    await withTransaction(async (client) => {
+      const gatePass = await repo.lockById(client, id);
 
-    if (!gatePass) {
-      throw new NotFoundError("Gate Pass not found.");
-    }
+      if (!gatePass || gatePass.site_id !== actor.siteId) {
+        throw new NotFoundError("Gate Pass not found.");
+      }
 
-    if (gatePass.status !== GATE_PASS_STATUS.APPROVED) {
-      throw new ConflictError(
-        `Cannot record exit for a Gate Pass currently in ${gatePass.status} state.`,
-      );
-    }
+      if (gatePass.status !== GATE_PASS_STATUS.APPROVED) {
+        throw new ConflictError(
+          `Cannot record exit for a Gate Pass currently in ${gatePass.status} state.`,
+        );
+      }
 
-    const photoFileId = await repo.insertFile(client, {
-      gatePassId: id,
-      fileType: "DEPARTURE_PHOTO",
-      storageKey,
-      mimeType: photo.mimeType,
-      sizeBytes,
-      checksumSha256,
-      version: 1,
-      createdByUserId: actor.id,
+      const saved = await storageService.save(photo.buffer, {
+        gatePassId: id,
+        category: "departure",
+        extension: photo.extension,
+      });
+      storageKey = saved.storageKey;
+
+      const photoFileId = await repo.insertFile(client, {
+        gatePassId: id,
+        fileType: "DEPARTURE_PHOTO",
+        storageKey: saved.storageKey,
+        mimeType: photo.mimeType,
+        sizeBytes: saved.sizeBytes,
+        checksumSha256: saved.checksumSha256,
+        version: 1,
+        createdByUserId: actor.id,
+      });
+
+      await repo.markExited(client, id, { odometer, byUserId: actor.id, photoFileId });
+
+      await repo.insertAuditLog(client, {
+        gatePassId: id,
+        actorUserId: actor.id,
+        action: "EXIT",
+        previousStatus: GATE_PASS_STATUS.APPROVED,
+        newStatus: GATE_PASS_STATUS.VEHICLE_OUTSIDE,
+        metadata: { odometer },
+      });
     });
-
-    await repo.markExited(client, id, { odometer, byUserId: actor.id, photoFileId });
-
-    await repo.insertAuditLog(client, {
-      gatePassId: id,
-      actorUserId: actor.id,
-      action: "EXIT",
-      previousStatus: GATE_PASS_STATUS.APPROVED,
-      newStatus: GATE_PASS_STATUS.VEHICLE_OUTSIDE,
-      metadata: { odometer },
-    });
-  });
+  } catch (error) {
+    if (storageKey) {
+      await storageService.remove(storageKey);
+    }
+    throw error;
+  }
 }
 
 export async function recordReturn(actor, id, { odometer, photo, remarks }) {
@@ -315,51 +411,64 @@ export async function recordReturn(actor, id, { odometer, photo, remarks }) {
     throw new ValidationError("A return photo is required.");
   }
 
-  const { storageKey, checksumSha256, sizeBytes } = await storageService.save(photo.buffer, {
-    gatePassId: id,
-    category: "return",
-    extension: photo.extension,
-  });
+  // Same ordering as recordExit: validate under the row lock first, write
+  // to disk only once the transition is known-good, and compensate with a
+  // remove() if the transaction fails after the write anyway.
+  let storageKey;
 
-  await withTransaction(async (client) => {
-    const gatePass = await repo.lockById(client, id);
+  try {
+    await withTransaction(async (client) => {
+      const gatePass = await repo.lockById(client, id);
 
-    if (!gatePass) {
-      throw new NotFoundError("Gate Pass not found.");
-    }
+      if (!gatePass || gatePass.site_id !== actor.siteId) {
+        throw new NotFoundError("Gate Pass not found.");
+      }
 
-    if (gatePass.status !== GATE_PASS_STATUS.VEHICLE_OUTSIDE) {
-      throw new ConflictError(
-        `Cannot record return for a Gate Pass currently in ${gatePass.status} state.`,
-      );
-    }
+      if (gatePass.status !== GATE_PASS_STATUS.VEHICLE_OUTSIDE) {
+        throw new ConflictError(
+          `Cannot record return for a Gate Pass currently in ${gatePass.status} state.`,
+        );
+      }
 
-    if (gatePass.departure_odometer !== null && odometer < gatePass.departure_odometer) {
-      throw new ValidationError("Return odometer cannot be lower than departure odometer.");
-    }
+      if (gatePass.departure_odometer !== null && odometer < gatePass.departure_odometer) {
+        throw new ValidationError("Return odometer cannot be lower than departure odometer.");
+      }
 
-    const photoFileId = await repo.insertFile(client, {
-      gatePassId: id,
-      fileType: "RETURN_PHOTO",
-      storageKey,
-      mimeType: photo.mimeType,
-      sizeBytes,
-      checksumSha256,
-      version: 1,
-      createdByUserId: actor.id,
+      const saved = await storageService.save(photo.buffer, {
+        gatePassId: id,
+        category: "return",
+        extension: photo.extension,
+      });
+      storageKey = saved.storageKey;
+
+      const photoFileId = await repo.insertFile(client, {
+        gatePassId: id,
+        fileType: "RETURN_PHOTO",
+        storageKey: saved.storageKey,
+        mimeType: photo.mimeType,
+        sizeBytes: saved.sizeBytes,
+        checksumSha256: saved.checksumSha256,
+        version: 1,
+        createdByUserId: actor.id,
+      });
+
+      await repo.markReturned(client, id, { odometer, byUserId: actor.id, photoFileId, remarks });
+
+      await repo.insertAuditLog(client, {
+        gatePassId: id,
+        actorUserId: actor.id,
+        action: "RETURN",
+        previousStatus: GATE_PASS_STATUS.VEHICLE_OUTSIDE,
+        newStatus: GATE_PASS_STATUS.COMPLETED,
+        metadata: { odometer },
+      });
     });
-
-    await repo.markReturned(client, id, { odometer, byUserId: actor.id, photoFileId, remarks });
-
-    await repo.insertAuditLog(client, {
-      gatePassId: id,
-      actorUserId: actor.id,
-      action: "RETURN",
-      previousStatus: GATE_PASS_STATUS.VEHICLE_OUTSIDE,
-      newStatus: GATE_PASS_STATUS.COMPLETED,
-      metadata: { odometer },
-    });
-  });
+  } catch (error) {
+    if (storageKey) {
+      await storageService.remove(storageKey);
+    }
+    throw error;
+  }
 }
 
 export async function getAuthorizedFile(actor, gatePassId, fileId) {

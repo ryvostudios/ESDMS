@@ -213,3 +213,9 @@ Expected structure:
 ```text
 backend/src/modules/<module>/
 frontend/src/modules/<module>/
+```
+
+Shared, cross-module code (auth, HTTP helpers, storage, notifications,
+error handling) lives under `backend/src/shared/` and `frontend/src/shared/`
+or `frontend/src/core/` — never duplicated per module. See
+`docs/MODULES.md` for the current module list and status.

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useGatePassList } from "../hooks/useGatePassList.js";
 import { useDebouncedValue } from "../../../shared/hooks/useDebouncedValue.js";
 import { GatePassStatusBadge } from "./GatePassStatusBadge.jsx";
@@ -101,8 +101,15 @@ export function GatePassListView({ title, description, fixedStatus, showStatusFi
                 </thead>
                 <tbody>
                   {rows.map((gatePass) => (
+                    // The row's onClick is a mouse-convenience shortcut, not the
+                    // only way in: the Gate Pass number below is a real link, so
+                    // keyboard/screen-reader users have a genuine focusable target.
                     <tr key={gatePass.id} className={styles.row} onClick={() => goToDetail(gatePass.id)}>
-                      <td className={styles.gatePassNumber}>{gatePass.gatePassNumber}</td>
+                      <td className={styles.gatePassNumber}>
+                        <Link to={`/gate-passes/${gatePass.id}`} className={styles.rowLink}>
+                          {gatePass.gatePassNumber}
+                        </Link>
+                      </td>
                       <td>
                         <GatePassStatusBadge status={gatePass.status} />
                       </td>
@@ -118,7 +125,7 @@ export function GatePassListView({ title, description, fixedStatus, showStatusFi
 
             <div className={styles.cardList}>
               {rows.map((gatePass) => (
-                <div key={gatePass.id} className={styles.mobileRow} onClick={() => goToDetail(gatePass.id)}>
+                <Link key={gatePass.id} to={`/gate-passes/${gatePass.id}`} className={styles.mobileRow}>
                   <div className={styles.mobileRowTop}>
                     <span className={styles.gatePassNumber}>{gatePass.gatePassNumber}</span>
                     <GatePassStatusBadge status={gatePass.status} />
@@ -129,7 +136,7 @@ export function GatePassListView({ title, description, fixedStatus, showStatusFi
                       {gatePass.vehicleRegistration} · {gatePass.driverName}
                     </span>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           </>
