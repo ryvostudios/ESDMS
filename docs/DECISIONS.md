@@ -1373,3 +1373,37 @@ migration-history table unnecessarily.
 Accepted. The migration owner and running API credentials remain separate.
 Every future table requires an explicit reviewed grant and RLS provisioning
 update; production migration credentials must never be configured on the API.
+
+---
+
+## 2026-08-22 — Owner-Scoped Default ACLs and Public Function Execution
+
+### Decision
+
+Added a forward-only migration that revokes `EXECUTE` on current public
+functions from `PUBLIC`, `anon`, and `authenticated`, and removes global plus
+public-schema function defaults belonging to the migration owner. Trigger
+functions remain usable through their table triggers without a direct runtime
+function grant; they are not database APIs for browser roles.
+
+Provisioning now removes legacy migration-owner table/sequence defaults for
+`esdms_runtime`, removes migration-owner browser/function defaults, and verifies
+only the default ACLs that govern objects created by `CURRENT_USER`. PostgreSQL
+default ACLs are object-creator-specific, so unrelated `supabase_admin` defaults
+do not govern ESDMS objects created by the `postgres` migration owner and are
+neither altered nor treated as a provisioning failure.
+
+### Reason
+
+A controlled production run correctly failed closed when its earlier verifier
+treated every owner's default ACL as part of one boundary. Read-only inspection
+also showed PostgreSQL's default `PUBLIC EXECUTE` behavior on existing ESDMS
+trigger functions. The corrected boundary removes current exposure and the
+migration owner's future defaults while preserving Supabase-managed ownership
+semantics.
+
+### Status
+
+Accepted. Browser authorization continues to flow exclusively through the
+ESDMS backend; `anon` and `authenticated` receive no direct ESDMS table,
+sequence, or function access.

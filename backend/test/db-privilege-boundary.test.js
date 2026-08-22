@@ -25,10 +25,18 @@ const APPLICATION_TABLES = [
 const ALL_TABLES = [...APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];
 const TEST_SEQUENCE = "esdms_security_test_sequence";
+const TEST_OTHER_OWNER = "esdms_security_other_owner";
+const TEST_TRIGGER_TABLE = "esdms_security_trigger_table";
+const TEST_TRIGGER_FUNCTION = "esdms_security_trigger_function";
+const TEST_FUTURE_FUNCTION = "esdms_security_future_function";
 const scriptPath = path.resolve(import.meta.dirname, "../scripts/provision-db-roles.sql");
 const migrationPath = path.resolve(
   import.meta.dirname,
   "../migrations/1787401000000_database-runtime-security-boundary.js",
+);
+const functionMigrationPath = path.resolve(
+  import.meta.dirname,
+  "../migrations/1787402000000_public-function-execution-boundary.js",
 );
 
 function assertIsDisposableTestDatabase() {
@@ -116,6 +124,45 @@ function authenticateAsRuntime(databaseUrl, password) {
   );
 }
 
+function runSqlAsRuntime(databaseUrl, password, sql) {
+  return spawnSync("psql", ["--no-psqlrc", "--quiet", "--tuples-only", "--no-align", "--command", sql], {
+    env: {
+      ...buildPsqlEnv(databaseUrl),
+      PGUSER: "esdms_runtime",
+      PGPASSWORD: password,
+    },
+    encoding: "utf8",
+  });
+}
+
+async function getFunctionExecution(functionName) {
+  const result = await pool.query(
+    `WITH target AS (
+       SELECT p.oid, p.proacl, p.proowner
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = $1
+     )
+     SELECT
+       EXISTS (
+         SELECT 1
+         FROM target f
+         CROSS JOIN LATERAL aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) a
+         WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'
+       ) AS public_execute,
+       CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+         THEN has_function_privilege('anon', (SELECT oid FROM target), 'EXECUTE')
+         ELSE false
+       END AS anon_execute,
+       CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+         THEN has_function_privilege('authenticated', (SELECT oid FROM target), 'EXECUTE')
+         ELSE false
+       END AS authenticated_execute`,
+    [functionName],
+  );
+  return result.rows[0];
+}
+
 async function cleanupRuntimeRole() {
   for (const table of APPLICATION_TABLES) {
     await pool.query(`DROP POLICY IF EXISTS esdms_runtime_access ON public.${table}`);
@@ -124,6 +171,12 @@ async function cleanupRuntimeRole() {
 
   const exists = await pool.query("SELECT 1 FROM pg_roles WHERE rolname = 'esdms_runtime'");
   if (exists.rowCount > 0) {
+    await pool.query("ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON TABLES FROM esdms_runtime");
+    await pool.query("ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL PRIVILEGES ON TABLES FROM esdms_runtime");
+    await pool.query("ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime");
+    await pool.query(
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime",
+    );
     await pool.query("DROP OWNED BY esdms_runtime");
     await pool.query("DROP ROLE esdms_runtime");
   }
@@ -133,12 +186,49 @@ async function cleanupBrowserRoles() {
   for (const role of BROWSER_ROLES) {
     const exists = await pool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
     if (exists.rowCount > 0) {
+      await pool.query(`ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON TABLES FROM ${role}`);
       await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL PRIVILEGES ON TABLES FROM ${role}`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON SEQUENCES FROM ${role}`);
       await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL PRIVILEGES ON SEQUENCES FROM ${role}`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM ${role}`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM ${role}`);
       await pool.query(`DROP OWNED BY ${role}`);
       await pool.query(`DROP ROLE ${role}`);
     }
   }
+}
+
+async function cleanupOtherOwner() {
+  const exists = await pool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [TEST_OTHER_OWNER]);
+  if (exists.rowCount === 0) {
+    return;
+  }
+
+  for (const role of BROWSER_ROLES) {
+    const targetExists = await pool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+    if (targetExists.rowCount > 0) {
+      await pool.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${TEST_OTHER_OWNER} IN SCHEMA public
+         REVOKE ALL PRIVILEGES ON TABLES FROM ${role}`,
+      );
+      await pool.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${TEST_OTHER_OWNER} IN SCHEMA public
+         REVOKE ALL PRIVILEGES ON SEQUENCES FROM ${role}`,
+      );
+      await pool.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${TEST_OTHER_OWNER} IN SCHEMA public
+         REVOKE EXECUTE ON FUNCTIONS FROM ${role}`,
+      );
+    }
+  }
+  await pool.query(`DROP OWNED BY ${TEST_OTHER_OWNER}`);
+  await pool.query(`DROP ROLE ${TEST_OTHER_OWNER}`);
+}
+
+async function cleanupFunctionFixtures() {
+  await pool.query(`DROP TABLE IF EXISTS public.${TEST_TRIGGER_TABLE}`);
+  await pool.query(`DROP FUNCTION IF EXISTS public.${TEST_TRIGGER_FUNCTION}()`);
+  await pool.query(`DROP FUNCTION IF EXISTS public.${TEST_FUTURE_FUNCTION}()`);
 }
 
 async function assertRuntimeRoleAbsentAndRlsIntact() {
@@ -193,6 +283,44 @@ test("database runtime security migration enables RLS without depending on envir
   assert.match(source, /RAISE EXCEPTION/i);
 });
 
+test("public function migration removes current and future PUBLIC execution without runtime grants", async () => {
+  const source = await fs.readFile(functionMigrationPath, "utf8");
+  assert.match(source, /REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC/i);
+  assert.match(source, /ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC/i);
+  assert.match(source, /ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC/i);
+  assert.match(source, /IF EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = 'anon'\)/);
+  assert.match(source, /IF EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = 'authenticated'\)/);
+  assert.doesNotMatch(source, /GRANT\s+EXECUTE[\s\S]+esdms_runtime/i);
+  assert.match(source, /intentionally irreversible/i);
+  assert.match(source, /RAISE EXCEPTION/i);
+
+  const publicExecution = await pool.query(
+    `SELECT 1
+     FROM pg_proc p
+     JOIN pg_namespace n ON n.oid = p.pronamespace
+     CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+     WHERE n.nspname = 'public'
+       AND p.prokind <> 'p'
+       AND a.grantee = 0
+       AND a.privilege_type = 'EXECUTE'`,
+  );
+  assert.equal(publicExecution.rowCount, 0);
+
+  await pool.query(
+    `CREATE FUNCTION public.${TEST_FUTURE_FUNCTION}()
+     RETURNS integer LANGUAGE sql AS 'SELECT 1'`,
+  );
+  try {
+    assert.deepEqual(await getFunctionExecution(TEST_FUTURE_FUNCTION), {
+      public_execute: false,
+      anon_execute: false,
+      authenticated_execute: false,
+    });
+  } finally {
+    await pool.query(`DROP FUNCTION public.${TEST_FUTURE_FUNCTION}()`);
+  }
+});
+
 test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy broad grant", async () => {
   const sql = await fs.readFile(scriptPath, "utf8");
   const executableSql = sql.replace(/--.*$/gm, "");
@@ -214,8 +342,12 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
   assert.doesNotMatch(executableSql, /GRANT[^;]+ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+public/is);
   assert.doesNotMatch(executableSql, /GRANT[^;]+ON\s+ALL\s+SEQUENCES\s+IN\s+SCHEMA\s+public/is);
   assert.doesNotMatch(executableSql, /ALTER\s+DEFAULT\s+PRIVILEGES[^;]+GRANT/is);
+  assert.doesNotMatch(executableSql, /GRANT\s+EXECUTE[^;]+esdms_runtime/is);
   assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM esdms_runtime/);
   assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM esdms_runtime/);
+  assert.match(sql, /REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC/);
+  assert.match(sql, /ALTER DEFAULT PRIVILEGES\s+REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC/);
+  assert.match(sql, /d\.defaclrole = \(SELECT oid FROM pg_roles WHERE rolname = current_user\)/);
 
   const explicitGrant = sql.match(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE([\s\S]*?)TO esdms_runtime;/i)?.[1];
   assert.ok(explicitGrant, "expected one explicit runtime table grant");
@@ -346,10 +478,11 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
     const runtimeDefaults = await pool.query(
       `SELECT 1
        FROM pg_default_acl d
-       JOIN pg_namespace n ON n.oid = d.defaclnamespace
+       LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
        CROSS JOIN LATERAL aclexplode(d.defaclacl) a
        JOIN pg_roles grantee ON grantee.oid = a.grantee
-       WHERE n.nspname = 'public'
+       WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+         AND (d.defaclnamespace = 0 OR n.nspname = 'public')
          AND d.defaclobjtype IN ('r', 'S')
          AND grantee.rolname = 'esdms_runtime'`,
     );
@@ -476,7 +609,9 @@ test("provisioning removes effective table, sequence, and default privileges fro
     for (const role of BROWSER_ROLES) {
       await pool.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${role}`);
       await pool.query(`GRANT ALL PRIVILEGES ON SEQUENCE public.${TEST_SEQUENCE} TO ${role}`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TABLES TO ${role}`);
       await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO ${role}`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SEQUENCES TO ${role}`);
       await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO ${role}`);
     }
 
@@ -516,10 +651,11 @@ test("provisioning removes effective table, sequence, and default privileges fro
       const defaultPrivileges = await pool.query(
         `SELECT 1
          FROM pg_default_acl d
-         JOIN pg_namespace n ON n.oid = d.defaclnamespace
+         LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
          CROSS JOIN LATERAL aclexplode(d.defaclacl) a
          JOIN pg_roles grantee ON grantee.oid = a.grantee
-         WHERE n.nspname = 'public'
+         WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+           AND (d.defaclnamespace = 0 OR n.nspname = 'public')
            AND d.defaclobjtype IN ('r', 'S')
            AND grantee.rolname = $1`,
         [role],
@@ -530,5 +666,162 @@ test("provisioning removes effective table, sequence, and default privileges fro
     await cleanupRuntimeRole();
     await cleanupBrowserRoles();
     await pool.query(`DROP SEQUENCE IF EXISTS public.${TEST_SEQUENCE}`);
+  }
+});
+
+test("function hardening and default-ACL verification are scoped to the migration owner", async (t) => {
+  const databaseUrl = assertIsDisposableTestDatabase();
+  if (!assertPsqlAvailable(t)) {
+    return;
+  }
+
+  const runtimePassword = crypto.randomBytes(24).toString("base64url");
+  await cleanupFunctionFixtures();
+  await cleanupRuntimeRole();
+  await cleanupOtherOwner();
+  await cleanupBrowserRoles();
+
+  try {
+    for (const role of BROWSER_ROLES) {
+      await pool.query(`CREATE ROLE ${role} NOLOGIN`);
+    }
+    await pool.query("CREATE ROLE esdms_runtime LOGIN");
+    await pool.query(`CREATE ROLE ${TEST_OTHER_OWNER} NOLOGIN`);
+
+    // Model the legacy defaults owned by the ESDMS migration role.
+    await pool.query(
+      "ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO esdms_runtime",
+    );
+    await pool.query(
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO esdms_runtime",
+    );
+    await pool.query("ALTER DEFAULT PRIVILEGES GRANT USAGE, SELECT ON SEQUENCES TO esdms_runtime");
+    await pool.query(
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO esdms_runtime",
+    );
+    await pool.query("ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated");
+    await pool.query(
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated",
+    );
+
+    // Model unrelated Supabase-managed defaults owned by another object
+    // creator. Provisioning must neither remove nor reject these entries.
+    for (const role of BROWSER_ROLES) {
+      await pool.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${TEST_OTHER_OWNER} IN SCHEMA public
+         GRANT ALL PRIVILEGES ON TABLES TO ${role}`,
+      );
+      await pool.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${TEST_OTHER_OWNER} IN SCHEMA public
+         GRANT ALL PRIVILEGES ON SEQUENCES TO ${role}`,
+      );
+      await pool.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${TEST_OTHER_OWNER} IN SCHEMA public
+         GRANT EXECUTE ON FUNCTIONS TO ${role}`,
+      );
+    }
+
+    await pool.query(`CREATE TABLE public.${TEST_TRIGGER_TABLE} (id integer PRIMARY KEY, touched boolean NOT NULL)`);
+    await pool.query(
+      `CREATE FUNCTION public.${TEST_TRIGGER_FUNCTION}()
+       RETURNS trigger AS $function$
+       BEGIN
+         NEW.touched = true;
+         RETURN NEW;
+       END
+       $function$ LANGUAGE plpgsql`,
+    );
+    await pool.query(
+      `CREATE TRIGGER esdms_security_trigger
+       BEFORE UPDATE ON public.${TEST_TRIGGER_TABLE}
+       FOR EACH ROW EXECUTE FUNCTION public.${TEST_TRIGGER_FUNCTION}()`,
+    );
+    await pool.query(`INSERT INTO public.${TEST_TRIGGER_TABLE} (id, touched) VALUES (1, false)`);
+
+    assert.deepEqual(await getFunctionExecution(TEST_TRIGGER_FUNCTION), {
+      public_execute: true,
+      anon_execute: true,
+      authenticated_execute: true,
+    });
+
+    const result = runProvisioning(databaseUrl, {
+      runtimePassword,
+      echoOption: "--echo-queries",
+    });
+    assertProvisioningSucceeded(result, "function/default-ACL boundary provisioning");
+    assertSecretAbsent(result, runtimePassword);
+
+    assert.deepEqual(await getFunctionExecution(TEST_TRIGGER_FUNCTION), {
+      public_execute: false,
+      anon_execute: false,
+      authenticated_execute: false,
+    });
+
+    const currentOwnerDefaults = await pool.query(
+      `SELECT 1
+       FROM pg_default_acl d
+       LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+       CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+       LEFT JOIN pg_roles grantee ON grantee.oid = a.grantee
+       WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+         AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+         AND (
+           (d.defaclobjtype IN ('r', 'S')
+             AND grantee.rolname IN ('esdms_runtime', 'anon', 'authenticated'))
+           OR
+           (d.defaclobjtype = 'f' AND a.privilege_type = 'EXECUTE'
+             AND (a.grantee = 0 OR grantee.rolname IN ('anon', 'authenticated')))
+         )`,
+    );
+    assert.equal(currentOwnerDefaults.rowCount, 0);
+
+    const otherOwnerDefaults = await pool.query(
+      `SELECT array_agg(DISTINCT d.defaclobjtype::text ORDER BY d.defaclobjtype::text) AS object_types
+       FROM pg_default_acl d
+       JOIN pg_namespace n ON n.oid = d.defaclnamespace
+       CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+       JOIN pg_roles owner_role ON owner_role.oid = d.defaclrole
+       JOIN pg_roles grantee ON grantee.oid = a.grantee
+       WHERE owner_role.rolname = $1
+         AND n.nspname = 'public'
+         AND grantee.rolname IN ('anon', 'authenticated')`,
+      [TEST_OTHER_OWNER],
+    );
+    assert.deepEqual(otherOwnerDefaults.rows[0].object_types.sort(), ["S", "f", "r"].sort());
+
+    await pool.query(
+      `CREATE FUNCTION public.${TEST_FUTURE_FUNCTION}()
+       RETURNS integer LANGUAGE sql AS 'SELECT 1'`,
+    );
+    assert.deepEqual(await getFunctionExecution(TEST_FUTURE_FUNCTION), {
+      public_execute: false,
+      anon_execute: false,
+      authenticated_execute: false,
+    });
+
+    const runtimeFunctionPrivilege = await pool.query(
+      `SELECT has_function_privilege(
+         'esdms_runtime',
+         'public.${TEST_TRIGGER_FUNCTION}()',
+         'EXECUTE'
+       ) AS can_execute`,
+    );
+    assert.equal(runtimeFunctionPrivilege.rows[0].can_execute, false);
+
+    await pool.query(`GRANT SELECT, UPDATE ON public.${TEST_TRIGGER_TABLE} TO esdms_runtime`);
+    const triggerUpdate = runSqlAsRuntime(
+      databaseUrl,
+      runtimePassword,
+      `UPDATE public.${TEST_TRIGGER_TABLE} SET touched = false WHERE id = 1 RETURNING touched`,
+    );
+    assert.equal(triggerUpdate.status, 0, "runtime UPDATE must still execute its table trigger");
+    assert.equal(triggerUpdate.stdout.trim(), "t");
+  } finally {
+    await pool.query("ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC");
+    await pool.query("ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC");
+    await cleanupFunctionFixtures();
+    await cleanupRuntimeRole();
+    await cleanupOtherOwner();
+    await cleanupBrowserRoles();
   }
 });

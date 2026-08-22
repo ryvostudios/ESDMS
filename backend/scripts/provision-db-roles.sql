@@ -89,8 +89,12 @@ REVOKE CREATE ON SCHEMA public FROM esdms_runtime;
 -- future modules never become runtime-accessible without explicit review.
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM esdms_runtime;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM esdms_runtime;
+ALTER DEFAULT PRIVILEGES
+  REVOKE ALL PRIVILEGES ON TABLES FROM esdms_runtime;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE ALL PRIVILEGES ON TABLES FROM esdms_runtime;
+ALTER DEFAULT PRIVILEGES
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 
@@ -119,10 +123,19 @@ SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') AS anon_exists
 \if :anon_exists
   REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM anon;
   REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM anon;
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM anon;
+  ALTER DEFAULT PRIVILEGES
     REVOKE ALL PRIVILEGES ON TABLES FROM anon;
   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM anon;
+  ALTER DEFAULT PRIVILEGES
     REVOKE ALL PRIVILEGES ON SEQUENCES FROM anon;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM anon;
+  ALTER DEFAULT PRIVILEGES
+    REVOKE EXECUTE ON FUNCTIONS FROM anon;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE EXECUTE ON FUNCTIONS FROM anon;
 \endif
 
 SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') AS authenticated_exists
@@ -130,11 +143,30 @@ SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') AS authen
 \if :authenticated_exists
   REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM authenticated;
   REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM authenticated;
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM authenticated;
+  ALTER DEFAULT PRIVILEGES
     REVOKE ALL PRIVILEGES ON TABLES FROM authenticated;
   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM authenticated;
+  ALTER DEFAULT PRIVILEGES
     REVOKE ALL PRIVILEGES ON SEQUENCES FROM authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM authenticated;
+  ALTER DEFAULT PRIVILEGES
+    REVOKE EXECUTE ON FUNCTIONS FROM authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE EXECUTE ON FUNCTIONS FROM authenticated;
 \endif
+
+-- Functions in public are trigger implementation details, not an application
+-- authorization surface. PostgreSQL's built-in PUBLIC EXECUTE default is
+-- global, and per-schema defaults are additive, so revoke both the global
+-- default and any explicit public-schema grant owned by this migration role.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
 -- Keep RLS enabled on every public ESDMS table. FORCE RLS is intentionally not
 -- used: the migration owner must continue to run schema migrations, while the
@@ -465,16 +497,18 @@ SELECT NOT EXISTS (
   DO $abort$ BEGIN RAISE EXCEPTION 'sequence privilege verification failed'; END $abort$;
 \endif
 
--- No default ACL may silently grant future public tables/sequences to the
--- runtime or browser roles. This also catches stale grants made by another
--- object-owner role that this invocation could not revoke.
+-- Only defaults owned by CURRENT_USER govern objects this migration owner
+-- creates. Check both global defaults (namespace OID 0) and public-specific
+-- defaults; unrelated supabase_admin defaults are owner-specific and do not
+-- apply to ESDMS objects created by this role.
 SELECT NOT EXISTS (
   SELECT 1
   FROM pg_default_acl d
-  JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
   CROSS JOIN LATERAL aclexplode(d.defaclacl) a
   JOIN pg_roles grantee ON grantee.oid = a.grantee
-  WHERE n.nspname = 'public'
+  WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+    AND (d.defaclnamespace = 0 OR n.nspname = 'public')
     AND d.defaclobjtype IN ('r', 'S')
     AND grantee.rolname IN ('esdms_runtime', 'anon', 'authenticated')
 ) AS default_privilege_boundary_valid
@@ -483,6 +517,60 @@ SELECT NOT EXISTS (
 \else
   \warn 'ERROR: a default ACL still grants future public tables/sequences to runtime or browser roles.'
   DO $abort$ BEGIN RAISE EXCEPTION 'default privilege verification failed'; END $abort$;
+\endif
+
+-- Current public functions must not be callable through PUBLIC or either
+-- browser role. Trigger execution does not require table callers to hold
+-- direct EXECUTE on the trigger function.
+WITH public_functions AS (
+  SELECT p.oid, p.proacl, p.proowner
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.prokind <> 'p'
+),
+browser_roles AS (
+  SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')
+)
+SELECT
+  NOT EXISTS (
+    SELECT 1
+    FROM public_functions f
+    CROSS JOIN LATERAL aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) a
+    WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public_functions f
+    CROSS JOIN browser_roles r
+    WHERE has_function_privilege(r.rolname, f.oid, 'EXECUTE')
+  ) AS function_execution_boundary_valid
+\gset
+\if :function_execution_boundary_valid
+\else
+  \warn 'ERROR: PUBLIC or a browser role can execute a current public function.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'function execution boundary verification failed'; END $abort$;
+\endif
+
+-- Future functions created by this migration owner must not inherit EXECUTE
+-- for PUBLIC or browser roles. Defaults owned by other object creators are
+-- deliberately outside this ESDMS owner boundary.
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM pg_default_acl d
+  LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+  LEFT JOIN pg_roles grantee ON grantee.oid = a.grantee
+  WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+    AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+    AND d.defaclobjtype = 'f'
+    AND a.privilege_type = 'EXECUTE'
+    AND (a.grantee = 0 OR grantee.rolname IN ('anon', 'authenticated'))
+) AS function_default_boundary_valid
+\gset
+\if :function_default_boundary_valid
+\else
+  \warn 'ERROR: migration-owner defaults grant future function EXECUTE to PUBLIC or browser roles.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'function default privilege verification failed'; END $abort$;
 \endif
 
 COMMIT;

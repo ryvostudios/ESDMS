@@ -268,7 +268,11 @@ The application must never run its normal request-handling workload as a databas
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
 
-`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants, grants the 12-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+The follow-up migration `1787402000000_public-function-execution-boundary.js` revokes `EXECUTE` on current public functions from `PUBLIC` and the browser roles, and removes both global and public-schema function defaults belonging to the migration owner. PostgreSQL trigger execution does not require the table caller to hold direct `EXECUTE` on the trigger function, so the API runtime receives no direct function grant. Future functions created by the migration owner therefore do not become publicly/browser executable by default.
+
+PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.
+
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 12-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
 
 ```sh
 read -rs ESDMS_RUNTIME_PASSWORD
@@ -279,7 +283,7 @@ unset ESDMS_RUNTIME_PASSWORD
 
 `--no-psqlrc` is mandatory because a user's `.psqlrc` runs before the script and could otherwise inspect exported environment variables. The combination of `--no-psqlrc`, script-level `\set ECHO none` before `\getenv`, and psql's quoted-variable form (`:'runtime_password'`) prevents the normal provisioning command from echoing the runtime password while preserving injection-safe SQL quoting. Arbitrary psql wrappers or invocations that inspect the environment are outside this guarantee.
 
-Every new module/table requires a reviewed forward migration plus an explicit update to the runtime table allowlist and RLS policy provisioning. No default privilege automatically exposes future tables to `esdms_runtime`, `anon`, or `authenticated`.
+Every new module/table requires a reviewed forward migration plus an explicit update to the runtime table allowlist and RLS policy provisioning. New directly callable database functions require an equally explicit reviewed grant. No migration-owner default privilege automatically exposes future tables, sequences, or functions to `esdms_runtime`, `anon`, or `authenticated`.
 
 ---
 
