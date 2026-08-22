@@ -43,6 +43,24 @@ function isValidUrl(value) {
   }
 }
 
+// The canonical form of a value that's semantically an origin. `.origin`
+// is always exactly scheme + host[:port] regardless of what the input
+// carried — so "https://app.example.com" and "https://app.example.com/"
+// both canonicalize to the identical "https://app.example.com". Falls
+// back to the original value on a parse failure so callers still have
+// something sensible to report an error against (isCleanProductionOrigin,
+// applied separately to the ORIGINAL raw input — see below — is what
+// actually rejects a malformed value; this never silently drops a real
+// path/query/credentials, because validation always runs against the raw
+// string before this is used for storage).
+function toOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value;
+  }
+}
+
 // A browser's CORS `Origin` header is always exactly scheme + host[:port]
 // — never a path, query, fragment, or credentials. FRONTEND_ORIGIN is
 // compared against that header (see app.js's CORS origin callback), and
@@ -99,7 +117,14 @@ if (jwtSecret.length < 32) {
   throw new Error("JWT_SECRET must be at least 32 characters long.");
 }
 
-const frontendOrigins = parseOrigins(required("FRONTEND_ORIGIN"));
+// Canonicalized immediately — every downstream consumer (CORS, same-site
+// validation, anything else) reads the normalized form, never the raw env
+// text. validateProductionConfig() below re-parses process.env directly
+// to validate the ORIGINAL input's shape (so a real embedded path/query/
+// credentials is still rejected, not silently canonicalized away) —
+// canonicalization and shape validation are deliberately independent
+// passes over the same source value.
+const frontendOrigins = parseOrigins(required("FRONTEND_ORIGIN")).map(toOrigin);
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || "8h";
 const isProduction = nodeEnv === "production";
 
@@ -147,12 +172,16 @@ if (trustProxyHopsRaw !== undefined && trustProxyHopsRaw.trim() !== "") {
 
 // The FRONTEND's public URL, embedded as the deep-link base in every Gate
 // Pass QR code — not the backend's own URL (see apiPublicUrl below).
-const appPublicUrl = process.env.APP_PUBLIC_URL || frontendOrigins[0];
+// Canonicalized (see toOrigin) so a trailing slash can never produce a
+// doubled separator when a path is appended onto it, e.g. in
+// gate-pass.pdf.js's verification URL.
+const appPublicUrl = toOrigin(process.env.APP_PUBLIC_URL || frontendOrigins[0]);
 // The backend's OWN public URL — used only to validate, at startup, that
 // the frontend and API are deployed same-site (see
 // validateSameSiteCookieTopology below). Distinct from appPublicUrl.
-// Optional in development; required in production.
-const apiPublicUrl = process.env.API_PUBLIC_URL;
+// Optional in development; required in production. Canonicalized the same
+// way when present.
+const apiPublicUrl = process.env.API_PUBLIC_URL ? toOrigin(process.env.API_PUBLIC_URL) : process.env.API_PUBLIC_URL;
 
 const appTimezone = process.env.APP_TIMEZONE || "Asia/Karachi";
 if (!isValidTimezone(appTimezone)) {
@@ -239,9 +268,13 @@ function validateSameSiteCookieTopology(problems) {
     return;
   }
 
-  if (!isCleanProductionOrigin(apiPublicUrl)) {
+  // Validated against the RAW env text, not the already-canonicalized
+  // apiPublicUrl — canonicalization (toOrigin) silently discards
+  // path/query/fragment/credentials, which would make this check trivially
+  // pass for exactly the malformed inputs it exists to catch.
+  if (!isCleanProductionOrigin(process.env.API_PUBLIC_URL)) {
     problems.push(
-      `API_PUBLIC_URL "${apiPublicUrl}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials (e.g. "https://api.example.com", not "https://api.example.com/v1" or a URL with "user:pass@").`,
+      `API_PUBLIC_URL "${process.env.API_PUBLIC_URL}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials (e.g. "https://api.example.com", not "https://api.example.com/v1" or a URL with "user:pass@").`,
     );
     return;
   }
@@ -286,7 +319,13 @@ function validateSameSiteCookieTopology(problems) {
 function validateProductionConfig() {
   const problems = [];
 
-  for (const origin of frontendOrigins) {
+  // Validated against the RAW env text (re-parsed from process.env
+  // directly), not the already-canonicalized frontendOrigins/appPublicUrl
+  // — canonicalization (toOrigin) silently discards path/query/fragment/
+  // credentials, which would make this check trivially pass for exactly
+  // the malformed inputs it exists to catch.
+  const frontendOriginsRaw = parseOrigins(process.env.FRONTEND_ORIGIN || "");
+  for (const origin of frontendOriginsRaw) {
     if (!isCleanProductionOrigin(origin)) {
       problems.push(
         `FRONTEND_ORIGIN "${origin}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials. A browser's CORS Origin header never carries any of those, so a value that does can never actually match one (e.g. "https://app.example.com", not "https://app.example.com/path" or "https://app.example.com?x=1").`,
@@ -294,9 +333,10 @@ function validateProductionConfig() {
     }
   }
 
-  if (!isCleanProductionOrigin(appPublicUrl)) {
+  const appPublicUrlRaw = process.env.APP_PUBLIC_URL || frontendOriginsRaw[0];
+  if (!isCleanProductionOrigin(appPublicUrlRaw)) {
     problems.push(
-      `APP_PUBLIC_URL "${appPublicUrl}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials. This is embedded in every Gate Pass QR code as a base that "/guard/verify" is appended onto; a value with its own path would produce a malformed link.`,
+      `APP_PUBLIC_URL "${appPublicUrlRaw}" must be a bare https:// origin in production — no path, query, fragment, or embedded credentials. This is embedded in every Gate Pass QR code as a base that "/guard/verify" is appended onto; a value with its own path would produce a malformed link.`,
     );
   }
 

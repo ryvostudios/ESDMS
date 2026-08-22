@@ -288,11 +288,19 @@ async function processApprovalPdfJob(item) {
 
       if (!storageKey) {
         const items = await repo.findItemsByGatePassId(gatePassId);
-        // A URL fragment, not a path segment: the browser never sends it to
-        // any server, so it never lands in access/proxy logs when the QR
-        // code is scanned and opened. The frontend reads it client-side and
-        // POSTs it to the backend once, in the request body.
-        const verificationUrl = `${config.appPublicUrl}/guard/verify#${item.payload.rawToken}`;
+        // URL-aware construction (not string concatenation) so this can
+        // never produce a doubled path separator regardless of how
+        // APP_PUBLIC_URL happens to be configured — config.appPublicUrl is
+        // already canonicalized to a bare origin (see config/env.js), but
+        // building the path this way is correct independent of that too.
+        // The token is a URL fragment, not a path segment: the browser
+        // never sends it to any server, so it never lands in access/proxy
+        // logs when the QR code is scanned and opened. The frontend reads
+        // it client-side and POSTs it to the backend once, in the request
+        // body.
+        const verificationUrlObject = new URL("/guard/verify", config.appPublicUrl);
+        verificationUrlObject.hash = item.payload.rawToken;
+        const verificationUrl = verificationUrlObject.toString();
         const pdfBuffer = await generateGatePassPdf(gatePass, items, verificationUrl);
         const version = await repo.nextPdfVersion(gatePassId);
         const saved = await storageService.save(pdfBuffer, { gatePassId, category: "pdf", extension: "pdf" });

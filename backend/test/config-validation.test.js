@@ -39,6 +39,21 @@ function runWithEnv(overrides) {
   return spawnSync(process.execPath, [envPath], { env, encoding: "utf8" });
 }
 
+const printConfigPath = path.resolve(import.meta.dirname, "./fixtures/print-config.mjs");
+
+// Same as runWithEnv, but for scenarios that need to inspect the actual
+// canonicalized config values on success, not just whether startup
+// succeeded — env.js itself prints nothing.
+function runWithEnvPrintingConfig(overrides) {
+  const env = { ...BASE_VALID_PROD_ENV, ...overrides };
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete env[key];
+  }
+
+  const result = spawnSync(process.execPath, [printConfigPath], { env, encoding: "utf8" });
+  return { ...result, config: result.status === 0 ? JSON.parse(result.stdout) : null };
+}
+
 test("a fully valid production config loads without error", () => {
   const result = runWithEnv({});
   assert.equal(result.status, 0, result.stderr);
@@ -55,6 +70,69 @@ test("a clean https FRONTEND_ORIGIN is accepted, with or without a trailing slas
     const result = runWithEnv({ FRONTEND_ORIGIN: value });
     assert.equal(result.status, 0, `FRONTEND_ORIGIN=${value} should be accepted: ${result.stderr}`);
   }
+});
+
+test("a trailing-slash FRONTEND_ORIGIN canonicalizes to the exact same value as one without", () => {
+  const withSlash = runWithEnvPrintingConfig({ FRONTEND_ORIGIN: "https://app.example.com/" });
+  const withoutSlash = runWithEnvPrintingConfig({ FRONTEND_ORIGIN: "https://app.example.com" });
+
+  assert.equal(withSlash.status, 0, withSlash.stderr);
+  assert.equal(withoutSlash.status, 0, withoutSlash.stderr);
+  assert.deepEqual(withSlash.config.frontendOrigins, ["https://app.example.com"]);
+  assert.deepEqual(withSlash.config.frontendOrigins, withoutSlash.config.frontendOrigins);
+
+  // The actual claim this exists to prove: a real browser's CORS Origin
+  // header (always bare, no trailing slash) will match the configured
+  // value regardless of which form the operator typed into
+  // FRONTEND_ORIGIN — see app.js's `frontendOrigins.includes(origin)`.
+  const browserOriginHeader = "https://app.example.com";
+  assert.ok(withSlash.config.frontendOrigins.includes(browserOriginHeader));
+});
+
+test("a trailing-slash APP_PUBLIC_URL and API_PUBLIC_URL both canonicalize to a bare origin", () => {
+  const result = runWithEnvPrintingConfig({
+    APP_PUBLIC_URL: "https://app.example.com/",
+    API_PUBLIC_URL: "https://api.example.com/",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.config.appPublicUrl, "https://app.example.com");
+  assert.equal(result.config.apiPublicUrl, "https://api.example.com");
+});
+
+test("end-to-end: a trailing-slash FRONTEND_ORIGIN still lets CORS match a real browser Origin header (no trailing slash)", () => {
+  const corsFixturePath = path.resolve(import.meta.dirname, "./fixtures/cors-origin-check.mjs");
+
+  const result = spawnSync(process.execPath, [corsFixturePath], {
+    env: {
+      PATH: process.env.PATH,
+      DOTENV_CONFIG_PATH: path.resolve(import.meta.dirname, "./fixtures/nonexistent.env"),
+      NODE_ENV: "development",
+      DATABASE_URL: "postgresql://localhost:5432/eset_test",
+      JWT_SECRET: "a".repeat(32),
+      // Configured WITH a trailing slash — canonicalization must still
+      // make this match a real browser's Origin header, which never has
+      // one.
+      FRONTEND_ORIGIN: "https://app.example.com/",
+      TEST_REQUEST_ORIGIN: "https://app.example.com",
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /PASS/);
+});
+
+test("a trailing-slash APP_PUBLIC_URL never produces a doubled separator when a path is joined onto it", () => {
+  // Exercises the exact mechanism gate-pass.service.js uses to build the
+  // QR verification URL: URL-aware joining against the (already
+  // canonical) config value.
+  const result = runWithEnvPrintingConfig({ APP_PUBLIC_URL: "https://app.example.com/" });
+  assert.equal(result.status, 0, result.stderr);
+
+  const joined = new URL("/guard/verify", result.config.appPublicUrl).toString();
+  assert.equal(joined, "https://app.example.com/guard/verify");
+  assert.ok(!joined.includes("//guard"), `expected no doubled separator, got "${joined}"`);
 });
 
 test("a FRONTEND_ORIGIN with a path is rejected — a browser's Origin header never carries one", () => {
