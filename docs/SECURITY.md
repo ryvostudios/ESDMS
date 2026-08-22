@@ -263,10 +263,23 @@ The application must never connect to its production database over an unencrypte
 
 The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
 
-- `MIGRATION_DATABASE_URL` — an owner-level role, used only to run `node-pg-migrate` (schema changes: `CREATE`/`ALTER`/`DROP TABLE`, etc.). Never used by the running API process.
-- `DATABASE_URL` — the runtime role the API process actually connects as. Grants are limited to `SELECT`, `INSERT`, `UPDATE`, `DELETE` on application tables and `USAGE`/`SELECT` on sequences. It must not have `SUPERUSER`, `CREATEDB`, or `CREATEROLE`, and must not be able to `CREATE`/`ALTER`/`DROP` any table.
+- `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
+- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 12 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
-`scripts/provision-db-roles.sql` contains the exact `GRANT`/`REVOKE` statements to create and lock down the runtime role against a fresh schema. Run it once per environment, as the owner role, after migrations have created the schema. It also revokes the default `CREATE` privilege that PostgreSQL grants to `PUBLIC` on the `public` schema, and includes a verification query (`has_schema_privilege`/`has_table_privilege`) to confirm the runtime role's effective privileges after provisioning. See `docs/DECISIONS.md` for the reasoning.
+The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
+
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants, grants the 12-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+
+```sh
+read -rs ESDMS_RUNTIME_PASSWORD
+export ESDMS_RUNTIME_PASSWORD
+psql --no-psqlrc "$MIGRATION_DATABASE_URL" -f scripts/provision-db-roles.sql
+unset ESDMS_RUNTIME_PASSWORD
+```
+
+`--no-psqlrc` is mandatory because a user's `.psqlrc` runs before the script and could otherwise inspect exported environment variables. The combination of `--no-psqlrc`, script-level `\set ECHO none` before `\getenv`, and psql's quoted-variable form (`:'runtime_password'`) prevents the normal provisioning command from echoing the runtime password while preserving injection-safe SQL quoting. Arbitrary psql wrappers or invocations that inspect the environment are outside this guarantee.
+
+Every new module/table requires a reviewed forward migration plus an explicit update to the runtime table allowlist and RLS policy provisioning. No default privilege automatically exposes future tables to `esdms_runtime`, `anon`, or `authenticated`.
 
 ---
 

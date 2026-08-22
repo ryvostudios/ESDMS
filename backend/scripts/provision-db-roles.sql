@@ -1,77 +1,493 @@
--- Creates (or updates) a restricted runtime role for the API process to
--- connect as (DATABASE_URL) — separate from the owner role that runs
--- migrations (MIGRATION_DATABASE_URL). See docs/SECURITY.md §8.2 and
--- docs/DECISIONS.md ("Database Privilege Boundary and Verified TLS").
---
--- Run once per environment, connected AS THE OWNER/MIGRATION role, after
--- migrations have already created the schema:
---   psql "$MIGRATION_DATABASE_URL" -f scripts/provision-db-roles.sql
---
--- Edit the password below before running.
+\set ON_ERROR_STOP on
+\set ECHO none
 
--- Postgres grants CREATE on the "public" schema to the PUBLIC pseudo-role
--- by default (on PG < 15) — every role, including esdms_runtime below, has
--- schema-object-creation rights it never needed until this is revoked at
--- the PUBLIC level. Revoking CREATE from esdms_runtime alone (further
--- down) is not enough on its own: a role's effective privileges are the
--- union of what's granted to it directly AND to PUBLIC, so PUBLIC's own
--- grant would still apply regardless.
+-- Provisions the least-privilege database login used by the running API
+-- (DATABASE_URL). Run this only as the migration/schema-owner role, after all
+-- migrations have completed. The migration credential is never used by the
+-- running API.
+--
+-- Production invocation (the password is read without terminal echo and is
+-- never placed in this file or in the psql command line):
+--
+--   read -rs ESDMS_RUNTIME_PASSWORD
+--   export ESDMS_RUNTIME_PASSWORD
+--   psql --no-psqlrc "$MIGRATION_DATABASE_URL" -f scripts/provision-db-roles.sql
+--   unset ESDMS_RUNTIME_PASSWORD
+--
+-- --no-psqlrc is part of the secret-handling boundary: a user's .psqlrc is
+-- executed before this file and could otherwise inspect environment variables.
+-- The script-level ECHO setting above is deliberately applied before \getenv so
+-- command-line query echoing cannot print an interpolated role password.
+--
+-- Re-run after every reviewed migration that adds a table. Future tables do
+-- not receive automatic runtime grants or policies.
+
+\getenv runtime_password ESDMS_RUNTIME_PASSWORD
+\if :{?runtime_password}
+\else
+  \warn 'ERROR: ESDMS_RUNTIME_PASSWORD is required.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'ESDMS_RUNTIME_PASSWORD is required'; END $abort$;
+\endif
+
+-- Use an extended-query parameter for validation so the password is never
+-- interpolated into a SELECT statement or exposed by statement logging.
+SELECT length($1) >= 16 AS runtime_password_valid
+\bind :'runtime_password'
+\gset
+\if :runtime_password_valid
+\else
+  \warn 'ERROR: ESDMS_RUNTIME_PASSWORD must be at least 16 characters.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'ESDMS_RUNTIME_PASSWORD is too short'; END $abort$;
+\endif
+
+BEGIN;
+
+-- Supabase does not permit a non-superuser provisioning connection to issue
+-- ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS against roles carrying protected
+-- attributes. Verify the invariant instead. An existing unsafe or NOLOGIN
+-- role is rejected before its password or any grants are changed.
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'esdms_runtime') AS runtime_role_exists
+\gset
+
+\if :runtime_role_exists
+  SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+         AND rolcanlogin AS existing_runtime_role_safe
+  FROM pg_roles
+  WHERE rolname = 'esdms_runtime'
+  \gset
+  \if :existing_runtime_role_safe
+    ALTER ROLE esdms_runtime PASSWORD :'runtime_password';
+  \else
+    \warn 'ERROR: existing esdms_runtime has a dangerous role attribute or cannot log in; refusing to alter it.'
+    DO $abort$ BEGIN RAISE EXCEPTION 'unsafe existing esdms_runtime role attributes'; END $abort$;
+  \endif
+\else
+  CREATE ROLE esdms_runtime LOGIN PASSWORD :'runtime_password';
+\endif
+
+-- Re-verify after either creation or password rotation. No BYPASSRLS or other
+-- elevated role attribute is ever granted by this script.
+SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+       AND rolcanlogin AS runtime_role_safe
+FROM pg_roles
+WHERE rolname = 'esdms_runtime'
+\gset
+\if :runtime_role_safe
+\else
+  \warn 'ERROR: esdms_runtime failed the required role-attribute invariant.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'esdms_runtime role-attribute verification failed'; END $abort$;
+\endif
+
+-- Schema boundary. Revoking PUBLIC is necessary because effective privileges
+-- are the union of direct grants and grants inherited from PUBLIC.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'esdms_runtime') THEN
-    CREATE ROLE esdms_runtime LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD';
-  END IF;
-END
-$$;
-
--- Explicit, even though these are the defaults for a role created without
--- these attributes — this is the actual security property being asserted.
-ALTER ROLE esdms_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-
 GRANT USAGE ON SCHEMA public TO esdms_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esdms_runtime;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO esdms_runtime;
-
--- Covers any table/sequence a future migration creates, without needing to
--- re-run this script after every migration.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO esdms_runtime;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO esdms_runtime;
-
--- Defense in depth: explicit even after the PUBLIC-level revoke above —
--- this role must never be able to alter schema under any path.
 REVOKE CREATE ON SCHEMA public FROM esdms_runtime;
 
--- After running this, set the production DATABASE_URL to use this role
--- (esdms_runtime) and its password, while MIGRATION_DATABASE_URL keeps
--- using the owner role for all future `npm run migrate:up:prod` runs.
+-- Remove every legacy broad grant first, including the old pgmigrations and
+-- sequence access. Also remove the old migration-owner default privileges so
+-- future modules never become runtime-accessible without explicit review.
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM esdms_runtime;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM esdms_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE ALL PRIVILEGES ON TABLES FROM esdms_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 
--- --------------------------------------------------------------------
--- Verification — confirms what was actually granted, not just what this
--- script intended. Run standalone any time with:
---   psql "$MIGRATION_DATABASE_URL" \
---     -c "\df" -c "select ..." -- or just re-run this whole file; the
---     grants above are idempotent (GRANT/REVOKE, not INSERT).
--- --------------------------------------------------------------------
+-- The current schema uses UUIDs and an ordinary counter table, so the API
+-- needs no sequence privileges. Exactly these 12 application tables receive
+-- DML access; public.pgmigrations is deliberately excluded.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  public.departments,
+  public.gate_pass_audit_log,
+  public.gate_pass_files,
+  public.gate_pass_items,
+  public.gate_pass_number_counters,
+  public.gate_passes,
+  public.notification_outbox,
+  public.permissions,
+  public.role_permissions,
+  public.roles,
+  public.sites,
+  public.users
+TO esdms_runtime;
 
--- Role attributes: every column here must read false/f except rolcanlogin.
+-- Supabase browser-facing roles are not an application authorization path.
+-- Guard role references so this script also runs on ordinary local Postgres.
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') AS anon_exists
+\gset
+\if :anon_exists
+  REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM anon;
+  REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM anon;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM anon;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM anon;
+\endif
+
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') AS authenticated_exists
+\gset
+\if :authenticated_exists
+  REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM authenticated;
+  REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM authenticated;
+\endif
+
+-- Keep RLS enabled on every public ESDMS table. FORCE RLS is intentionally not
+-- used: the migration owner must continue to run schema migrations, while the
+-- non-owner runtime login remains subject to policy enforcement.
+ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gate_pass_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gate_pass_files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gate_pass_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gate_pass_number_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gate_passes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notification_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.pgmigrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+-- Converge each application table to exactly one known runtime policy. Drop
+-- and recreate is transactional and idempotent. pgmigrations intentionally has
+-- no runtime policy and no runtime table privilege.
+DO $policies$
+DECLARE
+  table_name text;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY[
+    'departments',
+    'gate_pass_audit_log',
+    'gate_pass_files',
+    'gate_pass_items',
+    'gate_pass_number_counters',
+    'gate_passes',
+    'notification_outbox',
+    'permissions',
+    'role_permissions',
+    'roles',
+    'sites',
+    'users'
+  ]
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS esdms_runtime_access ON public.%I', table_name);
+    EXECUTE format(
+      'CREATE POLICY esdms_runtime_access ON public.%I FOR ALL TO esdms_runtime USING (true) WITH CHECK (true)',
+      table_name
+    );
+  END LOOP;
+
+  DROP POLICY IF EXISTS esdms_runtime_access ON public.pgmigrations;
+END
+$policies$;
+
+-- -------------------------------------------------------------------------
+-- Verification: display the effective boundary and fail the transaction if
+-- any invariant differs. A failure rolls back password/grant/policy changes.
+-- -------------------------------------------------------------------------
+
+-- 1. Role attributes (all dangerous flags false; LOGIN true).
 SELECT
-  rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolcanlogin
+  rolname,
+  rolsuper,
+  rolcreatedb,
+  rolcreaterole,
+  rolreplication,
+  rolbypassrls,
+  rolcanlogin
 FROM pg_roles
 WHERE rolname = 'esdms_runtime';
 
--- Table-level effective privileges: expect SELECT/INSERT/UPDATE/DELETE
--- only — no TRUNCATE, REFERENCES, or TRIGGER, and no rows at all for a
--- role that has DDL rights, since DDL isn't a table-level privilege.
-SELECT table_name, privilege_type
-FROM information_schema.role_table_grants
-WHERE grantee = 'esdms_runtime'
-ORDER BY table_name, privilege_type;
-
--- Schema-level: expect has_usage = true, has_create = false.
+-- 2. Schema privileges (USAGE true; CREATE false).
 SELECT
   has_schema_privilege('esdms_runtime', 'public', 'USAGE') AS has_usage,
   has_schema_privilege('esdms_runtime', 'public', 'CREATE') AS has_create;
+
+SELECT
+  has_schema_privilege('esdms_runtime', 'public', 'USAGE')
+  AND NOT has_schema_privilege('esdms_runtime', 'public', 'CREATE') AS runtime_schema_boundary_valid
+\gset
+\if :runtime_schema_boundary_valid
+\else
+  \warn 'ERROR: esdms_runtime schema privilege verification failed.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'esdms_runtime schema privilege verification failed'; END $abort$;
+\endif
+
+-- 3. Effective runtime table privileges. The displayed rows are the direct
+-- grants; the invariant below additionally checks effective privileges from
+-- PUBLIC or role membership.
+SELECT table_name, privilege_type
+FROM information_schema.table_privileges
+WHERE table_schema = 'public'
+  AND grantee = 'esdms_runtime'
+ORDER BY table_name, privilege_type;
+
+WITH
+expected_tables(table_name) AS (
+  VALUES
+    ('departments'),
+    ('gate_pass_audit_log'),
+    ('gate_pass_files'),
+    ('gate_pass_items'),
+    ('gate_pass_number_counters'),
+    ('gate_passes'),
+    ('notification_outbox'),
+    ('permissions'),
+    ('role_permissions'),
+    ('roles'),
+    ('sites'),
+    ('users')
+),
+dml_privileges(privilege_type) AS (
+  VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')
+),
+all_table_privileges(privilege_type) AS (
+  VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')
+),
+public_relations AS (
+  SELECT c.oid, c.relname
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public'
+    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+)
+SELECT
+  NOT EXISTS (
+    SELECT 1
+    FROM expected_tables e
+    CROSS JOIN dml_privileges p
+    JOIN public_relations r ON r.relname = e.table_name
+    WHERE NOT has_table_privilege('esdms_runtime', r.oid, p.privilege_type)
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public_relations r
+    CROSS JOIN all_table_privileges p
+    WHERE has_table_privilege('esdms_runtime', r.oid, p.privilege_type)
+      AND (
+        NOT EXISTS (SELECT 1 FROM expected_tables e WHERE e.table_name = r.relname)
+        OR NOT EXISTS (SELECT 1 FROM dml_privileges d WHERE d.privilege_type = p.privilege_type)
+      )
+  ) AS runtime_table_boundary_valid
+\gset
+\if :runtime_table_boundary_valid
+\else
+  \warn 'ERROR: esdms_runtime has missing or unintended public table privileges.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'esdms_runtime table privilege verification failed'; END $abort$;
+\endif
+
+-- 4. public.pgmigrations must have zero effective runtime privileges.
+SELECT privilege_type,
+       has_table_privilege('esdms_runtime', 'public.pgmigrations', privilege_type) AS granted
+FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER'))
+  AS privileges(privilege_type)
+ORDER BY privilege_type;
+
+-- 5. RLS enabled on all 13 expected tables.
+SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname IN (
+    'departments', 'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items',
+    'gate_pass_number_counters', 'gate_passes', 'notification_outbox',
+    'permissions', 'pgmigrations', 'role_permissions', 'roles', 'sites', 'users'
+  )
+ORDER BY c.relname;
+
+SELECT count(*) = 13 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname IN (
+    'departments', 'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items',
+    'gate_pass_number_counters', 'gate_passes', 'notification_outbox',
+    'permissions', 'pgmigrations', 'role_permissions', 'roles', 'sites', 'users'
+  )
+\gset
+\if :all_expected_rls_enabled
+\else
+  \warn 'ERROR: RLS is not enabled on all 13 expected public tables.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'RLS verification failed'; END $abort$;
+\endif
+
+-- 6-7. Exactly one desired policy per application table; none on pgmigrations.
+SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
+FROM pg_policies
+WHERE schemaname = 'public'
+  AND policyname = 'esdms_runtime_access'
+ORDER BY tablename;
+
+WITH expected_tables(table_name) AS (
+  VALUES
+    ('departments'),
+    ('gate_pass_audit_log'),
+    ('gate_pass_files'),
+    ('gate_pass_items'),
+    ('gate_pass_number_counters'),
+    ('gate_passes'),
+    ('notification_outbox'),
+    ('permissions'),
+    ('role_permissions'),
+    ('roles'),
+    ('sites'),
+    ('users')
+)
+SELECT
+  (SELECT count(*) FROM pg_policies
+   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 12
+  AND NOT EXISTS (
+    SELECT 1
+    FROM expected_tables e
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM pg_policies p
+      WHERE p.schemaname = 'public'
+        AND p.tablename = e.table_name
+        AND p.policyname = 'esdms_runtime_access'
+        AND p.permissive = 'PERMISSIVE'
+        AND p.roles = ARRAY['esdms_runtime']::name[]
+        AND p.cmd = 'ALL'
+        AND p.qual = 'true'
+        AND p.with_check = 'true'
+    )
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'pgmigrations'
+      AND policyname = 'esdms_runtime_access'
+  ) AS runtime_policy_boundary_valid
+\gset
+\if :runtime_policy_boundary_valid
+\else
+  \warn 'ERROR: esdms_runtime_access policy verification failed.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'runtime RLS policy verification failed'; END $abort$;
+\endif
+
+-- 8-9. Supabase browser roles, when present, have zero effective privileges
+-- on public tables and sequences.
+WITH browser_roles AS (
+  SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')
+),
+public_relations AS (
+  SELECT c.oid
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+),
+table_privileges(privilege_type) AS (
+  VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')
+)
+SELECT r.rolname,
+       count(*) FILTER (WHERE has_table_privilege(r.rolname, t.oid, p.privilege_type)) AS effective_table_privileges
+FROM browser_roles r
+CROSS JOIN public_relations t
+CROSS JOIN table_privileges p
+GROUP BY r.rolname
+ORDER BY r.rolname;
+
+WITH browser_roles AS (
+  SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')
+),
+public_relations AS (
+  SELECT c.oid
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+),
+table_privileges(privilege_type) AS (
+  VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')
+)
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM browser_roles r
+  CROSS JOIN public_relations t
+  CROSS JOIN table_privileges p
+  WHERE has_table_privilege(r.rolname, t.oid, p.privilege_type)
+) AS browser_table_boundary_valid
+\gset
+\if :browser_table_boundary_valid
+\else
+  \warn 'ERROR: anon/authenticated retain effective privileges on public tables.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'browser-role table privilege verification failed'; END $abort$;
+\endif
+
+-- 10. Runtime and browser roles have no unintended public sequence access.
+WITH checked_roles AS (
+  SELECT rolname FROM pg_roles WHERE rolname IN ('esdms_runtime', 'anon', 'authenticated')
+),
+public_sequences AS (
+  SELECT c.oid
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind = 'S'
+),
+sequence_privileges(privilege_type) AS (
+  VALUES ('USAGE'), ('SELECT'), ('UPDATE')
+)
+SELECT r.rolname,
+       count(*) FILTER (WHERE has_sequence_privilege(r.rolname, s.oid, p.privilege_type)) AS effective_sequence_privileges
+FROM checked_roles r
+CROSS JOIN public_sequences s
+CROSS JOIN sequence_privileges p
+GROUP BY r.rolname
+ORDER BY r.rolname;
+
+WITH checked_roles AS (
+  SELECT rolname FROM pg_roles WHERE rolname IN ('esdms_runtime', 'anon', 'authenticated')
+),
+public_sequences AS (
+  SELECT c.oid
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind = 'S'
+),
+sequence_privileges(privilege_type) AS (
+  VALUES ('USAGE'), ('SELECT'), ('UPDATE')
+)
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM checked_roles r
+  CROSS JOIN public_sequences s
+  CROSS JOIN sequence_privileges p
+  WHERE has_sequence_privilege(r.rolname, s.oid, p.privilege_type)
+) AS sequence_boundary_valid
+\gset
+\if :sequence_boundary_valid
+\else
+  \warn 'ERROR: runtime or browser roles retain public sequence privileges.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'sequence privilege verification failed'; END $abort$;
+\endif
+
+-- No default ACL may silently grant future public tables/sequences to the
+-- runtime or browser roles. This also catches stale grants made by another
+-- object-owner role that this invocation could not revoke.
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM pg_default_acl d
+  JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+  JOIN pg_roles grantee ON grantee.oid = a.grantee
+  WHERE n.nspname = 'public'
+    AND d.defaclobjtype IN ('r', 'S')
+    AND grantee.rolname IN ('esdms_runtime', 'anon', 'authenticated')
+) AS default_privilege_boundary_valid
+\gset
+\if :default_privilege_boundary_valid
+\else
+  \warn 'ERROR: a default ACL still grants future public tables/sequences to runtime or browser roles.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'default privilege verification failed'; END $abort$;
+\endif
+
+COMMIT;
+\unset runtime_password
+
+-- After this succeeds, configure the API's DATABASE_URL with esdms_runtime.
+-- Keep MIGRATION_DATABASE_URL owner-only and use it solely for reviewed
+-- migrations and this provisioning script.

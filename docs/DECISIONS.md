@@ -1333,3 +1333,43 @@ never touched.
 ### Status
 
 Accepted.
+
+---
+
+## 2026-08-22 — Reproducible Supabase Runtime Database Boundary
+
+### Decision
+
+Added an irreversible security migration that enables RLS on all 13 current
+public tables and, when the Supabase roles exist, revokes table/sequence and
+applicable default privileges from `anon` and `authenticated`. Runtime-role
+creation and policies remain outside the migration so migrations do not depend
+on the environment-specific `esdms_runtime` login already existing.
+
+Reworked `scripts/provision-db-roles.sql` into an idempotent psql provisioning
+step. The required `psql --no-psqlrc` invocation prevents user startup files
+from running before the provisioning boundary, while script-level `\set ECHO
+none` occurs before `\getenv` reads `ESDMS_RUNTIME_PASSWORD`; psql's quoted
+variable form remains injection-safe for the `CREATE ROLE`/`ALTER ROLE`
+password. The script verifies that `esdms_runtime` is a safe LOGIN role instead
+of issuing the Supabase-incompatible role-attribute `ALTER`, removes the legacy
+all-table, sequence, and default grants, and explicitly grants DML on only the
+12 current application tables. It maintains one permissive
+`esdms_runtime_access` policy per application table while leaving
+`pgmigrations` RLS-enabled, unprivileged, and without a runtime policy.
+
+### Reason
+
+Supabase enables RLS but does not make the backend's database login usable by
+itself: the runtime login needs a deliberate policy and table-grant allowlist.
+Conversely, Supabase's browser-facing `anon`/`authenticated` roles must not
+become an alternate route around backend authentication, authorization, and
+site isolation. Automatic default grants also made every future module part of
+the runtime trust boundary without a module-specific review and exposed the
+migration-history table unnecessarily.
+
+### Status
+
+Accepted. The migration owner and running API credentials remain separate.
+Every future table requires an explicit reviewed grant and RLS provisioning
+update; production migration credentials must never be configured on the API.
