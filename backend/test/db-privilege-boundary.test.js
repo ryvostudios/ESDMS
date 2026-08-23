@@ -23,6 +23,47 @@ const APPLICATION_TABLES = [
 ];
 
 const ALL_TABLES = [...APPLICATION_TABLES, "pgmigrations"];
+
+// APPLICATION_TABLES/ALL_TABLES above intentionally stay pinned to exactly
+// what migration 1787401000000_database-runtime-security-boundary.js's own
+// source enables RLS on (see the first test below, which reads that file's
+// text) — that migration predates this table and must never be edited to
+// mention it. Everything that checks *live* database/provisioning-script
+// state instead (i.e. the current, cumulative boundary after every
+// migration, including 1787403000000_workforce-permission-foundation.js)
+// uses these two instead.
+const WORKFORCE_TABLES = [
+  "positions",
+  "employment_types",
+  "employees",
+  "employment_assignments",
+  "temporary_assignments",
+  "employee_profile_photos",
+  "employee_personal_details",
+  "employee_emergency_contacts",
+  "employee_profile_sections",
+  "employee_custom_fields",
+  "employee_custom_field_values",
+  "employee_document_types",
+  "employee_documents",
+  "employee_document_requests",
+  "employee_compensation_records",
+  "employee_contract_number_counters",
+  "employee_contracts",
+  "rotation_policies",
+  "employee_rotation_ledger",
+  "leave_types",
+  "leave_requests",
+  "employee_business_history",
+];
+
+const RUNTIME_APPLICATION_TABLES = [
+  ...APPLICATION_TABLES,
+  "user_permission_overrides",
+  "governance_audit_log",
+  ...WORKFORCE_TABLES,
+];
+const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];
 const TEST_SEQUENCE = "esdms_security_test_sequence";
 const TEST_OTHER_OWNER = "esdms_security_other_owner";
@@ -164,7 +205,7 @@ async function getFunctionExecution(functionName) {
 }
 
 async function cleanupRuntimeRole() {
-  for (const table of APPLICATION_TABLES) {
+  for (const table of RUNTIME_APPLICATION_TABLES) {
     await pool.query(`DROP POLICY IF EXISTS esdms_runtime_access ON public.${table}`);
   }
   await pool.query("DROP POLICY IF EXISTS esdms_runtime_access ON public.pgmigrations");
@@ -245,9 +286,9 @@ async function assertRuntimeRoleAbsentAndRlsIntact() {
      FROM pg_class c
      JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])`,
-    [ALL_TABLES],
+    [RUNTIME_ALL_TABLES],
   );
-  assert.equal(rls.rowCount, ALL_TABLES.length);
+  assert.equal(rls.rowCount, RUNTIME_ALL_TABLES.length);
   assert.ok(rls.rows.every((row) => row.relrowsecurity));
 }
 
@@ -351,7 +392,7 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
 
   const explicitGrant = sql.match(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE([\s\S]*?)TO esdms_runtime;/i)?.[1];
   assert.ok(explicitGrant, "expected one explicit runtime table grant");
-  for (const table of APPLICATION_TABLES) {
+  for (const table of RUNTIME_APPLICATION_TABLES) {
     assert.match(explicitGrant, new RegExp(`public\\.${table}\\b`));
   }
   assert.doesNotMatch(explicitGrant, /pgmigrations/);
@@ -412,10 +453,10 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
        GROUP BY table_name
        ORDER BY table_name`,
     );
-    assert.equal(directTablePrivileges.rowCount, APPLICATION_TABLES.length);
+    assert.equal(directTablePrivileges.rowCount, RUNTIME_APPLICATION_TABLES.length);
     assert.deepEqual(
       directTablePrivileges.rows.map((row) => row.table_name),
-      [...APPLICATION_TABLES].sort(),
+      [...RUNTIME_APPLICATION_TABLES].sort(),
     );
     for (const row of directTablePrivileges.rows) {
       assert.deepEqual(row.privileges, ["DELETE", "INSERT", "SELECT", "UPDATE"]);
@@ -436,9 +477,9 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
        JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
        ORDER BY c.relname`,
-      [ALL_TABLES],
+      [RUNTIME_ALL_TABLES],
     );
-    assert.equal(rls.rowCount, ALL_TABLES.length);
+    assert.equal(rls.rowCount, RUNTIME_ALL_TABLES.length);
     assert.ok(rls.rows.every((row) => row.relrowsecurity));
 
     const policies = await pool.query(
@@ -447,10 +488,10 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
        WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access'
        ORDER BY tablename`,
     );
-    assert.equal(policies.rowCount, APPLICATION_TABLES.length);
+    assert.equal(policies.rowCount, RUNTIME_APPLICATION_TABLES.length);
     assert.deepEqual(
       policies.rows.map((row) => row.tablename),
-      [...APPLICATION_TABLES].sort(),
+      [...RUNTIME_APPLICATION_TABLES].sort(),
     );
     assert.ok(
       policies.rows.every(

@@ -99,20 +99,44 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 
 -- The current schema uses UUIDs and an ordinary counter table, so the API
--- needs no sequence privileges. Exactly these 12 application tables receive
+-- needs no sequence privileges. Exactly these 36 application tables receive
 -- DML access; public.pgmigrations is deliberately excluded.
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.departments,
+  public.employee_business_history,
+  public.employee_compensation_records,
+  public.employee_contract_number_counters,
+  public.employee_contracts,
+  public.employee_custom_field_values,
+  public.employee_custom_fields,
+  public.employee_document_requests,
+  public.employee_document_types,
+  public.employee_documents,
+  public.employee_emergency_contacts,
+  public.employee_personal_details,
+  public.employee_profile_photos,
+  public.employee_profile_sections,
+  public.employee_rotation_ledger,
+  public.employees,
+  public.employment_assignments,
+  public.employment_types,
   public.gate_pass_audit_log,
   public.gate_pass_files,
   public.gate_pass_items,
   public.gate_pass_number_counters,
   public.gate_passes,
+  public.governance_audit_log,
+  public.leave_requests,
+  public.leave_types,
   public.notification_outbox,
   public.permissions,
+  public.positions,
   public.role_permissions,
   public.roles,
+  public.rotation_policies,
   public.sites,
+  public.temporary_assignments,
+  public.user_permission_overrides,
   public.users
 TO esdms_runtime;
 
@@ -172,17 +196,41 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- used: the migration owner must continue to run schema migrations, while the
 -- non-owner runtime login remains subject to policy enforcement.
 ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_business_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_compensation_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_contract_number_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_contracts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_custom_field_values ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_custom_fields ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_document_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_document_types ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_emergency_contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_personal_details ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_profile_photos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_profile_sections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_rotation_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employment_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employment_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_number_counters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_passes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.governance_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.leave_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.leave_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notification_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pgmigrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.positions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.rotation_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.temporary_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_permission_overrides ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 
 -- Converge each application table to exactly one known runtime policy. Drop
@@ -194,16 +242,40 @@ DECLARE
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'departments',
+    'employee_business_history',
+    'employee_compensation_records',
+    'employee_contract_number_counters',
+    'employee_contracts',
+    'employee_custom_field_values',
+    'employee_custom_fields',
+    'employee_document_requests',
+    'employee_document_types',
+    'employee_documents',
+    'employee_emergency_contacts',
+    'employee_personal_details',
+    'employee_profile_photos',
+    'employee_profile_sections',
+    'employee_rotation_ledger',
+    'employees',
+    'employment_assignments',
+    'employment_types',
     'gate_pass_audit_log',
     'gate_pass_files',
     'gate_pass_items',
     'gate_pass_number_counters',
     'gate_passes',
+    'governance_audit_log',
+    'leave_requests',
+    'leave_types',
     'notification_outbox',
     'permissions',
+    'positions',
     'role_permissions',
     'roles',
+    'rotation_policies',
     'sites',
+    'temporary_assignments',
+    'user_permission_overrides',
     'users'
   ]
   LOOP
@@ -263,16 +335,40 @@ WITH
 expected_tables(table_name) AS (
   VALUES
     ('departments'),
+    ('employee_business_history'),
+    ('employee_compensation_records'),
+    ('employee_contract_number_counters'),
+    ('employee_contracts'),
+    ('employee_custom_field_values'),
+    ('employee_custom_fields'),
+    ('employee_document_requests'),
+    ('employee_document_types'),
+    ('employee_documents'),
+    ('employee_emergency_contacts'),
+    ('employee_personal_details'),
+    ('employee_profile_photos'),
+    ('employee_profile_sections'),
+    ('employee_rotation_ledger'),
+    ('employees'),
+    ('employment_assignments'),
+    ('employment_types'),
     ('gate_pass_audit_log'),
     ('gate_pass_files'),
     ('gate_pass_items'),
     ('gate_pass_number_counters'),
     ('gate_passes'),
+    ('governance_audit_log'),
+    ('leave_requests'),
+    ('leave_types'),
     ('notification_outbox'),
     ('permissions'),
+    ('positions'),
     ('role_permissions'),
     ('roles'),
+    ('rotation_policies'),
     ('sites'),
+    ('temporary_assignments'),
+    ('user_permission_overrides'),
     ('users')
 ),
 dml_privileges(privilege_type) AS (
@@ -320,31 +416,45 @@ FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REF
   AS privileges(privilege_type)
 ORDER BY privilege_type;
 
--- 5. RLS enabled on all 13 expected tables.
+-- 5. RLS enabled on all 37 expected tables.
 SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relname IN (
-    'departments', 'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items',
-    'gate_pass_number_counters', 'gate_passes', 'notification_outbox',
-    'permissions', 'pgmigrations', 'role_permissions', 'roles', 'sites', 'users'
+        'departments', 'employee_business_history', 'employee_compensation_records', 'employee_contract_number_counters',
+    'employee_contracts', 'employee_custom_field_values', 'employee_custom_fields', 'employee_document_requests',
+    'employee_document_types', 'employee_documents', 'employee_emergency_contacts', 'employee_personal_details',
+    'employee_profile_photos', 'employee_profile_sections', 'employee_rotation_ledger', 'employees',
+    'employment_assignments', 'employment_types', 'gate_pass_audit_log', 'gate_pass_files',
+    'gate_pass_items', 'gate_pass_number_counters', 'gate_passes', 'governance_audit_log',
+    'leave_requests', 'leave_types', 'notification_outbox', 'permissions',
+    'pgmigrations', 'positions', 'role_permissions', 'roles',
+    'rotation_policies', 'sites', 'temporary_assignments', 'user_permission_overrides',
+    'users'
   )
 ORDER BY c.relname;
 
-SELECT count(*) = 13 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
+SELECT count(*) = 37 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relname IN (
-    'departments', 'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items',
-    'gate_pass_number_counters', 'gate_passes', 'notification_outbox',
-    'permissions', 'pgmigrations', 'role_permissions', 'roles', 'sites', 'users'
+        'departments', 'employee_business_history', 'employee_compensation_records', 'employee_contract_number_counters',
+    'employee_contracts', 'employee_custom_field_values', 'employee_custom_fields', 'employee_document_requests',
+    'employee_document_types', 'employee_documents', 'employee_emergency_contacts', 'employee_personal_details',
+    'employee_profile_photos', 'employee_profile_sections', 'employee_rotation_ledger', 'employees',
+    'employment_assignments', 'employment_types', 'gate_pass_audit_log', 'gate_pass_files',
+    'gate_pass_items', 'gate_pass_number_counters', 'gate_passes', 'governance_audit_log',
+    'leave_requests', 'leave_types', 'notification_outbox', 'permissions',
+    'pgmigrations', 'positions', 'role_permissions', 'roles',
+    'rotation_policies', 'sites', 'temporary_assignments', 'user_permission_overrides',
+    'users'
   )
 \gset
 \if :all_expected_rls_enabled
 \else
-  \warn 'ERROR: RLS is not enabled on all 13 expected public tables.'
+  \warn 'ERROR: RLS is not enabled on all 37 expected public tables.'
   DO $abort$ BEGIN RAISE EXCEPTION 'RLS verification failed'; END $abort$;
 \endif
 
@@ -358,21 +468,45 @@ ORDER BY tablename;
 WITH expected_tables(table_name) AS (
   VALUES
     ('departments'),
+    ('employee_business_history'),
+    ('employee_compensation_records'),
+    ('employee_contract_number_counters'),
+    ('employee_contracts'),
+    ('employee_custom_field_values'),
+    ('employee_custom_fields'),
+    ('employee_document_requests'),
+    ('employee_document_types'),
+    ('employee_documents'),
+    ('employee_emergency_contacts'),
+    ('employee_personal_details'),
+    ('employee_profile_photos'),
+    ('employee_profile_sections'),
+    ('employee_rotation_ledger'),
+    ('employees'),
+    ('employment_assignments'),
+    ('employment_types'),
     ('gate_pass_audit_log'),
     ('gate_pass_files'),
     ('gate_pass_items'),
     ('gate_pass_number_counters'),
     ('gate_passes'),
+    ('governance_audit_log'),
+    ('leave_requests'),
+    ('leave_types'),
     ('notification_outbox'),
     ('permissions'),
+    ('positions'),
     ('role_permissions'),
     ('roles'),
+    ('rotation_policies'),
     ('sites'),
+    ('temporary_assignments'),
+    ('user_permission_overrides'),
     ('users')
 )
 SELECT
   (SELECT count(*) FROM pg_policies
-   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 12
+   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 36
   AND NOT EXISTS (
     SELECT 1
     FROM expected_tables e

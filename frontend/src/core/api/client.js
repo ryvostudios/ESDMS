@@ -53,8 +53,14 @@ async function request(method, path, { body, isForm, suppressUnauthorizedHandlin
   return payload;
 }
 
-async function getBlob(path) {
-  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: "include" });
+async function blobRequest(method, path, body) {
+  const isForm = body instanceof FormData;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    credentials: "include",
+    headers: body && !isForm ? { "Content-Type": "application/json" } : {},
+    body: isForm ? body : body ? JSON.stringify(body) : undefined,
+  });
 
   if (!response.ok) {
     if (response.status === 401) {
@@ -78,5 +84,8 @@ export const apiClient = {
   get: (path, options) => request("GET", path, options),
   post: (path, body, options) => request("POST", path, { ...options, body }),
   patch: (path, body, options) => request("PATCH", path, { ...options, body }),
-  getBlob,
+  put: (path, body, options) => request("PUT", path, { ...options, body }),
+  del: (path, options) => request("DELETE", path, options),
+  getBlob: (path) => blobRequest("GET", path),
+  postBlob: (path, body) => blobRequest("POST", path, body),
 };

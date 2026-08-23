@@ -84,6 +84,10 @@ export async function seedUsers() {
   }
 
   return {
+    ceo: await insertUser("ceo@test.eset.local", "Test CEO", "CEO"),
+    upperManagement: await insertUser("um@test.eset.local", "Test Upper Management", "UPPER_MANAGEMENT"),
+    hr: await insertUser("hr@test.eset.local", "Test HR", "HR"),
+    employee: await insertUser("employee@test.eset.local", "Test Employee", "EMPLOYEE", { departmentId: departmentA }),
     admin: await insertUser("admin@test.eset.local", "Test Admin", "ADMIN"),
     siteManager: await insertUser("manager@test.eset.local", "Test Manager", "SITE_MANAGER"),
     teamLead: await insertUser("teamlead@test.eset.local", "Test Team Lead", "TEAM_LEAD", { departmentId: departmentA }),

@@ -63,6 +63,13 @@ export async function loginUser(email, password) {
 
   return {
     token,
+    // Same shape as auth.controller.js's /auth/me — the frontend must see
+    // an identical user object regardless of which endpoint produced it.
+    // Omitting mustChangePassword here (a real bug caught by a live
+    // browser smoke test, not the test suite — see docs/DECISIONS.md) let
+    // a freshly-onboarded Employee's very first page render with no
+    // opportunity to redirect to the forced password-change screen; the
+    // requirement only surfaced as an ordinary failed API call.
     user: {
       id: profile.id,
       email: profile.email,
@@ -70,6 +77,8 @@ export async function loginUser(email, password) {
       role: profile.role,
       departmentId: profile.department_id,
       siteId: profile.site_id,
+      employeeId: profile.employee_id,
+      mustChangePassword: profile.must_change_password,
       permissions: profile.permissions,
     },
   };

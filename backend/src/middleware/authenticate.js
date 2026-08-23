@@ -60,6 +60,12 @@ export async function authenticate(req, res, next) {
     role: user.role,
     departmentId: user.department_id,
     siteId: user.site_id,
+    // Nullable — an Employee record may exist with no login and a login may
+    // exist with no linked Employee (docs/DECISIONS.md). Workforce
+    // self-service routes resolve "my own record" from this, not from a
+    // request parameter.
+    employeeId: user.employee_id,
+    mustChangePassword: user.must_change_password,
     permissions: new Set(user.permissions),
   };
 

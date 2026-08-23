@@ -14,9 +14,13 @@ import config from "../../config/env.js";
 // Filename is entirely server-generated (random uuid), never derived from
 // a client-supplied filename — this is what prevents path traversal and
 // filename-based attacks, and it's identical regardless of which provider
-// actually stores the bytes.
-function generateStorageKey({ gatePassId, category, extension }) {
-  return path.posix.join("gate-pass", gatePassId, category, `${crypto.randomUUID()}.${extension}`);
+// actually stores the bytes. `namespace` defaults to "gate-pass" so every
+// existing Gate Pass caller (which never passes it) is byte-for-byte
+// unaffected; Workforce callers pass namespace: "workforce" so the two
+// modules' private files don't share a top-level folder — see
+// docs/DECISIONS.md.
+function generateStorageKey({ gatePassId, category, extension, namespace = "gate-pass" }) {
+  return path.posix.join(namespace, gatePassId, category, `${crypto.randomUUID()}.${extension}`);
 }
 
 function assertSafeLocalKey(storageKey) {
@@ -36,6 +40,10 @@ function assertSafeLocalKey(storageKey) {
 // deploy or restart, which is unacceptable for Gate Pass evidence/PDFs
 // that must persist for audit purposes.
 export class LocalStorageProvider {
+  verifyChecksum(buffer, expectedSha256) {
+    return verifyChecksum(buffer, expectedSha256);
+  }
+
   async save(buffer, params) {
     const storageKey = generateStorageKey(params);
     const absolutePath = assertSafeLocalKey(storageKey);
@@ -108,6 +116,10 @@ export class SupabaseStorageProvider {
   #bucket;
   #headers;
   #timeoutMs;
+
+  verifyChecksum(buffer, expectedSha256) {
+    return verifyChecksum(buffer, expectedSha256);
+  }
 
   constructor({ url, serviceRoleKey, bucket, timeoutMs }) {
     let parsedUrl;
@@ -214,6 +226,13 @@ export class SupabaseStorageProvider {
       console.error(`Failed to clean up orphaned file ${storageKey}:`, error.message);
     }
   }
+}
+
+export function verifyChecksum(buffer, expectedSha256) {
+  if (!/^[a-f0-9]{64}$/i.test(expectedSha256 || "")) return false;
+  const actual = Buffer.from(crypto.createHash("sha256").update(buffer).digest("hex"), "hex");
+  const expected = Buffer.from(expectedSha256, "hex");
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
 // Takes an explicit config so tests can exercise the selection logic

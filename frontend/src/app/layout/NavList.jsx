@@ -8,7 +8,9 @@ export function NavList({ onNavigate }) {
 
   return (
     <nav className={styles.nav} aria-label="Primary">
-      {NAV_ITEMS.filter(({ permission }) => !permission || hasPermission(...permission)).map(
+      {NAV_ITEMS.filter(({ permission, allPermissions }) =>
+        (!permission || hasPermission(...permission)) && (!allPermissions || allPermissions.every((code) => hasPermission(code))))
+        .map(
         ({ label, to, icon: Icon, end }) => (
           <NavLink
             key={to}

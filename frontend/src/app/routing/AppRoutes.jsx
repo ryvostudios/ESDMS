@@ -11,6 +11,16 @@ import { ApprovalQueuePage } from "../../modules/gate-pass/pages/ApprovalQueuePa
 import { GuardDashboardPage } from "../../modules/guard/pages/GuardDashboardPage.jsx";
 import { GuardVerifyPage } from "../../modules/guard/pages/GuardVerifyPage.jsx";
 import { GuardActionPage } from "../../modules/guard/pages/GuardActionPage.jsx";
+import { ChangePasswordPage } from "../../modules/auth/pages/ChangePasswordPage.jsx";
+import { MyWorkforcePage } from "../../modules/workforce/pages/MyWorkforcePage.jsx";
+import { EmployeesListPage } from "../../modules/workforce/pages/EmployeesListPage.jsx";
+import { AddEmployeePage } from "../../modules/workforce/pages/AddEmployeePage.jsx";
+import { EmployeeDetailPage } from "../../modules/workforce/pages/EmployeeDetailPage.jsx";
+import { WorkforceConfigPage } from "../../modules/workforce/pages/WorkforceConfigPage.jsx";
+import { WorkforceDashboardPage } from "../../modules/workforce/pages/WorkforceDashboardPage.jsx";
+import { WorkforceReportsPage } from "../../modules/workforce/pages/WorkforceReportsPage.jsx";
+import { WorkforceOperationsPage } from "../../modules/workforce/pages/WorkforceOperationsPage.jsx";
+import { GovernancePage } from "../../modules/workforce/pages/GovernancePage.jsx";
 
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
@@ -26,6 +36,52 @@ export function AppRoutes() {
         }
       >
         <Route path="/" element={<HomeRoute />} />
+        <Route path="/change-password" element={<ChangePasswordPage />} />
+        <Route path="/workforce" element={<PermissionRoute permissions={["employees.view"]}><WorkforceDashboardPage /></PermissionRoute>} />
+
+        <Route
+          path="/workforce/me"
+          element={
+            <PermissionRoute permissions={["profile.self.view"]}>
+              <MyWorkforcePage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/workforce/employees"
+          element={
+            <PermissionRoute permissions={["employees.view"]}>
+              <EmployeesListPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/workforce/employees/new"
+          element={
+            <PermissionRoute permissions={["employees.create"]}>
+              <AddEmployeePage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/workforce/employees/:id"
+          element={
+            <PermissionRoute permissions={["employees.view"]}>
+              <EmployeeDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/workforce/config"
+          element={
+            <PermissionRoute permissions={["workforce.configuration.manage", "departments.manage", "positions.manage"]}>
+              <WorkforceConfigPage />
+            </PermissionRoute>
+          }
+        />
+        <Route path="/workforce/operations" element={<PermissionRoute permissions={["leave.approve", "employee_documents.view", "rotation.adjust"]}><WorkforceOperationsPage /></PermissionRoute>} />
+        <Route path="/workforce/reports" element={<PermissionRoute permissions={["workforce.reports.view", "workforce.export"]} requireAll><WorkforceReportsPage /></PermissionRoute>} />
+        <Route path="/governance" element={<PermissionRoute permissions={["users.view"]}><GovernancePage /></PermissionRoute>} />
 
         <Route
           path="/gate-passes"

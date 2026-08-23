@@ -12,7 +12,7 @@ export default defineConfig({
       manifest: {
         name: 'E-Set Digital Management System',
         short_name: 'E-Set DMS',
-        description: 'Gate Pass operations for E-Set sites.',
+        description: 'Secure Gate Pass and Workforce operations for E-Set sites.',
         theme_color: '#0f172a',
         background_color: '#f4f5f7',
         display: 'standalone',
@@ -29,8 +29,8 @@ export default defineConfig({
         // Precached, cache-first: only the built app shell (HTML/JS/CSS/
         // icons) — static, non-sensitive, versioned per build.
         globPatterns: ['**/*.{js,css,html,svg,png}'],
-        // Everything under /api/ is Gate Pass data, auth state, or
-        // audit/authorization information — never cached, always live.
+        // Everything under /api/ is private operational data, auth state,
+        // or audit/authorization information — never cached, always live.
         // NetworkOnly, not NetworkFirst, so a stale response is never
         // served even as a fallback.
         runtimeCaching: [

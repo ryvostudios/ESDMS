@@ -215,13 +215,92 @@ Current status:
 
 ## 10. Workforce / Attendance
 
-Workforce and attendance functionality may be introduced as a future module according to separately approved business requirements.
+Gate Pass is now a stable, protected existing module. Workforce/Employee
+Management is the current active development target, per explicit
+instruction, with Inventory deferred until after it.
+
+Planned governance model: CEO (highest application authority, terminal-only
+bootstrap, no self-promotion by anyone else) → Upper Management (broad
+access, individually restrictable by CEO) → HR (employee administration,
+not automatically salary/financial access) → Employee (self-service
+profile). Effective permissions = role permissions + individual grants −
+individual denials, with explicit denial always winning.
 
 It must not be coupled directly into Gate Pass internals.
 
 Current status:
 
-**Planned — not implemented**
+**Core module implemented, security-hardened; not yet deployed.** Built on
+the governance foundation (`CEO`/`UPPER_MANAGEMENT`/`HR`/`EMPLOYEE` roles,
+effective permissions, `governance_audit_log`) — see `docs/DECISIONS.md`
+("Workforce Module Begun...", "Governance / User-Management Foundation",
+"Workforce / Employee Management Module"). Implemented:
+
+- Employee Master (`src/modules/employees/`) — independent of login
+  (`user_id` nullable/unique), Employee ID assigned by HR, duplicate
+  detection (warns, not hard-blocks), status lifecycle with linked-login
+  coordination, cycle-checked reporting-manager chain.
+- Departments (extended, not duplicated — same table Gate Pass already
+  uses), Positions, Employment Types — all archive-not-delete, in-use
+  guards before archiving.
+- Effective-dated employment assignments (site/department/position/
+  employment-type/rotation-policy/reporting-manager) — transfers create new
+  history, never overwrite; a same-date correction upserts in place.
+- Onboarding: HR-created logins are role-`EMPLOYEE` by construction (no
+  role parameter exists in that code path at all); forced first-login
+  password change (`must_change_password`, enforced in
+  `requirePermission` for permission-gated routes and a standalone
+  `requirePasswordChanged` middleware for self-service routes); HR-reset
+  invalidates the prior session.
+- Self-service profile (`src/modules/profile/`) — personal details behind
+  an explicit field allowlist, emergency contacts, HR-configurable profile
+  sections/custom fields (`src/modules/workforce-config/`, reserved-key
+  denylist, field-type immutable once a value exists), profile photo
+  (versioned, signature-validated), profile-completion percentage.
+- Employee documents (`src/modules/documents/`) — versioned (never
+  overwritten), configurable document types, verification workflow,
+  expiry, document-requests as a pending action feeding in-app
+  notifications.
+- Compensation (`src/modules/compensation/`) — confidential, effective-dated
+  ledger; self-viewable without special permission, never self-changeable
+  by any actor including CEO; never overwritten.
+- Employment contracts (`src/modules/contracts/`) — DRAFT editable,
+  everything else DB-trigger-immutable (content and delete), including
+  against CEO and a direct SQL session; amendments reference a finalized
+  original; contract access permissions are separate from ordinary HR
+  access.
+- Rotation (`src/modules/rotation/`) — configurable policies, signed-ledger
+  balance, no auto-expiry, manual adjustments audited.
+- Leave (`src/modules/leave/`) — configurable types, explicit
+  submit/approve/reject/cancel state transitions only, no self-decision
+  even with `leave.approve` granted.
+- CEO-only business-history logical removal, with password re-confirmation
+  and a protected forensic audit trail (`governance_audit_log`, widened
+  rather than duplicated).
+- Transactional Employee XLSX import: a scoped template, ZIP-expansion/file/
+  row limits, formula rejection, complete preview validation, signed
+  actor-and-file-bound confirmation, duplicate warnings, all-or-nothing
+  writes, and protected audit.
+- Nineteen practical XLSX reports (`src/modules/reports/`) with independent
+  domain permission gates, site scoping, formula-injection–safe cells,
+  confidential compensation/contract variants, and protected audit.
+- Bounded streaming ZIP export containing `Data.xlsx`,
+  `Documents_Index.xlsx`, authorized latest documents/profile photos and,
+  only with separate contract permissions, finalized contracts. ZIP paths
+  and filenames are server-generated; each stored file is checksum-verified.
+- Functional Workforce dashboard, employee directory/detail/assignment,
+  HR configuration and operations queues, reports/import/export, CEO/UM
+  governance, forced-password-change, and Employee self-service for profile,
+  photo, custom fields, emergency contacts, documents, leave, rotation,
+  finalized contracts, and own compensation.
+
+Deliberately deferred: advanced temporary/short-term assignment scheduling
+(schema only), probation tracking, rehire/employment-period modeling,
+Attendance integration, payroll/budget, a general correction-request
+workflow beyond document requests, saved report/table preferences,
+background export jobs beyond the explicitly bounded synchronous V1, and
+cross-module search. Inventory / Procurement remains a separate future
+module.
 
 ---
 
@@ -299,12 +378,16 @@ Gate Pass Stabilization
         ↓
 Security / Regression Review
         ↓
+Workforce / Employee Management
+        ↓
 Inventory
         ↓
 Additional Modules
 ```
 
-This sequence may change only through an explicit documented project decision.
+This sequence may change only through an explicit documented project
+decision. Workforce was inserted ahead of Inventory on 2026-08-23 — see
+`docs/DECISIONS.md`.
 
 ---
 
@@ -324,7 +407,7 @@ This sequence may change only through an explicit documented project decision.
 | Fleet | Not started |
 | Maintenance | Not started |
 | HSE | Not started |
-| Workforce / Attendance | Not started |
+| Workforce / Employee Management | Core module implemented, security-hardened; not yet deployed. Attendance itself remains out of scope. |
 
 See `docs/DECISIONS.md` for the specific decisions behind the Gate Pass
 implementation and its subsequent security fix passes.

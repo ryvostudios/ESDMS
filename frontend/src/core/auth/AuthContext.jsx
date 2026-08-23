@@ -57,9 +57,17 @@ export function AuthProvider({ children }) {
     [user],
   );
 
+  // Re-fetches /auth/me without a full page reload — used after an action
+  // that changes the current session's own profile server-side but not
+  // its cookie (e.g. change-password clearing mustChangePassword).
+  const refreshUser = useCallback(async () => {
+    const response = await apiClient.get("/auth/me", { suppressUnauthorizedHandling: true });
+    setUser(response.data.user);
+  }, []);
+
   const value = useMemo(
-    () => ({ user, status, login, logout, hasPermission }),
-    [user, status, login, logout, hasPermission],
+    () => ({ user, status, login, logout, hasPermission, refreshUser }),
+    [user, status, login, logout, hasPermission, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

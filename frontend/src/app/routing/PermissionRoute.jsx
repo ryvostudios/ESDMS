@@ -5,7 +5,8 @@ import { useAuth } from "../../core/auth/AuthContext.jsx";
 // for an action they don't hold is redirected, not shown a broken page.
 // The backend independently enforces the same permission on every request
 // regardless of what the frontend does here.
-export function PermissionRoute({ permissions, children }) {
+export function PermissionRoute({ permissions, requireAll = false, children }) {
   const { hasPermission } = useAuth();
-  return hasPermission(...permissions) ? children : <Navigate to="/" replace />;
+  const allowed = requireAll ? permissions.every((permission) => hasPermission(permission)) : hasPermission(...permissions);
+  return allowed ? children : <Navigate to="/" replace />;
 }

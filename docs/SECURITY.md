@@ -229,6 +229,59 @@ Use centralized authorization mechanisms where practical.
 
 Frontend permission checks exist for user experience only.
 
+### 6.1 Governance / User-Management Authorization
+
+`src/modules/users/` (routes gated by `requirePermission`, e.g. `users.create`,
+`users.update`, `users.activate`, `users.deactivate`, `permission_overrides.view`,
+`permission_overrides.manage`) is the CEO/Upper-Management/HR governance layer
+described in `docs/DECISIONS.md`. All CEO-protection and self-escalation
+invariants are centralized in one place,
+`src/modules/users/users.authorization.js`'s `guardGovernanceTarget` /
+`guardUmCreateAuthority`, rather than re-derived per endpoint:
+
+- **CEO accounts cannot be modified through this API** — by any actor,
+  including another CEO — for role change, activation/deactivation, or
+  permission overrides. CEO succession/management is deliberately out of
+  scope for this increment; only `scripts/create-ceo-user.js` (terminal
+  bootstrap) creates one, and `CEO` is excluded from the API's assignable-role
+  enum entirely, so it is rejected at input validation before any service
+  logic runs.
+- **No actor can act on their own account** through any governance mutation
+  endpoint (role change, activate/deactivate, permission grant/deny/remove) —
+  closes self-escalation via a crafted payload and accidental self-lockout in
+  one rule.
+- **`UPPER_MANAGEMENT` as a role never implies UM authority.** Creating a user
+  with that role, or changing a user's role to/from it, or touching an
+  existing Upper Management account's role/active-state/permission overrides,
+  additionally requires the specific `users.create_um` / `users.manage_um`
+  permission — which only `CEO` holds by default (see the
+  `governance-foundation` migration's seed data). A CEO can later delegate
+  either to a specific UM member via a permission override; that delegation
+  does not propagate to other UM members.
+- A blocked attempt against any of the above is audited as
+  `PRIVILEGE_ESCALATION_ATTEMPT` in `governance_audit_log` **before** the
+  `403` is returned — a denied privileged request is never invisible.
+
+Effective permissions (`role permissions + individual grants - individual
+denials`, explicit denial always winning) are computed once, in
+`getUserProfileById` (§8.2's `user_permission_overrides` table), and reused
+unchanged by both `authenticate.js` (every request) and the governance
+endpoints' own permission-overview response — there is no second,
+potentially-diverging implementation of the rule.
+
+**No session_version bump on role/permission/deactivation change.**
+`authenticate.js` already calls `getUserProfileById` fresh on every request —
+nothing about a user's role, permissions, or active state is cached in the
+JWT (the `role` claim `auth.service.js` signs into the token is never read
+back by `authenticate.js`; only `sub` and `sv` are). A role change, a
+permission override, or a deactivation is therefore already enforced on the
+very next request under the *same* still-valid session cookie — no re-login
+required, and no window where a stale privilege set continues to work. This
+is stronger than a `session_version` bump would provide (which would only
+force a fresh login rather than fixing the current session's next request),
+so none of the three trigger one; see `test/governance.test.js`'s
+"reflected on the next request" tests and `docs/DECISIONS.md`.
+
 ---
 
 ## 7. Record-Level Authorization
@@ -264,15 +317,30 @@ The application must never connect to its production database over an unencrypte
 The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
 
 - `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
-- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 12 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
+- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 36 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
 
 The follow-up migration `1787402000000_public-function-execution-boundary.js` revokes `EXECUTE` on current public functions from `PUBLIC` and the browser roles, and removes both global and public-schema function defaults belonging to the migration owner. PostgreSQL trigger execution does not require the table caller to hold direct `EXECUTE` on the trigger function, so the API runtime receives no direct function grant. Future functions created by the migration owner therefore do not become publicly/browser executable by default.
 
+The migration `1787403000000_workforce-permission-foundation.js` (Workforce module foundation — see the Workforce entry in `docs/DECISIONS.md`) adds a 14th public table, `user_permission_overrides`, and enables RLS on it directly in the same migration rather than deferring that to a later pass. `scripts/provision-db-roles.sql` grants it to `esdms_runtime` and converges the same `esdms_runtime_access` policy on it as every other application table.
+
+The migration `1787404000000_governance-foundation.js` (governance/user-management foundation — see the corresponding `docs/DECISIONS.md` entry) adds a 15th public table, `governance_audit_log` — an append-only audit trail (same `forbid_update_delete()` trigger `gate_pass_audit_log` already uses) for user creation, role changes, activation/deactivation, permission grants/denials/removals, and blocked privilege-escalation attempts. RLS and the runtime grant/policy follow the same pattern as every prior table.
+
+The migration `1787405000000_workforce-schema-foundation.js` (Workforce/Employee Management — see `docs/DECISIONS.md`) adds 22 more public tables (`positions`, `employment_types`, `employees`, `employment_assignments`, `temporary_assignments`, `employee_profile_photos`, `employee_personal_details`, `employee_emergency_contacts`, `employee_profile_sections`, `employee_custom_fields`, `employee_custom_field_values`, `employee_document_types`, `employee_documents`, `employee_document_requests`, `employee_compensation_records`, `employee_contract_number_counters`, `employee_contracts`, `rotation_policies`, `employee_rotation_ledger`, `leave_types`, `leave_requests`, `employee_business_history`), bringing the total to 36 (37 with `pgmigrations`). Every one gets RLS enabled in the same migration and the same runtime grant/policy in `scripts/provision-db-roles.sql`. Two of them carry additional DB-level protection beyond RLS:
+
+- `employee_contracts` — a `BEFORE UPDATE` trigger (`employee_contracts_enforce_immutability`) rejects every change to a non-`DRAFT` row except the specific forward lifecycle status transitions (`CURRENT` → `SUPERSEDED`/`EXPIRED`/`TERMINATED`). Both effective dates are original terms and are immutable. A `BEFORE DELETE` trigger rejects deleting any row once it has left `DRAFT`. This is enforced for every actor, including CEO and direct SQL; download/finalization also re-hash stored bytes and compare SHA-256.
+- `employee_compensation_records` — `BEFORE UPDATE OR DELETE` uses the append-only guard. Salary changes are new effective-dated records even if application code or a direct runtime query attempts an overwrite.
+- `employee_documents` and `employee_profile_photos` — stored file identity/version/checksum columns are DB-immutable. Document verification fields remain the only permitted document update, and all download/export paths verify SHA-256 before serving bytes.
+- `employee_business_history` — a `BEFORE UPDATE` trigger permits changing only the four logical-removal columns (`is_removed`, `removed_by_user_id`, `removed_reason`, `removed_at`); any other column change, or any `DELETE`, is rejected. CEO's history-removal capability is therefore a controlled, logged state change, never a real delete.
+
+`governance_audit_log` (§6.1) was also widened (migrations `1787406000000_workforce-protected-audit.js` and `1787408000000_workforce-release-hardening.js`) with Workforce target columns and action codes including report export, bulk ZIP export, and completed XLSX import. The release-hardening migration adds no table: the boundary remains 36 application tables (37 including owner-only `pgmigrations`).
+
+The Workforce trigger functions (`employee_contracts_enforce_immutability`, `employee_contracts_forbid_finalized_delete`, `employee_business_history_guard`, and `employee_documents_guard_update`) are ordinary `LANGUAGE plpgsql` functions with no `SECURITY DEFINER` (same as the existing `forbid_update_delete()`/`forbid_delete()`) and an explicit `SET search_path = pg_catalog, public`. They receive no direct `EXECUTE` grant to application/browser roles and are invoked only through their table triggers.
+
 PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.
 
-`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 12-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 36-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
 
 ```sh
 read -rs ESDMS_RUNTIME_PASSWORD
@@ -314,9 +382,30 @@ Every new module/table requires a reviewed forward migration plus an explicit up
 
 ---
 
-## 12. Initial Admin Provisioning
+## 12. Initial Admin / CEO Provisioning
 
-There is no self-registration endpoint and no default/hardcoded admin account shipped with the system — a fresh database has zero users.
+There is no self-registration endpoint and no default/hardcoded admin or CEO account shipped with the system — a fresh database has zero users.
+
+### 12.1 CEO
+
+`scripts/create-ceo-user.js` (`npm run user:create-ceo`) creates a CEO
+account the same way `create-admin-user.js` creates the first ADMIN — same
+terminal-only bootstrap, same secure input handling (both now share
+`scripts/lib/bootstrap-user.js`). Env vars are `CEO_EMAIL`, `CEO_FULL_NAME`,
+`CEO_PASSWORD` (or piped via stdin, preferred — same procedure as §12.2 with
+`CEO_` in place of `ADMIN_`), and `CEO_SITE_CODE` (default `MAIN`).
+
+There is no API path that creates a CEO account — `CEO` is excluded entirely
+from the assignable-role enum in `src/modules/users/users.validation.js`, so
+a request naming it as a target role is rejected at input validation before
+any service logic runs (see §6.1). The schema deliberately does not enforce
+a singleton CEO: running the script again with a different email while a CEO
+already exists succeeds and prints an explicit "N active CEO account(s)
+already exist" note rather than silently creating a redundant one with no
+visible trace. Running it again with the **same** email is still rejected,
+identically to the admin script.
+
+### 12.2 ADMIN
 
 The first ADMIN account for a new deployment is created with:
 
@@ -341,4 +430,119 @@ The script (`scripts/create-admin-user.js`) requires migrations to have already 
    ```
    (An `ADMIN_PASSWORD` env var is still supported and is fine when your platform's own env var injection is itself secret-safe — the risk is specifically typing the value inline on a command line.)
 
-There is currently no in-app user-management UI/API for creating additional users of any role — every user account (not just the first admin) is provisioned server-side for now. This is a known gap for a real multi-user rollout, tracked as future work, not a security control to route around by adding a public registration endpoint.
+### 12.3 Every Other Role
+
+Every account other than the first ADMIN and CEO is now created through the
+governance API (`src/modules/users/`, §6.1) rather than a terminal script —
+`POST /api/v1/users`, permission-gated (`users.create`, plus `users.create_um`
+for the Upper Management role specifically), never a public/self-service
+endpoint. `CEO` itself remains excluded from that API entirely (§12.1).
+
+An ordinary `EMPLOYEE` login is a further-narrowed case of this: HR
+provisions it through `POST /api/v1/employees/:id/login`
+(`src/modules/employees/employees.service.js`'s `createLoginForEmployee`),
+which never accepts a role parameter from the caller at all — the inserted
+role is always `EMPLOYEE` in the SQL itself, so no permission mistake or
+payload manipulation can produce a privileged account through that path.
+It sets `must_change_password = true` and returns a one-time temporary
+credential in the response body only — never logged, never retrievable
+again. `POST /api/v1/employees/:id/login/reset` (`employees.account.reset`)
+issues a fresh one-time credential the same way and additionally bumps
+`session_version`, immediately invalidating whatever session the prior
+credential may still have had open (§5.1) — the one place in this codebase
+a credential-adjacent action deliberately does force that, since the goal
+is explicitly to kill the old credential's access, not merely gate the next
+privileged action.
+
+---
+
+## 13. Workforce Authorization Model
+
+The migration-owned defaults are deliberately conservative and are the
+only role-level defaults: CEO receives all 41 Workforce permissions plus
+all nine governance permissions; HR receives 26 operational permissions
+(Employee CRUD/status/assignment/onboarding/import, visible documents and
+bulk export, configuration, reports/export, rotation, leave approval, and
+self profile); Upper Management receives only seven read/decision
+permissions (`employees.view`, report view, rotation view, leave approval,
+document metadata view, and self profile view/edit); Employee receives only
+the four self-service permissions (profile view/edit and leave create/view).
+Identity-bound self routes additionally provide the documented own-record
+surface (for example finalized contracts and own compensation) without
+granting any cross-employee permission.
+Contract and compensation administration/export, cross-site scope, and
+business-history removal are not HR or UM defaults. Existing Gate Pass roles
+receive zero Workforce permissions. Per-user GRANT/DENY can change these
+effective sets, with DENY always winning as described in §6.1.
+
+- **Self record ownership is identity-based; profile capabilities are still permission-based.**
+  `src/modules/workforce/workforce.authorization.js`'s `isSelf`/
+  `assertEmployeeViewable` compare the authenticated request's own
+  `req.user.employeeId` (resolved server-side from `employees.user_id` via
+  the same `getUserProfileById` query `authenticate.js` already runs on
+  every request — never a client-supplied id) against the record being
+  accessed. An `EMPLOYEE` role holding zero `employees.*` permissions still
+  reaches their own basic Employee record through this path; profile read
+  and edit additionally require the effective `profile.self.view` and
+  `profile.self.edit` permissions, so an individual CEO `DENY` takes effect
+  on the next request. Every other actor needs the
+  specific permission plus site scope. Every Workforce sub-resource
+  (profile, documents, compensation, contracts, rotation, leave, history)
+  reuses this same check via `employees.service.js`'s `getEmployee` rather
+  than re-deriving it.
+- **`mustChangePassword` is enforced twice, deliberately.**
+  `requirePermission` (§6) rejects any permission-gated request from such a
+  user; `requirePasswordChanged` (`src/shared/authorization/require-password-
+  changed.js`), applied via `router.use` on every Workforce router, covers
+  the self-service routes that have no permission check to hook into (e.g.
+  `/me/profile`). Neither ever affects a pre-existing Gate Pass account —
+  the flag defaults `false` and only Workforce onboarding/reset ever set it
+  `true`.
+- **Compensation**: self-viewable with no special permission (an employee
+  seeing their own salary is ordinary, not a confidentiality concern);
+  every other viewer needs `compensation.view`/`compensation.history`. No
+  actor — including CEO — may record their own compensation change
+  (`compensation.service.js`); attempting to is rejected before any query
+  runs. Compensation records are insert-only both in the service and by a
+  DB `BEFORE UPDATE OR DELETE` trigger. The amount is never written into
+  `employee_business_history` or `governance_audit_log` metadata, and a
+  report/export never fetches compensation at all (not just hides it)
+  unless the requester holds `compensation.export` — see
+  `test/workforce-reports.test.js`.
+- **Contracts** are the one record type immutable even against CEO — see
+  §8.2's description of `employee_contracts_enforce_immutability` and the
+  finalized-delete trigger. Contract permissions
+  (`contract.view/create/edit_draft/finalize/download/amend`) are granted
+  to nobody by default except CEO; delegating one (e.g. `contract.create`
+  to HR) does not imply the others — proven in
+  `test/workforce-compensation-contracts.test.js`. An employee's self
+  access to contracts is view/download-only and excludes `DRAFT` entirely
+  (nothing has been agreed yet).
+- **Excel exports** go through `src/shared/reports/excel-safety.js`'s
+  `sanitizeCell` (OWASP formula-injection mitigation: a string cell
+  starting with `=`, `+`, `-`, `@`, tab, or CR is quote-prefixed before
+  being written) and `safeExportFilename` (server-generated, never
+  user-input-derived). Every export is logged to `governance_audit_log`
+  (`WORKFORCE_EXPORT_GENERATED`) with a record count and scope summary,
+  never the underlying sensitive values.
+- **XLSX import** accepts the exact server template only, rejects formula
+  cells, bounds compressed bytes, declared ZIP expansion, entries, sheets,
+  and rows, validates every reference and duplicate before mutation, and
+  requires a short-lived HMAC confirmation bound to the actor and exact
+  workbook. Confirm reparses/revalidates and writes all rows in one
+  transaction. The import schema has no login, role, salary, compensation,
+  contract, or permission columns.
+- **Bulk ZIP export** requires `employees.view`, `workforce.export`,
+  `employee_documents.bulk_export`, and `employee_documents.download`, then
+  applies site and file visibility again. Contracts require their separate
+  view/download permissions. It caps employees/files/declared bytes,
+  streams the archive, verifies each checksum, and uses only generated path
+  components; original client filenames never become ZIP paths.
+- **Custom fields cannot bypass a protected concept.** Reserved field-key
+  concepts (`salary`, `compensation`, `pay`, `payroll`, `wage`, `contract`,
+  `password`, `role`, `permission`, `ceo`, `token`, `session`, `cnic`) are
+  rejected in both the field key and human label at
+  validation (`src/modules/workforce-config/workforce-config.validation.js`).
+  This is defense in depth — the real guarantee is structural: custom-field
+  values live in their own table with no code path into salary, contract,
+  or permission logic at all.

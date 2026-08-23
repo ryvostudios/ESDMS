@@ -1407,3 +1407,395 @@ semantics.
 Accepted. Browser authorization continues to flow exclusively through the
 ESDMS backend; `anon` and `authenticated` receive no direct ESDMS table,
 sequence, or function access.
+
+---
+
+## 2026-08-23 — Workforce Module Begun; Governance Roles Reuse `roles`, Not a New Column
+
+### Decision
+
+Gate Pass is now treated as a stable, protected existing ESDMS module; new
+work targets the next business module, Workforce/Employee Management. First
+foundation piece: four new application-authority roles — `CEO`,
+`UPPER_MANAGEMENT`, `HR`, `EMPLOYEE` — inserted into the existing `roles`
+table (migration `1787403000000_workforce-permission-foundation.js`), and a
+new `user_permission_overrides` table giving per-user `GRANT`/`DENY` on top
+of `role_permissions`. `getUserProfileById`
+(`src/shared/users/user-profile.repository.js`) now computes "effective
+permissions = role permissions + individual grants − individual denials" via
+a `LEFT JOIN LATERAL` instead of the old plain `role_permissions` join —
+provably unchanged for every existing user, since the override table starts
+empty (see `test/effective-permissions.test.js`).
+
+"Authority class" (CEO / Upper Management / HR / Employee) reuses the
+existing `roles` table rather than adding a new `authority_class` column
+somewhere else. A person's organizational title (Site Manager, CFO, General
+Manager, ...) is a separate, not-yet-built concept — a future `positions`
+table attached to the Employee record — independent of which `roles` row
+their login account carries. This keeps "position ≠ application authority"
+(the governance requirement) without inventing a second parallel
+role-like concept before Employee Master exists to hang positions off of.
+
+No permissions were granted to any of the four new roles in this migration,
+and no API/UI exists yet to write `user_permission_overrides` rows — a user
+in one of these roles can log in but holds zero permissions until a later,
+separately reviewed change adds both. CEO self-protection (no one but CEO
+can alter CEO, can't lock out the last CEO, etc.) is deferred to whenever
+the actual user-management API is built; it isn't a schema concern.
+
+This migration also adds the new table to `scripts/provision-db-roles.sql`'s
+runtime grant/RLS-policy allowlist and to `test/db-privilege-boundary.test.js`
+(as a new `RUNTIME_*` constant, kept separate from the existing
+`APPLICATION_TABLES`/`ALL_TABLES` used by the test that parses
+`1787401000000_database-runtime-security-boundary.js`'s own source text —
+that migration predates this table and must not be edited to mention it) —
+see `docs/SECURITY.md` §8.2.
+
+### Reason
+
+Every governance requirement in the Workforce spec (CEO overriding a role
+grant with an explicit denial, HR not automatically inheriting salary
+access, delegated history-correction authority) reduces to the same
+"role ± individual override" primitive. Building that primitive first, as
+its own small and independently regression-tested change, means every
+subsequent Workforce piece (Employee Master, HR permissions, salary
+permissions, contract permissions) is additive on top of an
+already-proven mechanism rather than something that has to prove out the
+authorization boundary itself later, under more schema weight.
+
+### Status
+
+Accepted. Full backend suite: 170/171 (the one failure,
+`hostile runtime password quoting is injection-safe`, is a pre-existing,
+local-Postgres-auth-config artifact unrelated to this change — present
+before this migration too). Employee Master, Positions, and the
+user-management/governance API remain unstarted.
+
+---
+
+## 2026-08-23 — Governance / User-Management Foundation
+
+### Decision
+
+Built the CEO/Upper-Management/HR authority layer the effective-permissions
+primitive (previous entry) exists to serve, still deliberately ahead of
+Employee Master. New module `src/modules/users/` (`POST /api/v1/users`,
+`GET /:id`, `GET /`, `PATCH /:id/role`, `POST /:id/activate|deactivate`,
+`GET/PUT/DELETE /:id/permissions[...]`), all gated by new permission codes
+(`users.view/create/update/activate/deactivate/create_um/manage_um`,
+`permission_overrides.view/manage` — migration
+`1787404000000_governance-foundation.js`, following the existing
+`module.action` code convention rather than the uppercase names used in the
+originating request, per its own instruction to match repo convention).
+Only `CEO` holds any of them at the role level; `UPPER_MANAGEMENT`, `HR`,
+`EMPLOYEE` hold none, so "UM can't create UM" and "HR can't create CEO/UM"
+fall out of the seed data rather than needing special-cased code.
+
+**CEO bootstrap**: `scripts/create-ceo-user.js` (`npm run user:create-ceo`),
+sharing `scripts/lib/bootstrap-user.js` with the existing
+`create-admin-user.js` (extended/generalized rather than duplicated, per
+instruction — see §12.1 in `docs/SECURITY.md`). `CEO` is excluded from the
+API's assignable-role enum entirely, so no request, from any actor, can name
+it as a target role.
+
+**CEO protection**: centralized in one place,
+`src/modules/users/users.authorization.js`'s `guardGovernanceTarget` /
+`guardUmCreateAuthority`, used by every governance mutation:
+1. a target whose *current* role is `CEO` is rejected outright, for every
+   actor including another CEO — CEO succession is a separate, more
+   sensitive operation, deliberately out of scope this increment;
+2. an actor can never target their own account through any governance
+   mutation endpoint — closes crafted-payload self-escalation and
+   accidental self-lockout together;
+3. touching an Upper Management account (as current role or as the role
+   being assigned) additionally requires `users.create_um`/`users.manage_um`
+   — holding `UPPER_MANAGEMENT` itself never implies it.
+
+A blocked attempt against any of these is audited as
+`PRIVILEGE_ESCALATION_ATTEMPT` (new `governance_audit_log` table, append-only
+via the same `forbid_update_delete()` trigger `gate_pass_audit_log` already
+uses) *before* the `403`, so a denied privileged request is never invisible.
+Every successful governance mutation writes its audit row in the same
+database transaction as the state change itself, so one can never happen
+without the other.
+
+**No `session_version` bump on role/permission/deactivation change.**
+Investigated per explicit instruction to confirm whether one is needed:
+`authenticate.js` already calls `getUserProfileById` fresh on every request,
+and nothing about role, permissions, or active state is cached in the JWT —
+the `role` claim `auth.service.js` signs into the token is never read back by
+`authenticate.js`; only `sub` and `sv` are. A role change, permission
+override, or deactivation is therefore already enforced on the *very next
+request* under the same still-valid session cookie, which is a **stronger**
+guarantee than a `session_version` bump would give (that would only force a
+fresh login, not fix the current session's next request). Proven directly in
+`test/governance.test.js` (grant/deny/role-change/deactivate, each verified
+via the same pre-existing session cookie with no new login in between)
+rather than asserted from reading the code alone.
+
+**No hard delete.** Only activate/deactivate exist; no delete endpoint for
+users was built, satisfying "historical actor after deactivation must keep
+resolving" by construction — `governance_audit_log` (like
+`gate_pass_audit_log`) references `users` with `ON DELETE RESTRICT`, which
+would in any case make a hard-deleted, audit-referenced user impossible.
+
+### Reason
+
+Every invariant CEO/UM/HR governance needs (who can create whom, who can
+touch a UM account, what happens to a denied attempt, whether a change is
+felt immediately) reduces to a small, fully testable rule set once
+centralized in one authorization module and one audit table — building it
+now, isolated from Employee Master, means the next increment (Employee
+Master, HR-delegated employee creation, salary/contract permissions) is
+additive on top of an already-proven governance boundary instead of having
+to prove that boundary out under more schema weight later.
+
+### Status
+
+Accepted. Full backend suite: 194/195 — 24 new tests (7 CEO bootstrap +
+17 governance), zero regressions against the 171 that existed before this
+increment. The one failure, `hostile runtime password quoting is
+injection-safe`, is the same pre-existing local-Postgres-auth-config
+artifact noted in the previous entry, present before this increment too —
+not a new failure. Gate Pass regression suite (`test/authorization.test.js`,
+`test/gate-pass-workflow.test.js`, `test/department-site-scope.test.js`,
+`test/notification-site-scope.test.js`, `test/schema.test.js`) all still
+pass unchanged; no Gate Pass route, permission code, or authorization
+function was modified. Frontend: no changes this increment; `npm run lint`,
+`npm test` (31/31), and `npm run build` all still pass, confirming that.
+
+Deliberately deferred: Employee Master and Positions (next increment, by
+explicit instruction); a `GET`/listing API for `governance_audit_log`
+itself (nothing yet needs to read it back through the API — tests query the
+table directly, the same way `test/schema.test.js` does for
+`gate_pass_audit_log`); CEO succession/creation-of-additional-CEO through
+the API (terminal bootstrap only, for now); salary/contract/compensation
+permission codes (explicitly out of scope this increment); HR's actual
+Workforce-scoped employee-creation permission (this increment proves the
+delegation mechanism works — see the `users.create` grant to HR in
+`test/governance.test.js` — but does not define the real HR permission set,
+which belongs with Employee Master).
+
+---
+
+## 2026-08-23 — Workforce / Employee Management Module
+
+### Decision
+
+Built the full Workforce module the two prior increments' foundation
+(effective permissions, governance/CEO protection) exists to serve: Employee
+Master, Positions, Employment Types, effective-dated employment assignments,
+onboarding with a forced-password-change first login, self-service profile
+(personal details, emergency contacts, HR-configurable custom fields,
+profile photo), employee documents (versioned, verified, expiry-aware, with
+document-requests as a pending action), compensation (confidential,
+effective-dated ledger), employment contracts (DB-enforced immutable once
+finalized), rotation (policy + ledger, no auto-expiry), leave (explicit
+state transitions only), CEO-only business-history removal, in-app
+notifications (reusing the existing Gate Pass outbox unchanged), an
+Employee Master Excel report, and a functional (not polished) frontend
+slice. One migration per logical unit rather than per table
+(`1787405000000_workforce-schema-foundation.js` bundles all 22 new tables'
+schema + RLS + the governance-foundation permission-catalog pattern,
+followed by `1787406000000_workforce-protected-audit.js` widening the
+existing protected audit table, and `1787407000000_must-change-password.js`
+for the one new `users` column) — see the two prior DECISIONS.md entries
+for why bundling the DB-security-boundary work this way is the efficient
+choice here.
+
+**Architecture, in one sentence each:**
+- **Employee ≠ User.** `employees` is the HR-authoritative core record;
+  `employees.user_id` is a nullable, unique FK — an Employee can exist with
+  no login, and a login can exist unlinked to any Employee.
+- **Position/Department/Employment Type ≠ Role.** All three are plain
+  reference data with zero relationship to `roles`/`role_permissions` — a
+  Position literally named "CEO" grants nothing (proven directly in
+  `test/workforce-foundation.test.js`).
+- **Site/department/position/employment-type/rotation-policy/reporting-
+  manager never overwrite.** `employment_assignments` is effective-dated
+  history; "current" is the latest row whose `effective_date` has arrived,
+  computed via a `LEFT JOIN LATERAL` (a SQL fragment, not a database VIEW —
+  a view runs with its owner's privileges by default and could silently
+  bypass a caller's RLS policy; see docs/SECURITY.md). A same-date correction
+  upserts in place (two rows can't both describe "as of this exact date");
+  any other date always inserts new history.
+- **Contracts are the one thing even CEO cannot rewrite.** A DB trigger
+  (`employee_contracts_enforce_immutability`) rejects any column change on a
+  non-`DRAFT` row except the specific forward status transitions; effective
+  dates are original terms and immutable too. A second trigger blocks
+  `DELETE` once finalized.
+  Enforced for every actor, proven both through the API and via a raw,
+  direct SQL statement in `test/workforce-compensation-contracts.test.js`
+  (bypassing the service layer entirely, as a compromised process or a
+  careless psql session might).
+- **Compensation is self-viewable but never self-changeable.** An employee
+  sees their own current/historical compensation with no special permission
+  (ordinary, expected — people know their own salary); anyone else needs
+  the explicit, CEO-controlled `compensation.view`/`compensation.history`
+  permission. No actor — including CEO — may ever record their own
+  compensation change (`compensation.service.js`), mirroring the
+  governance module's universal self-mutation block. Amount is never
+  written into business-history or protected-audit metadata.
+- **Every self-service route needs a password-change gate even without a
+  permission check.** `requirePermission` (governance-foundation) already
+  blocks `mustChangePassword=true` users, but self-only routes like
+  `/me/profile` have no `requirePermission` call to hook into — a
+  standalone `requirePasswordChanged` middleware, applied via `router.use`
+  on every Workforce router, covers them. **A live browser smoke test
+  caught a real gap this created**: the login response itself never
+  included `mustChangePassword` (only `/auth/me` did), so a freshly
+  onboarded Employee's very first page render had no way to know to
+  redirect — the requirement only surfaced as a raw failed API call
+  instead of the intended forced change-password screen. Fixed in
+  `auth.service.js`; regression-covered in
+  `test/workforce-foundation.test.js`.
+- **Business history vs. protected audit, reused not duplicated.**
+  `employee_business_history` (new, per-Employee, CEO-only logical removal
+  with password re-confirmation — mirrors `docs/SECURITY.md`'s existing
+  "strong confirmation" pattern) is the user-facing timeline.
+  `governance_audit_log` (already built in the governance increment) is
+  extended with `target_employee_id`/`target_contract_id` and new action
+  codes rather than getting a second parallel protected-audit table — the
+  original spec's own Protected Security Audit list already groups
+  compensation/contract/employee events with user/permission events as one
+  concept.
+- **HR-created logins are role-EMPLOYEE by construction, not by check.**
+  `createLoginForEmployee` never accepts a role parameter at all — there is
+  no code path from an HR request to a privileged role, independent of any
+  permission mistake (verified visually too: `AddEmployeePage.jsx` has no
+  role field in its form).
+- **Duplicate detection warns, never hard-blocks.** `POST /employees`
+  checks CNIC/mobile/email/name-at-site matches and returns 409 with the
+  match list; the same request resubmitted with
+  `confirmDuplicateOverride: true` proceeds, and the override is recorded
+  in the resulting business-history entry.
+- **Storage namespace generalized, Gate Pass untouched.**
+  `storage-service.js`'s `generateStorageKey` gained an optional
+  `namespace` parameter (default `"gate-pass"`, so every existing Gate Pass
+  caller is byte-for-byte unaffected) so Workforce files live under
+  `workforce/...` instead of inside Gate Pass's own folder.
+  Signature-based upload validation (photo, employee document, contract
+  file) is deliberately re-implemented per module rather than shared with
+  `gate-pass.upload.js` — see the module-boundary reasoning in
+  `docs/MODULES.md` §13; Gate Pass code is not touched to enable reuse.
+- **Excel export**: `exceljs` (new dependency) with a shared
+  `sanitizeCell`/`safeExportFilename` helper (OWASP formula-injection
+  mitigation — a leading `=`/`+`/`-`/`@`/tab/CR is quote-prefixed) used by
+  every report, not reinvented per report. Compensation is only fetched (not
+  just hidden) when the requester holds `compensation.export` — proven by
+  asserting the raw workbook bytes contain no compensation column at all
+  for an unauthorized exporter, not merely that the UI hides it.
+
+### Reason
+
+Same reasoning as the two prior increments: every governance/security
+invariant this module needs (self vs. delegated access, effective-dating,
+immutability, confidentiality, audit) reduces to a small set of primitives
+already proven out in isolation — applying them consistently here, checkpoint
+by checkpoint with tests after each one, means the highest-risk pieces
+(contract immutability, salary confidentiality, CEO-cannot-self-serve) were
+proven correct — including at the raw-SQL level, not just through the API —
+before moving on to lower-risk pieces (rotation, leave, reporting).
+
+### Status
+
+At that pre-completion checkpoint, the full backend suite was 252/253 (24 new Workforce test files/253
+total; the one failure, `hostile runtime password quoting is
+injection-safe`, is the same pre-existing local-Postgres-auth-config
+artifact noted in prior entries — confirmed unchanged, not a new failure).
+Gate Pass + platform regression (`authorization`, `gate-pass-workflow`,
+`gate-pass-pdf`, `department-site-scope`, `notification-site-scope`,
+`schema`, `auth`, `config-validation`, `whatsapp-provider`,
+`outbox-durability`, `health`, `storage-service`, `app-timezone`,
+`create-admin-user`): 157/157, run explicitly and separately from the
+Workforce suite. Frontend: `npm run lint` clean, `npm test` 31/31 (all
+pre-existing), `npm run build` succeeds (PWA precache still generates); the
+new Workforce screens themselves were exercised through a live Chrome
+browser session against a running dev server (not just lint/build), which
+is what caught the `mustChangePassword` login-response gap above. `npm
+audit`: frontend clean; backend has the same pre-existing, non-exploitable
+transitive `uuid` advisory as before (moderate, v3/v5/v6 buffer-bounds
+issue — `exceljs`, the only consumer, uses only `uuid`'s v4 function,
+confirmed by inspecting its source) plus this increment's own new direct
+dependencies (`exceljs`, `archiver`) introducing no new advisories of their
+own.
+
+The following were deferred at that checkpoint and were subsequently
+completed by the independent review entry below: bulk Excel employee import;
+bulk ZIP document export
+(`archiver` was added and is available for this, but the endpoint itself
+is not built); a full report catalog beyond Employee Master (the
+`sanitizeCell`/permission-gating pattern is established and ready to reuse
+for the rest); temporary/short-term site assignments (schema only —
+`temporary_assignments` table exists, no service/API); probation tracking;
+rehire/employment-period modeling beyond a single continuous record;
+Attendance integration (explicitly out of scope, by instruction); a
+reusable Workforce correction/request mechanism for authoritative-field
+change requests (only document requests were built as the one concrete
+"pending action" case); saved filters/table preferences; a full
+company-wide search; module-scoped (non-Workforce) custom fields; CEO/UM
+governance and full HR-management screens beyond what was built (Employee
+List/Detail/Add, Workforce Config) — CEO permission granting/restricting
+and most cross-cutting reporting remain API-only, exercised by the test
+suite rather than a UI, consistent with prioritizing backend
+correctness/security over frontend breadth this pass.
+
+## 2026-08-23 — Final Independent Workforce Review and Completion
+
+### Decision
+
+The independent release review verified the 22-table Workforce schema and
+the 36-table runtime boundary, then completed the previously deferred V1
+surface. Migration `1787408000000_workforce-release-hardening.js` is a
+forward correction for worktrees/databases that already applied the draft
+foundation: it adds `employees.bulk_import`, extends protected audit for
+completed import, makes compensation append-only, protects stored document/
+photo identity, and replaces the contract trigger so effective end date is
+an immutable original term after finalization.
+
+Verified release blockers were fixed rather than documented away: Workforce
+password reset/status paths can touch only an ordinary linked `EMPLOYEE`
+login; an inactive Employee cannot keep a login active through a client
+flag; profile self-service honors effective DENY overrides; HR/management
+custom-field visibility is no longer unioned; protected concepts are denied
+in both custom-field key and label; request cancellation and version listing
+are employee-owned and visibility checked; private API metadata no longer
+exposes storage keys; and stored files are SHA-256 checked before contract
+finalization/download, document/photo download, or bulk export.
+
+The completed V1 adds signed preview/confirm XLSX import, 19 report catalog
+entries, bounded streaming ZIP export, Workforce dashboard/operations/
+reports, CEO/UM governance controls, expanded HR employee/configuration
+screens, and complete employee self-service controls. Report downloads
+require `employees.view` + report view + export, plus domain permissions for
+documents, leave, rotation, compensation, and contracts.
+
+### Deferred scope
+
+Temporary assignments remain schema-only; probation, rehire/employment
+periods, generic correction requests, advanced background exports, saved
+views, Attendance, payroll/budget, Inventory/Procurement, and cross-module
+search remain intentionally deferred. None is required for the implemented
+V1 flows.
+
+### Final verification state
+
+The release-review test gate was run on the disposable local `.env.test`
+database after the hardening migration completed a down/up cycle:
+
+- focused Workforce plus CEO/UM governance: **102/102**;
+- complete pre-Workforce/Gate Pass regression: **157/157**;
+- complete backend: **268/269**. The sole failure is the independently
+  reproduced hostile-password boundary assertion: this developer
+  PostgreSQL host-auth configuration accepts the deliberately wrong
+  password as well as the generated hostile password. The other **9/9**
+  DB-boundary assertions pass. The test and production configuration were
+  not weakened to turn that environment limitation green;
+- frontend: **33/33**, ESLint clean, production/PWA build clean;
+- full `npm audit` (including development tooling): **0 vulnerabilities** in both backend and
+  frontend after pinning ExcelJS's transitive `uuid` to patched 11.1.1 or
+  newer through an npm override.
+
+These are local integration/build results, not deployment validation. No
+production migration, user provisioning, Storage change, push, or deploy
+was performed.

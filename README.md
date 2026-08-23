@@ -10,9 +10,12 @@ The platform is being designed so that individual business modules can be develo
 
 ## Development Status
 
-Gate Pass MVP implemented end-to-end (backend, frontend, PWA, tests) and
-subsequently hardened through four independent security/architecture
-review and fix passes — see `docs/DECISIONS.md` for what changed and why.
+Gate Pass and Workforce / Employee Management are implemented end-to-end
+(backend, frontend, private storage, PWA, migrations, and tests). Workforce
+includes transactional XLSX import, a practical XLSX report catalog,
+bounded private-file ZIP export, HR operations, CEO/UM governance, and
+employee self-service. See `docs/DECISIONS.md` for the security boundaries
+and current deferred scope.
 
 No production deployment exists yet: deployment is explicitly gated on
 independent re-review of the fix passes. See `docs/ARCHITECTURE.md` §13 and
