@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { ApiError } from "../../../core/api/client.js";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
@@ -10,12 +12,20 @@ import * as api from "../api.js";
 const TABS = ["Profile", "Documents", "Leave", "Rotation", "Contracts", "Compensation"];
 
 export function MyWorkforcePage() {
+  const { user, hasPermission } = useAuth();
   const [tab, setTab] = useState("Profile");
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
+    if (!user?.employeeId) {
+      setLoading(false);
+      setError(null);
+      setProfile(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -26,12 +36,25 @@ export function MyWorkforcePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.employeeId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  if (!user?.employeeId) {
+    if (hasPermission("employees.view")) {
+      return <Navigate to="/workforce" replace />;
+    }
+
+    return (
+      <ErrorState
+        title="My Workforce unavailable"
+        message="No Employee record is linked to your account."
+      />
+    );
+  }
 
   if (loading) return <LoadingState message="Loading your profile…" />;
   if (error) return <ErrorState message={error} onRetry={load} />;

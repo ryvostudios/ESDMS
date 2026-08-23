@@ -3,13 +3,19 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { NavList } from "./NavList.jsx";
 
-const authState = vi.hoisted(() => ({ permissions: new Set() }));
+const authState = vi.hoisted(() => ({ permissions: new Set(), user: { employeeId: null } }));
 vi.mock("../../core/auth/AuthContext.jsx", () => ({
-  useAuth: () => ({ hasPermission: (...codes) => codes.some((code) => authState.permissions.has(code)) }),
+  useAuth: () => ({
+    user: authState.user,
+    hasPermission: (...codes) => codes.some((code) => authState.permissions.has(code)),
+  }),
 }));
 
 describe("permission-driven Workforce navigation", () => {
-  beforeEach(() => { authState.permissions = new Set(); });
+  beforeEach(() => {
+    authState.permissions = new Set();
+    authState.user = { employeeId: null };
+  });
 
   test("a Gate Guard sees no Workforce or governance navigation", () => {
     authState.permissions = new Set(["gate_pass.verify", "gate_pass.exit", "gate_pass.return"]);
@@ -18,6 +24,18 @@ describe("permission-driven Workforce navigation", () => {
     expect(screen.queryByRole("link", { name: "Employees" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Reports" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Governance" })).toBeNull();
+  });
+
+  test("My Workforce requires both self-service permission and a linked Employee record", () => {
+    authState.permissions = new Set(["profile.self.view"]);
+
+    const { rerender } = render(<MemoryRouter><NavList /></MemoryRouter>);
+    expect(screen.queryByRole("link", { name: "My Workforce" })).toBeNull();
+
+    authState.user = { employeeId: "employee-1" };
+    rerender(<MemoryRouter><NavList /></MemoryRouter>);
+
+    expect(screen.getByRole("link", { name: "My Workforce" })).toBeTruthy();
   });
 
   test("reports require view and export while governance follows users.view", () => {

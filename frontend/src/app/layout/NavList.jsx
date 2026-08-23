@@ -4,12 +4,14 @@ import { NAV_ITEMS } from "./navigation.js";
 import styles from "./Sidebar.module.css";
 
 export function NavList({ onNavigate }) {
-  const { hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
 
   return (
     <nav className={styles.nav} aria-label="Primary">
-      {NAV_ITEMS.filter(({ permission, allPermissions }) =>
-        (!permission || hasPermission(...permission)) && (!allPermissions || allPermissions.every((code) => hasPermission(code))))
+      {NAV_ITEMS.filter(({ permission, allPermissions, requiresEmployee }) =>
+        (!permission || hasPermission(...permission)) &&
+        (!allPermissions || allPermissions.every((code) => hasPermission(code))) &&
+        (!requiresEmployee || Boolean(user?.employeeId)))
         .map(
         ({ label, to, icon: Icon, end }) => (
           <NavLink
