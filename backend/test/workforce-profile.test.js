@@ -250,6 +250,49 @@ test("custom-field visibility is actor-specific, not the union of HR and managem
   assert.ok(ceo.body.data.customFieldValues.some((field) => field.fieldId === managementField.body.data.id));
 });
 
+test("ESDMS-018: the fields/document-types catalog context is explicit, never inferred from employees.view", async () => {
+  const section = await apiRequest(server.baseUrl, "POST", "/api/v1/workforce-config/sections", { token: hrToken, body: { name: unique("Context") } });
+  const selfVisibleField = await apiRequest(server.baseUrl, "POST", "/api/v1/workforce-config/fields", {
+    token: hrToken,
+    body: { sectionId: section.body.data.id, label: "Self Visible", fieldKey: unique("self_visible").replace(/-/g, "_"), fieldType: "TEXT", employeeCanView: true, employeeCanEdit: true, hrCanView: false, managementCanView: true },
+  });
+  assert.equal(selfVisibleField.status, 201, JSON.stringify(selfVisibleField.body));
+
+  // No context param at all: the endpoint must not silently pick one.
+  const missingContext = await apiRequest(server.baseUrl, "GET", "/api/v1/workforce-config/fields", { token: umToken });
+  assert.equal(missingContext.status, 400);
+
+  // UM holds employees.view (a management permission) but not
+  // workforce.configuration.manage — the old bug inferred "management"
+  // purely from employees.view, which would have hidden this
+  // self-context-only field from UM's own self-service view.
+  const umSelf = await apiRequest(server.baseUrl, "GET", "/api/v1/workforce-config/fields?context=self", { token: umToken });
+  assert.equal(umSelf.status, 200);
+  assert.ok(
+    umSelf.body.data.some((f) => f.id === selfVisibleField.body.data.id),
+    "UM's own self-service catalog request must return the self-visible field",
+  );
+
+  const umManagement = await apiRequest(server.baseUrl, "GET", "/api/v1/workforce-config/fields?context=management", { token: umToken });
+  assert.equal(umManagement.status, 200);
+  assert.ok(
+    umManagement.body.data.some((f) => f.id === selfVisibleField.body.data.id),
+    "management_can_view=true makes it visible in the management catalog too",
+  );
+
+  // An EMPLOYEE with no management permission at all cannot request the
+  // management context just because self is allowed.
+  const employeeManagement = await apiRequest(server.baseUrl, "GET", "/api/v1/workforce-config/fields?context=management", {
+    token: otherEmployeeToken,
+  });
+  assert.equal(employeeManagement.status, 403);
+
+  const employeeSelf = await apiRequest(server.baseUrl, "GET", "/api/v1/workforce-config/document-types?context=self", {
+    token: otherEmployeeToken,
+  });
+  assert.equal(employeeSelf.status, 200);
+});
+
 test("profile photo: valid image accepted and downloadable; forged signature rejected", async () => {
   const upload = await apiRequest(server.baseUrl, "POST", "/api/v1/me/profile/photo", {
     token: selfToken,
@@ -273,4 +316,89 @@ test("profile completion percent reflects filled required core + counted custom 
   const profile = await apiRequest(server.baseUrl, "GET", "/api/v1/me/profile", { token: selfToken });
   assert.equal(profile.status, 200);
   assert.ok(profile.body.data.completion.percent >= 0 && profile.body.data.completion.percent <= 100);
+});
+
+// ---------------------------------------------------------------------
+// ESDMS-008 failure-injection: updatePersonalDetails writes the personal
+// details upsert and its business-history entry in one withTransaction —
+// prove a failure on the history write rolls back the upsert too.
+//
+// pool.connect() is used two different ways in this codebase (see the
+// identical, already-proven pattern in outbox-durability.test.js): promise
+// style with no arguments (withTransaction, awaited directly) and
+// Node-callback style (pg-pool's own internal pool.query() convenience
+// method calls `this.connect((err, client) => {...})` for every plain,
+// non-transactional query). A mock that only implements the promise style
+// silently never invokes that callback, hanging pool.query() forever.
+// pg-pool also reuses the same small set of underlying client objects
+// across pool.connect() calls, so the client's own .query override is
+// restored in t.after() too — resetting pool.connect alone isn't enough.
+function injectQueryFailure(t, failingSqlFragment) {
+  const realConnect = pool.connect.bind(pool);
+  const wrapped = [];
+  t.mock.method(pool, "connect", (callback) => {
+    if (typeof callback === "function") {
+      return realConnect(callback);
+    }
+
+    return (async () => {
+      const client = await realConnect();
+      const realQuery = client.query.bind(client);
+      client.query = (text, ...args) => {
+        if (typeof text === "string" && text.includes(failingSqlFragment)) {
+          client.query = realQuery;
+          throw new Error("ESDMS-008_INJECTED_FAILURE");
+        }
+        return realQuery(text, ...args);
+      };
+      wrapped.push({ client, realQuery });
+      return client;
+    })();
+  });
+  t.after(() => {
+    for (const { client, realQuery } of wrapped) client.query = realQuery;
+  });
+}
+
+test("ESDMS-008 rollback: updatePersonalDetails rolls back the personal-details upsert if the history write fails", async (t) => {
+  const before = await pool.query(
+    "SELECT mobile, address FROM employee_personal_details WHERE employee_id = $1",
+    [employeeId],
+  );
+  const historyBefore = await pool.query(
+    "SELECT count(*)::int AS n FROM employee_business_history WHERE employee_id = $1 AND event_type = 'PROFILE_UPDATED'",
+    [employeeId],
+  );
+
+  injectQueryFailure(t, "INSERT INTO employee_business_history");
+
+  const response = await apiRequest(server.baseUrl, "PATCH", "/api/v1/me/profile/personal-details", {
+    token: selfToken,
+    body: { mobile: "+92-ROLLBACK-000", address: "Rollback Test Address" },
+  });
+  assert.equal(response.status, 500, JSON.stringify(response.body));
+  t.mock.reset();
+
+  const after = await pool.query(
+    "SELECT mobile, address FROM employee_personal_details WHERE employee_id = $1",
+    [employeeId],
+  );
+  assert.deepEqual(
+    after.rows[0],
+    before.rows[0],
+    "the personal-details upsert was rolled back, not partially committed",
+  );
+
+  // employeeId is shared with earlier tests in this file that legitimately
+  // update personal details — assert no NEW row appeared, not an absolute
+  // count.
+  const historyAfter = await pool.query(
+    "SELECT count(*)::int AS n FROM employee_business_history WHERE employee_id = $1 AND event_type = 'PROFILE_UPDATED'",
+    [employeeId],
+  );
+  assert.equal(
+    historyAfter.rows[0].n,
+    historyBefore.rows[0].n,
+    "no success history row survives a rolled-back profile update",
+  );
 });

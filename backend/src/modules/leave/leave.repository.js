@@ -35,8 +35,8 @@ export async function updateTypeFields(id, { name, isActive, description }) {
   return result.rows[0] || null;
 }
 
-export async function insertRequest(employeeId, { leaveTypeId, startDate, endDate, requestedDays, reason }) {
-  const result = await pool.query(
+export async function insertRequest(client, employeeId, { leaveTypeId, startDate, endDate, requestedDays, reason }) {
+  const result = await client.query(
     `INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, requested_days, reason)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, employee_id, leave_type_id, start_date, end_date, requested_days, reason, status, created_at`,
@@ -80,8 +80,8 @@ export async function listPendingForSite(siteId) {
   return result.rows;
 }
 
-export async function decide(id, { status, decidedByUserId, remark }) {
-  const result = await pool.query(
+export async function decide(client, id, { status, decidedByUserId, remark }) {
+  const result = await client.query(
     `UPDATE leave_requests
      SET status = $2, decided_by_user_id = $3, decided_at = CURRENT_TIMESTAMP, decision_remark = $4, updated_at = CURRENT_TIMESTAMP
      WHERE id = $1 AND status = 'SUBMITTED'
@@ -91,8 +91,8 @@ export async function decide(id, { status, decidedByUserId, remark }) {
   return result.rows[0] || null;
 }
 
-export async function cancel(id, employeeId) {
-  const result = await pool.query(
+export async function cancel(client, id, employeeId) {
+  const result = await client.query(
     `UPDATE leave_requests SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
      WHERE id = $1 AND employee_id = $2 AND status = 'SUBMITTED'
      RETURNING id, status`,

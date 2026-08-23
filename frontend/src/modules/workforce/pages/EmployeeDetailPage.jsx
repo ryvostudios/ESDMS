@@ -6,7 +6,20 @@ import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Select } from "../../../shared/components/FormField.jsx";
 import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
+import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import * as api from "../api.js";
+
+// Mirrors employees.service.js's ALLOWED_STATUS_TRANSITIONS exactly — the
+// backend remains authoritative; this only keeps the UI from offering a
+// transition (e.g. RESIGNED -> ACTIVE) that will always be rejected.
+const STATUS_TRANSITIONS = {
+  ACTIVE: ["INACTIVE", "RESIGNED", "TERMINATED"],
+  INACTIVE: ["ACTIVE"],
+  RESIGNED: [],
+  TERMINATED: [],
+};
+const REASON_REQUIRED_STATUSES = new Set(["RESIGNED", "TERMINATED"]);
 
 const TABS = ["Overview", "Profile", "Assignments", "Compensation", "Contracts", "Documents", "Rotation", "Leave"];
 
@@ -66,6 +79,8 @@ function ProfileTab({ employeeId }) {
 
 function AssignmentsTab({ employee, hasPermission, onChanged }) {
   const [history, setHistory] = useState([]);
+  const [sites, setSites] = useState([]);
+  const [siteId, setSiteId] = useState(employee.primarySiteId || "");
   const [departments, setDepartments] = useState([]);
   const [positions, setPositions] = useState([]);
   const [types, setTypes] = useState([]);
@@ -76,9 +91,59 @@ function AssignmentsTab({ employee, hasPermission, onChanged }) {
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState(null);
   const load = useCallback(() => api.getEmployeeAssignments(employee.id).then((result) => setHistory(result.data)), [employee.id]);
-  useEffect(() => { load(); if (hasPermission("employees.transfer")) Promise.all([api.listDepartmentsManage(), api.listPositions(), api.listEmploymentTypes()]).then(([d,p,t]) => { setDepartments(d.data); setPositions(p.data); setTypes(t.data); }); }, [load, hasPermission]);
-  async function transfer(event) { event.preventDefault(); try { await api.transferEmployee(employee.id, { departmentId: departmentId || null, positionId: positionId || null, employmentTypeId: employmentTypeId || null, effectiveDate, reason }); setMessage("Assignment recorded."); load(); onChanged(); } catch (error) { setMessage(error.message); } }
-  return <div>{message && <p role="status">{message}</p>}<h3>Assignment history</h3>{history.map((item) => <p key={item.id}>{item.effective_date} — {item.department_name || "No department"} · {item.position_name || "No position"}</p>)}{hasPermission("employees.transfer") && <form onSubmit={transfer}><FormField label="Department" htmlFor="transferDepartment"><Select id="transferDepartment" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}><option value="">None</option>{departments.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Position" htmlFor="transferPosition"><Select id="transferPosition" value={positionId} onChange={(e) => setPositionId(e.target.value)}><option value="">None</option>{positions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Employment type" htmlFor="transferType"><Select id="transferType" value={employmentTypeId} onChange={(e) => setEmploymentTypeId(e.target.value)}><option value="">None</option>{types.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Effective date" htmlFor="transferDate"><Input id="transferDate" type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} required /></FormField><FormField label="Reason" htmlFor="transferReason"><Input id="transferReason" value={reason} onChange={(e) => setReason(e.target.value)} /></FormField><Button type="submit">Record assignment / transfer</Button></form>}</div>;
+
+  // Target site defaults to the employee's current site (pre-filling the
+  // Department/Position below with their current assignment). A
+  // site-scoped actor's listSites() only ever returns that one site (no
+  // selector rendered, matching AddEmployeePage's convention); an all-site
+  // actor sees every active site and may pick a different one for an
+  // immediate cross-site transfer — createTransfer already supports and
+  // authorizes that (siteId input, company-wide scope required).
+  useEffect(() => {
+    load();
+    if (hasPermission("employees.transfer")) {
+      api.listSites().then((r) => setSites(r.data));
+      api.listEmploymentTypes().then((r) => setTypes(r.data));
+    }
+  }, [load, hasPermission]);
+
+  // Active, site-scoped selectors for both Department and Position — never
+  // the all-site/inactive-inclusive management catalog. Re-fetches whenever
+  // the target site changes (including the initial employee.primarySiteId).
+  useEffect(() => {
+    if (!hasPermission("employees.transfer") || !siteId) return;
+    api.listDepartments(siteId).then((r) => setDepartments(r.data));
+    api.listPositions(siteId).then((r) => setPositions(r.data));
+  }, [siteId, hasPermission]);
+
+  function changeSite(nextSiteId) {
+    setSiteId(nextSiteId);
+    // A Department/Position chosen under the previous site is not
+    // necessarily valid (or even the same row id) under the new one.
+    setDepartmentId("");
+    setPositionId("");
+  }
+
+  async function transfer(event) {
+    event.preventDefault();
+    try {
+      await api.transferEmployee(employee.id, {
+        siteId,
+        departmentId: departmentId || null,
+        positionId: positionId || null,
+        employmentTypeId: employmentTypeId || null,
+        effectiveDate,
+        reason,
+      });
+      setMessage("Assignment recorded.");
+      load();
+      onChanged();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  return <div>{message && <p role="status">{message}</p>}<h3>Assignment history</h3>{history.map((item) => <p key={item.id}>{item.effective_date} — {item.department_name || "No department"} · {item.position_name || "No position"}</p>)}{hasPermission("employees.transfer") && <form onSubmit={transfer}>{sites.length > 1 && <FormField label="Site" htmlFor="transferSite" required><Select id="transferSite" value={siteId} onChange={(e) => changeSite(e.target.value)} required><option value="">— Select a site —</option>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></FormField>}<FormField label="Department" htmlFor="transferDepartment"><Select id="transferDepartment" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} disabled={!siteId}><option value="">None</option>{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Position" htmlFor="transferPosition"><Select id="transferPosition" value={positionId} onChange={(e) => setPositionId(e.target.value)} disabled={!siteId}><option value="">None</option>{positions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Employment type" htmlFor="transferType"><Select id="transferType" value={employmentTypeId} onChange={(e) => setEmploymentTypeId(e.target.value)}><option value="">None</option>{types.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Effective date" htmlFor="transferDate"><Input id="transferDate" type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} required /></FormField><FormField label="Reason" htmlFor="transferReason"><Input id="transferReason" value={reason} onChange={(e) => setReason(e.target.value)} /></FormField><Button type="submit">Record assignment / transfer</Button></form>}</div>;
 }
 
 function OverviewTab({ employee, onChanged, hasPermission }) {
@@ -107,13 +172,15 @@ function OverviewTab({ employee, onChanged, hasPermission }) {
     }
   }
 
-  async function changeStatus(status) {
-    try {
-      await api.changeEmployeeStatus(employee.id, { status });
-      onChanged();
-    } catch (err) {
-      setMessage(err instanceof ApiError ? err.message : "Unable to change status.");
-    }
+  const [pendingStatus, setPendingStatus] = useState(null);
+
+  // Errors (validation, or the Governance instruction when a privileged
+  // linked User is still active) are shown INSIDE the dialog by
+  // ConfirmActionDialog/ReasonActionDialog itself, which also keeps the
+  // dialog open on failure — nothing to catch here.
+  async function submitStatusChange(status, reason) {
+    await api.changeEmployeeStatus(employee.id, reason ? { status, reason } : { status });
+    onChanged();
   }
 
   return (
@@ -143,13 +210,34 @@ function OverviewTab({ employee, onChanged, hasPermission }) {
       {hasPermission("employees.status_change") && (
         <div>
           <h3>Status</h3>
-          {["ACTIVE", "INACTIVE", "RESIGNED", "TERMINATED"].map((s) => (
-            <Button key={s} variant="secondary" onClick={() => changeStatus(s)} disabled={employee.status === s}>
+          {(STATUS_TRANSITIONS[employee.status] || []).map((s) => (
+            <Button key={s} variant="secondary" onClick={() => setPendingStatus(s)}>
               {s}
             </Button>
           ))}
         </div>
       )}
+
+      {pendingStatus &&
+        (REASON_REQUIRED_STATUSES.has(pendingStatus) ? (
+          <ReasonActionDialog
+            open
+            onClose={() => setPendingStatus(null)}
+            title={`Change status to ${pendingStatus}`}
+            message={`This permanently changes the employee's status to ${pendingStatus}. A reason is required.`}
+            confirmLabel="Confirm"
+            onConfirm={(reason) => submitStatusChange(pendingStatus, reason)}
+          />
+        ) : (
+          <ConfirmActionDialog
+            open
+            onClose={() => setPendingStatus(null)}
+            title={`Change status to ${pendingStatus}`}
+            message={`Change the employee's status to ${pendingStatus}?`}
+            confirmLabel="Confirm"
+            onConfirm={() => submitStatusChange(pendingStatus, undefined)}
+          />
+        ))}
     </div>
   );
 }

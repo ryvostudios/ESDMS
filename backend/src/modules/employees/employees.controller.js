@@ -71,6 +71,11 @@ export const myEmployee = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: toEmployeeDto(employee) });
 });
 
+export const listSites = asyncHandler(async (req, res) => {
+  const rows = await service.listSites(req.user);
+  res.status(200).json({ success: true, data: rows });
+});
+
 export const assignmentHistory = asyncHandler(async (req, res) => {
   const history = await service.getAssignmentHistory(req.user, req.params.id);
   res.status(200).json({ success: true, data: history });

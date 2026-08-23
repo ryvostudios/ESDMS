@@ -65,9 +65,16 @@ export function AuthProvider({ children }) {
     setUser(response.data.user);
   }, []);
 
+  // Exposed for a caller that already knows, from its own response, that
+  // the session is dead server-side (e.g. change-password — see
+  // docs/DECISIONS.md's ESDMS-020 entry) — clears local state directly,
+  // with no network round-trip, instead of misusing logout() (which POSTs
+  // to /auth/logout for a session there is nothing left to revoke) or
+  // refreshUser() (which would call /auth/me and surface its 401 as if it
+  // were a real error).
   const value = useMemo(
-    () => ({ user, status, login, logout, hasPermission, refreshUser }),
-    [user, status, login, logout, hasPermission, refreshUser],
+    () => ({ user, status, login, logout, hasPermission, refreshUser, clearSession }),
+    [user, status, login, logout, hasPermission, refreshUser, clearSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

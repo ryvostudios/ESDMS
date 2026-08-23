@@ -25,8 +25,8 @@ export async function emailExists(email) {
 
 export async function insertUser(client, { email, fullName, passwordHash, roleId, siteId, departmentId }) {
   const result = await client.query(
-    `INSERT INTO users (email, password_hash, full_name, role_id, site_id, department_id, is_active)
-     VALUES ($1, $2, $3, $4, $5, $6, true)
+    `INSERT INTO users (email, password_hash, full_name, role_id, site_id, department_id, is_active, must_change_password)
+     VALUES ($1, $2, $3, $4, $5, $6, true, true)
      RETURNING id, email, full_name, site_id, department_id, is_active, created_at`,
     [email, passwordHash, fullName, roleId, siteId, departmentId],
   );
@@ -43,6 +43,41 @@ export async function setUserActiveState(client, userId, isActive) {
     isActive,
     userId,
   ]);
+}
+
+// Locks the User row so the must_change_password eligibility check and the
+// credential/session mutation that follows are atomic against a concurrent
+// writer (e.g. the user completing first login, or another Governance
+// actor changing role/active state, in between). Deliberately two queries,
+// not one FOR UPDATE ... JOIN — see lockLinkedUserRoleAndActive in
+// employees.service.js: a joined table's row isn't reliably re-resolved by
+// Postgres's EvalPlanQual recheck after this lock blocks behind a
+// concurrent writer of the locked row itself.
+export async function lockUserById(client, id) {
+  const locked = await client.query(
+    "SELECT id, role_id, site_id, is_active, must_change_password FROM users WHERE id = $1 FOR UPDATE",
+    [id],
+  );
+  const row = locked.rows[0];
+  if (!row) return null;
+
+  const role = await client.query("SELECT name FROM roles WHERE id = $1", [row.role_id]);
+  return {
+    id: row.id,
+    role: role.rows[0]?.name || null,
+    site_id: row.site_id,
+    is_active: row.is_active,
+    must_change_password: row.must_change_password,
+  };
+}
+
+export async function replacePasswordAndBumpSession(client, userId, passwordHash) {
+  await client.query(
+    `UPDATE users
+     SET password_hash = $2, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1`,
+    [userId, passwordHash],
+  );
 }
 
 export async function listUsersForSite(siteId) {

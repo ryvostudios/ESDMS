@@ -5,7 +5,17 @@ import { BellIcon } from "../../shared/icons.jsx";
 import { formatDateTime } from "../../shared/utilities/datetime.js";
 import styles from "./NotificationBell.module.css";
 
-const POLL_INTERVAL_MS = 30_000;
+const BASE_POLL_INTERVAL_MS = 60_000;
+const MAX_POLL_INTERVAL_MS = 5 * 60_000;
+// Small randomized spread added to every scheduled poll (including a
+// resume-from-hidden poll) so many clients that all became visible, or
+// whose timers happened to align, at the same instant don't all fire on
+// the exact same tick — see ESDMS-017 arithmetic in docs/DECISIONS.md.
+const JITTER_MS = 5_000;
+
+function withJitter(delayMs) {
+  return Math.max(0, delayMs) + Math.floor(Math.random() * JITTER_MS);
+}
 
 // Per-user, not a single shared key — this app runs on shared devices (a
 // gate kiosk/tablet across shifts), and a global key would leak one user's
@@ -35,13 +45,45 @@ export function NotificationBell() {
   const buttonRef = useRef(null);
   const panelRef = useRef(null);
 
+  // ESDMS-017: a fixed 30s setInterval kept polling at full cadence even
+  // while the tab was backgrounded, and never backed off after a failure/
+  // 429 — exactly the pattern that can exhaust a shared per-user or per-IP
+  // budget for no operational benefit. This poller:
+  //   - never polls at all while hidden, including the very first poll on
+  //     mount if the tab starts out hidden;
+  //   - guards against overlap with an explicit in-flight flag, not just
+  //     timer bookkeeping — a slow/stalled request can never result in a
+  //     second concurrent one;
+  //   - doubles its delay (capped) after a failed request and resets to
+  //     the base ~60s cadence on success;
+  //   - adds a small random jitter to every scheduled delay, including a
+  //     resume-from-hidden poll, so many clients don't all fire in lockstep;
+  //   - collapses rapid hidden/visible/hidden toggles into at most one
+  //     pending timer (each transition clears-then-reschedules the same
+  //     timer, and a resume while a request is already in flight is a
+  //     no-op) rather than stacking up multiple timers/requests.
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let timer = null;
+    let currentDelay = BASE_POLL_INTERVAL_MS;
+    let lastPolledAt = 0;
+
+    function scheduleNext(delay) {
+      clearTimeout(timer);
+      if (document.visibilityState === "hidden") return;
+      timer = setTimeout(refresh, withJitter(delay));
+    }
 
     function refresh() {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      lastPolledAt = Date.now();
+
       listNotifications()
         .then((response) => {
           if (cancelled) return;
+          currentDelay = BASE_POLL_INTERVAL_MS;
 
           setNotifications(response.data);
 
@@ -50,15 +92,42 @@ export function NotificationBell() {
           setHasUnseen(Boolean(newest) && (!lastViewedAt || new Date(newest) > new Date(lastViewedAt)));
         })
         .catch(() => {
-          // Silent — a failed notification poll shouldn't interrupt the app.
+          // Silent — a failed notification poll shouldn't interrupt the
+          // app. Back off instead of retrying at full cadence (a 429 in
+          // particular means "slow down," not "try again immediately").
+          currentDelay = Math.min(currentDelay * 2, MAX_POLL_INTERVAL_MS);
+        })
+        .finally(() => {
+          inFlight = false;
+          if (!cancelled) scheduleNext(currentDelay);
         });
     }
 
-    refresh();
-    const timer = setInterval(refresh, POLL_INTERVAL_MS);
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        clearTimeout(timer);
+        return;
+      }
+
+      // A request is already in flight (started just before hidden, or a
+      // rapid hidden->visible flicker mid-request) — its own .finally()
+      // will schedule the next poll; scheduling another here would create
+      // an overlapping/duplicate request.
+      if (inFlight) return;
+
+      const elapsed = Date.now() - lastPolledAt;
+      scheduleNext(Math.max(0, BASE_POLL_INTERVAL_MS - elapsed));
+    }
+
+    if (document.visibilityState !== "hidden") {
+      refresh();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [user.id]);
 

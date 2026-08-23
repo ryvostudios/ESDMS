@@ -176,3 +176,75 @@ test("bulk ZIP export is private, bounded, audited, and uses server-generated sa
   const audit = await pool.query("SELECT metadata FROM governance_audit_log WHERE action='WORKFORCE_BULK_EXPORT_GENERATED' ORDER BY created_at DESC LIMIT 1");
   assert.equal(audit.rows[0].metadata.fileCount, 1);
 });
+
+// ESDMS-012: derive fixtures from Postgres's own CURRENT_DATE (the same
+// basis the expiring-documents report/endpoint SQL both use), not the host
+// machine's clock — see the identical fix/rationale in
+// workforce-documents.test.js.
+async function isoDate(offsetDays) {
+  const result = await pool.query("SELECT (CURRENT_DATE + ($1 * interval '1 day'))::date::text AS d", [offsetDays]);
+  return result.rows[0].d;
+}
+
+function pdfForm(fields) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
+  form.append("file", new Blob([Buffer.from("%PDF-1.4\nmock\ntrailer<<>>")], { type: "application/pdf" }), "cv.pdf");
+  return form;
+}
+
+test("ESDMS-012/007: the expiring-documents REPORT matches the ordinary endpoint's version-order and visibility rules", async () => {
+  const employee = await apiRequest(server.baseUrl, "POST", "/api/v1/employees", {
+    token: hrToken,
+    body: { employeeCode: unique("RPT"), fullLegalName: unique("Report Expiry Employee"), joiningDate: "2026-01-01" },
+  });
+  const employeeId = employee.body.data.id;
+
+  // Latest version has expiry_date = NULL — must not fall back to the
+  // older, expired v1.
+  const nullLatestType = await apiRequest(server.baseUrl, "POST", "/api/v1/workforce-config/document-types", {
+    token: hrToken,
+    body: { name: unique("Null Latest"), allowedMimeTypes: ["application/pdf"] },
+  });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/employees/${employeeId}/documents`, {
+    token: hrToken, body: pdfForm({ documentTypeId: nullLatestType.body.data.id, expiryDate: await isoDate(-1000) }), isForm: true,
+  });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/employees/${employeeId}/documents`, {
+    token: hrToken, body: pdfForm({ documentTypeId: nullLatestType.body.data.id }), isForm: true, // no expiryDate
+  });
+
+  // Latest version expiring within the threshold — must appear.
+  const withinThresholdType = await apiRequest(server.baseUrl, "POST", "/api/v1/workforce-config/document-types", {
+    token: hrToken,
+    body: { name: unique("Within Threshold"), allowedMimeTypes: ["application/pdf"], expiryRequired: true },
+  });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/employees/${employeeId}/documents`, {
+    token: hrToken, body: pdfForm({ documentTypeId: withinThresholdType.body.data.id, expiryDate: await isoDate(10) }), isForm: true,
+  });
+
+  // Hidden from HR (hr_can_view=false) but otherwise expiring — must never
+  // leak into the HR-run report.
+  const hiddenType = await apiRequest(server.baseUrl, "POST", "/api/v1/workforce-config/document-types", {
+    token: hrToken,
+    body: { name: unique("Hidden Expiring"), hrCanView: false, allowedMimeTypes: ["application/pdf"], expiryRequired: true },
+  });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/employees/${employeeId}/documents`, {
+    token: hrToken, body: pdfForm({ documentTypeId: hiddenType.body.data.id, expiryDate: await isoDate(10) }), isForm: true,
+  });
+
+  const response = await fetch(`${server.baseUrl}/api/v1/reports/workforce/expiring-documents.xlsx?withinDays=30`, {
+    headers: { Cookie: hrToken, Origin: "http://localhost:5173" },
+  });
+  assert.equal(response.status, 200);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(Buffer.from(await response.arrayBuffer()));
+  const documentTypeNames = [];
+  workbook.getWorksheet("Expiring Documents").eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    documentTypeNames.push(row.getCell(3).value);
+  });
+
+  assert.ok(!documentTypeNames.includes(nullLatestType.body.data.name), "NULL-expiry latest version must not fall back to the older expired version");
+  assert.ok(documentTypeNames.includes(withinThresholdType.body.data.name), "a latest version expiring within the threshold must appear");
+  assert.ok(!documentTypeNames.includes(hiddenType.body.data.name), "a hidden (hr_can_view=false) document type must never appear in the HR report");
+});

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import config from "../../config/env.js";
+import { logServerError, hashForLogging } from "../logging/safe-logger.js";
 
 // Interface: any provider must implement save(buffer, {gatePassId, category,
 // extension}) -> {storageKey, checksumSha256, sizeBytes}, read(storageKey)
@@ -69,7 +70,14 @@ export class LocalStorageProvider {
       await fs.unlink(assertSafeLocalKey(storageKey));
     } catch (error) {
       if (error.code !== "ENOENT") {
-        console.error(`Failed to clean up orphaned file ${storageKey}:`, error);
+        // ESDMS-021: never the raw storage path or the raw fs error
+        // message — logServerError only logs a non-AppError's name (e.g.
+        // "Error"/"EACCES"-style code is captured separately below via a
+        // safe, non-reversible key reference), not its .message.
+        logServerError(error, undefined, {
+          operation: "storage.local.remove",
+          storageKeyHash: hashForLogging(storageKey),
+        });
       }
     }
   }
@@ -219,11 +227,23 @@ export class SupabaseStorageProvider {
         });
 
         if (!response.ok && response.status !== 404) {
-          console.error(`Failed to clean up orphaned file ${storageKey}: HTTP ${response.status}`);
+          // A plain HTTP status code is safe to log; the provider's
+          // response body (which could echo back request details) is
+          // deliberately never read here.
+          logServerError(new Error("Storage delete returned a non-OK response"), undefined, {
+            operation: "storage.supabase.remove",
+            provider: "supabase",
+            httpStatus: response.status,
+            storageKeyHash: hashForLogging(storageKey),
+          });
         }
       });
     } catch (error) {
-      console.error(`Failed to clean up orphaned file ${storageKey}:`, error.message);
+      logServerError(error, undefined, {
+        operation: "storage.supabase.remove",
+        provider: "supabase",
+        storageKeyHash: hashForLogging(storageKey),
+      });
     }
   }
 }

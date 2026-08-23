@@ -302,6 +302,19 @@ background export jobs beyond the explicitly bounded synchronous V1, and
 cross-module search. Inventory / Procurement remains a separate future
 module.
 
+An external pre-pilot audit (2026-08-23) reviewed this module for
+site-pilot readiness. The highest-priority security/data-integrity/
+authorization findings were fixed in that same session — see the
+"Pre-Pilot Security & Data-Integrity Hardening Pass" entry in
+`docs/DECISIONS.md` for exactly what changed. **The frontend for this
+module is functional, not polished or fully complete**: Governance/User-
+Management, full Employee administration, Documents/Contracts lifecycle
+UI, and Workforce configuration remain largely API-only or minimal-UI
+surfaces exercised mainly by the backend test suite; mobile/responsive
+layout, the visual design system, accessibility fixes, PWA offline-state
+handling, and a rebuilt operational dashboard were not addressed in that
+session and remain open work before a controlled site pilot.
+
 ---
 
 ## 11. Other Future Modules

@@ -1,5 +1,6 @@
 import multer from "multer";
 import { AppError } from "../shared/errors/app-error.js";
+import { logServerError } from "../shared/logging/safe-logger.js";
 
 export function notFoundHandler(req, res) {
   res.status(404).json({
@@ -16,7 +17,11 @@ export function notFoundHandler(req, res) {
 export function errorHandler(error, req, res, next) {
   if (error instanceof AppError) {
     if (error.statusCode >= 500) {
-      console.error(error);
+      const requestId = logServerError(error, req);
+      return res.status(error.statusCode).json({
+        success: false,
+        error: { code: error.code, message: error.message, requestId },
+      });
     }
 
     return res.status(error.statusCode).json({
@@ -39,13 +44,14 @@ export function errorHandler(error, req, res, next) {
     });
   }
 
-  console.error(error);
+  const requestId = logServerError(error, req);
 
   return res.status(500).json({
     success: false,
     error: {
       code: "INTERNAL_ERROR",
       message: "Something went wrong. Please try again.",
+      requestId,
     },
   });
 }

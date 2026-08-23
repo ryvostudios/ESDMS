@@ -79,6 +79,13 @@ export function LoginPage() {
           </div>
 
           <form className={styles.form} onSubmit={handleSubmit} noValidate>
+            {!formError && location.state?.info && (
+              // e.g. after a password change intentionally invalidates the
+              // session (ESDMS-020) — a confirmation, not an error.
+              <div className={styles.formError} role="status">
+                {location.state.info}
+              </div>
+            )}
             {formError && (
               <div className={styles.formError} role="alert">
                 {formError}

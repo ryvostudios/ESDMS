@@ -1,6 +1,6 @@
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
-import { resolveCreateSiteId, employeeSiteFilter } from "../workforce/workforce.authorization.js";
+import { resolveCreateSiteId, resolveTargetSiteId, employeeSiteFilter } from "../workforce/workforce.authorization.js";
 import { createDepartmentSchema, updateDepartmentSchema } from "./departments.validation.js";
 import {
   listActiveDepartmentsForSite,
@@ -19,7 +19,8 @@ function parseBody(schema, body) {
 }
 
 export const list = asyncHandler(async (req, res) => {
-  const rows = await listActiveDepartmentsForSite(req.user.siteId);
+  const siteId = resolveTargetSiteId(req.user, req.query.siteId);
+  const rows = await listActiveDepartmentsForSite(siteId);
   res.status(200).json({ success: true, data: rows });
 });
 
@@ -27,7 +28,7 @@ export const list = asyncHandler(async (req, res) => {
 // actor's site, or every site for a company-wide scope.
 export const listAll = asyncHandler(async (req, res) => {
   const scope = employeeSiteFilter(req.user);
-  const rows = scope === null ? [] : await listDepartmentsForSite(scope);
+  const rows = await listDepartmentsForSite(scope);
   res.status(200).json({ success: true, data: rows });
 });
 

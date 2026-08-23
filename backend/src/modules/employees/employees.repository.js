@@ -1,5 +1,15 @@
 import pool from "../../config/database.js";
 
+// Backs the Add Employee site-first selector: null scope (all-site actor)
+// returns every active site, a specific scope returns just that one.
+export async function listActiveSites(siteId) {
+  const result = await pool.query(
+    "SELECT id, name FROM sites WHERE is_active = true AND ($1::uuid IS NULL OR id = $1) ORDER BY name",
+    [siteId],
+  );
+  return result.rows;
+}
+
 // Reused everywhere "the employee's current permanent assignment" is
 // needed: the latest employment_assignments row whose effective_date has
 // arrived. A LATERAL subquery, not a database VIEW — a view would run with
@@ -99,7 +109,7 @@ export async function employeeCodeExists(code) {
 // proceed with an explicit override (docs/DECISIONS.md).
 export async function findPotentialDuplicates({ fullLegalName, primarySiteId, cnic, mobile, personalEmail }) {
   const result = await pool.query(
-    `SELECT e.id, e.employee_code, e.full_legal_name, e.status,
+    `SELECT e.id, e.employee_code, e.full_legal_name, e.status, e.primary_site_id,
             (LOWER(e.full_legal_name) = LOWER($1) AND e.primary_site_id = $2) AS name_site_match,
             (pd.cnic IS NOT NULL AND pd.cnic = ANY($3::text[])) AS cnic_match,
             (pd.mobile IS NOT NULL AND pd.mobile = ANY($4::text[])) AS mobile_match,
@@ -130,6 +140,36 @@ export async function insertEmployee(client, { employeeCode, fullLegalName, prim
     [employeeCode, fullLegalName, primarySiteId, joiningDate, createdByUserId],
   );
   return result.rows[0];
+}
+
+// Locks the Employee row for the duration of the caller's transaction so a
+// status/link/site decision is made against authoritative current state,
+// not a value read before the transaction began (ESDMS-004/033/006).
+export async function lockEmployeeById(client, id) {
+  const result = await client.query(
+    `SELECT id, employee_code, full_legal_name, primary_site_id, status, user_id
+     FROM employees WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  return result.rows[0] || null;
+}
+
+// Fresh, current-assignment carry-forward fields for a transfer — callable
+// with either `pool` or a transaction `client`. Kept as a plain (unlocked)
+// read of employment_assignments: a transfer only INSERTs a new row here,
+// it never locks/updates an existing one, so there is nothing to lock —
+// reading it AFTER the Employee row lock is held is sufficient to see any
+// transfer that already committed.
+export async function findCurrentAssignmentFields(client, employeeId) {
+  const result = await client.query(
+    `SELECT department_id, position_id, employment_type_id, rotation_policy_id, reporting_manager_employee_id
+     FROM employment_assignments
+     WHERE employee_id = $1 AND effective_date <= CURRENT_DATE
+     ORDER BY effective_date DESC, created_at DESC
+     LIMIT 1`,
+    [employeeId],
+  );
+  return result.rows[0] || {};
 }
 
 export async function linkUserAccount(client, employeeId, userId) {
@@ -228,25 +268,55 @@ export async function listAssignmentHistory(employeeId) {
   return result.rows;
 }
 
-// Bounded walk-up-the-chain cycle check — "prevent obvious hierarchy
-// cycles where practical," not a full graph algorithm.
-export async function wouldCreateReportingCycle(employeeId, proposedManagerId, maxHops = 25) {
+// Dedicated, fixed advisory-lock key for ALL reporting-hierarchy
+// mutations (any write that sets employment_assignments.reporting_manager_
+// employee_id). Arbitrary but constant — chosen once here and never reused
+// for anything else in this codebase, so it can never collide with an
+// unrelated advisory lock. Must be acquired with pg_advisory_xact_lock
+// (transaction-scoped: released automatically on COMMIT/ROLLBACK, never
+// needs an explicit unlock) from WITHIN the same transaction that then runs
+// the cycle check and the assignment write, so cycle validation and the
+// mutation it guards are serialized against every other concurrent
+// reporting-manager assignment — see acquireReportingHierarchyLock.
+export const REPORTING_HIERARCHY_LOCK_KEY = 861203501;
+
+export async function acquireReportingHierarchyLock(client) {
+  await client.query("SELECT pg_advisory_xact_lock($1)", [REPORTING_HIERARCHY_LOCK_KEY]);
+}
+
+// Recursive-CTE cycle check: walks the FULL current reporting chain from
+// proposedManagerId upward (via each employee's latest effective
+// assignment), not a hop-capped loop — a hierarchy deeper than any fixed
+// cap can no longer bypass detection (ESDMS-040). The `visited` array guard
+// inside the recursion also protects against a pre-existing data cycle
+// (defensive: this function is what's supposed to prevent one existing at
+// all) causing infinite recursion. Takes a client (pool or transaction
+// client) rather than always using the module pool, so a caller holding the
+// reporting-hierarchy advisory lock runs this check inside that same
+// transaction/connection.
+export async function wouldCreateReportingCycle(client, employeeId, proposedManagerId) {
   if (employeeId === proposedManagerId) return true;
 
-  let currentId = proposedManagerId;
-  for (let hop = 0; hop < maxHops && currentId; hop += 1) {
-    if (currentId === employeeId) return true;
-
-    const result = await pool.query(
-      `SELECT ea.reporting_manager_employee_id
+  const result = await client.query(
+    `WITH RECURSIVE current_manager AS (
+       SELECT DISTINCT ON (ea.employee_id)
+              ea.employee_id, ea.reporting_manager_employee_id AS manager_id
        FROM employment_assignments ea
-       WHERE ea.employee_id = $1 AND ea.effective_date <= CURRENT_DATE
-       ORDER BY ea.effective_date DESC, ea.created_at DESC
-       LIMIT 1`,
-      [currentId],
-    );
-    currentId = result.rows[0]?.reporting_manager_employee_id || null;
-  }
+       WHERE ea.effective_date <= CURRENT_DATE
+       ORDER BY ea.employee_id, ea.effective_date DESC, ea.created_at DESC
+     ),
+     chain AS (
+       SELECT $2::uuid AS current_id, ARRAY[$2::uuid]::uuid[] AS visited
+       UNION ALL
+       SELECT cm.manager_id, chain.visited || cm.manager_id
+       FROM chain
+       JOIN current_manager cm ON cm.employee_id = chain.current_id
+       WHERE cm.manager_id IS NOT NULL
+         AND NOT (cm.manager_id = ANY(chain.visited))
+     )
+     SELECT EXISTS (SELECT 1 FROM chain WHERE current_id = $1) AS cycle`,
+    [employeeId, proposedManagerId],
+  );
 
-  return false;
+  return result.rows[0].cycle;
 }

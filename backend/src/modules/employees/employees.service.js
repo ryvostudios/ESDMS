@@ -12,6 +12,7 @@ import { findEmploymentTypeById } from "../employment-types/employment-types.rep
 import { findRoleByName, findUserById } from "../users/users.repository.js";
 import { guardGovernanceTarget, UM_MANAGE_PERMISSION, CEO_ROLE, UM_ROLE } from "../users/users.authorization.js";
 import { findPolicyById } from "../rotation/rotation.repository.js";
+import { currentDateInAppTimezone } from "../../shared/time/app-timezone.js";
 import {
   listEmployees as repoListEmployees,
   findEmployeeById,
@@ -19,13 +20,64 @@ import {
   employeeCodeExists,
   findPotentialDuplicates,
   insertEmployee,
+  lockEmployeeById,
+  findCurrentAssignmentFields,
   linkUserAccount,
   updateEmployeeStatus,
   updateEmployeeCoreFields,
   insertAssignment,
   listAssignmentHistory,
   wouldCreateReportingCycle,
+  acquireReportingHierarchyLock,
+  listActiveSites,
 } from "./employees.repository.js";
+
+// Add Employee's site-first step: an all-site actor picks from every
+// active site; a site-scoped actor has nothing to pick (their one site is
+// implicit), but the same shape is returned for a uniform frontend contract.
+export async function listSites(actor) {
+  return listActiveSites(employeeSiteFilter(actor));
+}
+
+// ESDMS-033: the only status transitions this pilot supports. Anything not
+// listed here — most notably reactivating a RESIGNED/TERMINATED record — is
+// explicitly rejected rather than silently allowed; formal rehire/
+// employment-period modeling is deferred (docs/DECISIONS.md).
+const ALLOWED_STATUS_TRANSITIONS = {
+  ACTIVE: ["INACTIVE", "RESIGNED", "TERMINATED"],
+  INACTIVE: ["ACTIVE"],
+  RESIGNED: [],
+  TERMINATED: [],
+};
+
+function assertValidStatusTransition(fromStatus, toStatus) {
+  const allowed = ALLOWED_STATUS_TRANSITIONS[fromStatus] || [];
+  if (!allowed.includes(toStatus)) {
+    throw new ValidationError(`Cannot change Employee status from ${fromStatus} to ${toStatus}.`);
+  }
+}
+
+// ESDMS-002: an out-of-scope match is disclosed only as a single boolean —
+// never id, code, name, status, department, site, or even how many such
+// matches exist (an array of per-match redacted placeholders would still
+// leak the count via its length). Scope is always derived from the actor's
+// own resolved site (employeeSiteFilter), never a client-supplied value.
+function buildDuplicateCheckResult(actor, duplicates) {
+  const scope = employeeSiteFilter(actor);
+  const matches = [];
+  let outsideScopeMatch = false;
+
+  for (const row of duplicates) {
+    if (scope === null || row.primary_site_id === scope) {
+      const { primary_site_id, ...visible } = row;
+      matches.push(visible);
+    } else {
+      outsideScopeMatch = true;
+    }
+  }
+
+  return { matches, outsideScopeMatch };
+}
 
 async function assertDepartmentUsable(departmentId, siteId) {
   if (!departmentId) return;
@@ -62,32 +114,67 @@ async function assertRotationPolicyUsable(policyId) {
   if (!policy || !policy.is_active) throw new ValidationError("Invalid rotation policy.");
 }
 
-async function assertReportingManagerUsable(actor, employeeId, managerId) {
+// `client` defaults to `pool` so createEmployee's pre-transaction call
+// (employeeId is always null there — a brand-new employee can't already be
+// part of any existing chain, so the cycle branch below never runs for it)
+// doesn't need to change. Any caller that DOES pass a non-null employeeId
+// must pass the transaction client it's about to write the assignment
+// with, so the advisory lock and the cycle check run inside that same
+// transaction — see acquireReportingHierarchyLock.
+async function assertReportingManagerUsable(actor, employeeId, managerId, client = pool) {
   if (!managerId) return;
   const manager = await findEmployeeById(managerId);
   if (!manager || manager.status !== "ACTIVE") throw new ValidationError("Invalid reporting manager.");
   assertEmployeeViewable(actor, manager);
-  if (employeeId && (await wouldCreateReportingCycle(employeeId, managerId))) {
-    throw new ValidationError("This reporting-manager assignment would create a cycle.");
+  if (employeeId) {
+    // Serializes cycle validation against the assignment mutation it
+    // guards: two concurrent transfers (A -> B and B -> A) both run this
+    // check, but only one can hold this transaction-scoped lock at a time,
+    // so the second one's cycle check runs AFTER the first's write is
+    // already visible within its own transaction, not against a
+    // pre-mutation snapshot both could otherwise pass.
+    await acquireReportingHierarchyLock(client);
+    if (await wouldCreateReportingCycle(client, employeeId, managerId)) {
+      throw new ValidationError("This reporting-manager assignment would create a cycle.");
+    }
   }
 }
 
-async function linkedUserRole(client, userId) {
-  const result = await client.query(
-    "SELECT r.name FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1",
-    [userId],
-  );
-  return result.rows[0]?.name || null;
+// Locks the User row (FOR UPDATE OF u) for the duration of the caller's
+// transaction — used wherever the role/active-state READ and a subsequent
+// conditional WRITE (or WRITE decision) on that same row must be atomic
+// against a concurrent Governance mutation (changeEmployeeStatus,
+// createTransfer, resetEmployeeLoginPassword).
+// Deliberately two queries, not one FOR UPDATE ... JOIN: after this lock
+// blocks behind a concurrent transaction that changed the row, Postgres's
+// EvalPlanQual re-check re-fetches the locked `users` row but does not
+// reliably re-resolve a joined table's row against it in the same query,
+// producing a false "no row" result even though the just-locked row and
+// the referenced role both genuinely exist (confirmed empirically). Lock
+// `users` alone first, then resolve the role name in a separate, ordinary
+// read against the just-locked row's own current role_id.
+async function lockLinkedUserRoleAndActive(client, userId) {
+  const locked = await client.query("SELECT role_id, is_active, site_id FROM users WHERE id = $1 FOR UPDATE", [userId]);
+  const row = locked.rows[0];
+  if (!row) return null;
+
+  const role = await client.query("SELECT name FROM roles WHERE id = $1", [row.role_id]);
+  return { role: role.rows[0]?.name || null, is_active: row.is_active, site_id: row.site_id };
 }
 
 export async function checkDuplicates(actor, input) {
-  return findPotentialDuplicates({
+  // Never trust a client-supplied site to establish scope: the site used
+  // both for the "same site name" match and for redaction is the actor's
+  // own resolved create-site (ESDMS-002).
+  const siteId = resolveCreateSiteId(actor, input.siteId);
+  const duplicates = await findPotentialDuplicates({
     fullLegalName: input.fullLegalName,
-    primarySiteId: input.siteId,
+    primarySiteId: siteId,
     cnic: input.cnic,
     mobile: input.mobile,
     personalEmail: input.personalEmail,
   });
+  return buildDuplicateCheckResult(actor, duplicates);
 }
 
 export async function createEmployee(actor, input) {
@@ -98,9 +185,9 @@ export async function createEmployee(actor, input) {
   }
 
   if (!input.confirmDuplicateOverride) {
-    const duplicates = await checkDuplicates(actor, { ...input, siteId });
-    if (duplicates.length > 0) {
-      throw new ConflictError("Possible duplicate employee record(s) found.", { duplicates });
+    const duplicateResult = await checkDuplicates(actor, { ...input, siteId });
+    if (duplicateResult.matches.length > 0 || duplicateResult.outsideScopeMatch) {
+      throw new ConflictError("Possible duplicate employee record(s) found.", duplicateResult);
     }
   }
 
@@ -234,40 +321,70 @@ export async function changeEmployeeStatus(actor, employeeId, input) {
   if (!employee) throw new NotFoundError("Employee not found.");
   assertEmployeeManageable(actor, employee, "employees.status_change");
 
-  if (employee.status === input.status) {
-    throw new ValidationError(`Employee is already ${input.status}.`);
-  }
-
   const goingInactive = ["RESIGNED", "TERMINATED", "INACTIVE"].includes(input.status);
 
   return withTransaction(async (client) => {
-    const updated = await updateEmployeeStatus(client, employee.id, { status: input.status, statusReason: input.reason });
+    // ESDMS-033: authoritative current status comes from the locked row,
+    // not the value read before this transaction began — a concurrent
+    // status change can't be raced past.
+    const locked = await lockEmployeeById(client, employee.id);
+    if (!locked) throw new NotFoundError("Employee not found.");
+
+    // TOCTOU: re-run the actor's permission/site-scope authorization
+    // against the LOCKED, current row — not the value read before this
+    // transaction began. If the Employee moved to another site between the
+    // initial (pre-lock) check and this lock, a stale same-site
+    // authorization must not carry over.
+    assertEmployeeManageable(actor, locked, "employees.status_change");
+
+    if (locked.status === input.status) {
+      throw new ValidationError(`Employee is already ${input.status}.`);
+    }
+    assertValidStatusTransition(locked.status, input.status);
+
+    // Lock order: Employee first, then the linked User — locked/reloaded
+    // once, under this same transaction, before any privilege/account-
+    // state decision is made. A concurrent Governance role promotion or
+    // (re)activation can't race past this: it either committed before this
+    // SELECT ... FOR UPDATE (and is seen here) or blocks behind this
+    // transaction's row lock until this one commits/rolls back. Both the
+    // block-check below and the deactivation decision after the mutation
+    // read from this single locked snapshot — never a second, separately
+    // timed read that could itself observe a different state.
+    const lockedLinkedUser = locked.user_id ? await lockLinkedUserRoleAndActive(client, locked.user_id) : null;
+
+    // ESDMS-005: Employee status and application User security are separate
+    // concepts. An ACTIVE privileged (non-EMPLOYEE) linked login blocks the
+    // whole offboarding — it must be deactivated through Governance first.
+    // An already-inactive privileged login (Governance already acted) does
+    // not block offboarding, and is never touched here. CEO accounts are
+    // covered by the same "privileged" branch (defense in depth; a CEO
+    // wouldn't realistically be linked through Workforce at all).
+    if (goingInactive && lockedLinkedUser && lockedLinkedUser.role !== "EMPLOYEE" && lockedLinkedUser.is_active) {
+      throw new ForbiddenError(
+        "The linked application account holds a privileged role and is still active. Deactivate it through Governance before offboarding this Employee.",
+      );
+    }
+
+    const updated = await updateEmployeeStatus(client, locked.id, { status: input.status, statusReason: input.reason });
 
     await recordHistory(client, {
-      employeeId: employee.id,
+      employeeId: locked.id,
       eventType: "STATUS_CHANGED",
-      summary: { previousStatus: employee.status, status: input.status, reason: input.reason || null },
+      summary: { previousStatus: locked.status, status: input.status, reason: input.reason || null },
       actorUserId: actor.id,
     });
 
-    // Coordinate the linked login: former employees must not retain
-    // application access accidentally. CEO accounts are never touched
-    // through this path — an employee record linked to a CEO login must go
-    // through the governance API instead (defense in depth; realistically
-    // never reachable since a CEO wouldn't be onboarded through Workforce).
-    if (goingInactive && employee.user_id) {
-      const role = await linkedUserRole(client, employee.user_id);
-      if (role !== "EMPLOYEE") {
-        throw new ForbiddenError(
-          "A privileged linked account cannot be deactivated through Workforce. Use the governance workflow.",
-        );
-      }
-
+    // Only an ordinary EMPLOYEE-role linked login is auto-coordinated;
+    // reactivating (INACTIVE -> ACTIVE) never touches the linked User —
+    // security account activation stays an explicit Governance operation.
+    // Reuses the SAME locked snapshot taken above — not a fresh read.
+    if (goingInactive && lockedLinkedUser && lockedLinkedUser.role === "EMPLOYEE" && lockedLinkedUser.is_active) {
       await client.query("UPDATE users SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [
-        employee.user_id,
+        locked.user_id,
       ]);
       await recordHistory(client, {
-        employeeId: employee.id,
+        employeeId: locked.id,
         eventType: "LOGIN_DEACTIVATED",
         summary: { reason: "employment_status_change" },
         actorUserId: actor.id,
@@ -281,38 +398,100 @@ export async function changeEmployeeStatus(actor, employeeId, input) {
 export async function createTransfer(actor, employeeId, input) {
   const employee = await findEmployeeById(employeeId);
   if (!employee) throw new NotFoundError("Employee not found.");
-  assertEmployeeManageable(actor, employee, "employees.transfer");
-
-  const siteId = input.siteId || employee.primary_site_id;
-  if (siteId !== employee.primary_site_id) {
-    const scope = employeeSiteFilter(actor);
-    if (scope !== null) {
-      throw new ForbiddenError("Changing an employee's primary site requires company-wide Workforce scope.");
-    }
-  }
-
-  // A transfer only specifying, say, a new rotation policy must not wipe
-  // out the employee's existing department/position/etc — every field not
-  // explicitly provided carries forward from the current assignment. Only
-  // an explicit `null` clears a field; `undefined` (not sent at all) keeps
-  // the current value.
-  const departmentId = input.departmentId !== undefined ? input.departmentId : employee.department_id;
-  const positionId = input.positionId !== undefined ? input.positionId : employee.position_id;
-  const employmentTypeId = input.employmentTypeId !== undefined ? input.employmentTypeId : employee.employment_type_id;
-  const rotationPolicyId = input.rotationPolicyId !== undefined ? input.rotationPolicyId : employee.rotation_policy_id;
-  const reportingManagerEmployeeId =
-    input.reportingManagerEmployeeId !== undefined ? input.reportingManagerEmployeeId : employee.reporting_manager_employee_id;
-
-  await assertDepartmentUsable(departmentId, siteId);
-  const position = await assertPositionUsable(positionId, siteId);
-  assertPositionDepartmentCoherent(position, departmentId || null);
-  await assertEmploymentTypeUsable(employmentTypeId);
-  await assertRotationPolicyUsable(rotationPolicyId);
-  await assertReportingManagerUsable(actor, employee.id, reportingManagerEmployeeId);
+  assertEmployeeManageable(actor, employee, "employees.transfer"); // early UX signal only — re-checked below
 
   return withTransaction(async (client) => {
+    // Reporting-hierarchy advisory lock is acquired FIRST, before the
+    // Employee row lock below — not just the Employee-row lock ordering
+    // this function otherwise follows. A transfer's own INSERT sets
+    // reporting_manager_employee_id, whose FK requires a share lock on the
+    // MANAGER's employee row; two reciprocal transfers (A -> manager B,
+    // B -> manager A) each already hold FOR UPDATE on their own subject
+    // row, so if the advisory lock were acquired after that row lock, each
+    // transaction could end up waiting on the advisory lock (held by the
+    // other) while the other waits on the first's row lock for the FK
+    // check — a genuine deadlock (reproduced empirically). Taking the
+    // globally-serializing advisory lock first means only one transfer at a
+    // time ever proceeds to lock any employee row at all, so that cycle
+    // can't form.
+    await acquireReportingHierarchyLock(client);
+
+    // Lock order: Employee first (among the per-employee row locks).
+    const locked = await lockEmployeeById(client, employee.id);
+    if (!locked) throw new NotFoundError("Employee not found.");
+
+    // TOCTOU: re-authorize against the locked, current row — a stale
+    // same-site decision from before the lock must not carry over if the
+    // Employee moved sites in the meantime.
+    assertEmployeeManageable(actor, locked, "employees.transfer");
+
+    // Re-derive current assignment fields fresh, from locked/current DB
+    // state — not the pre-transaction snapshot, which a concurrent
+    // transfer could have already superseded.
+    const current = await findCurrentAssignmentFields(client, locked.id);
+
+    // Lock order: linked User second — locked/reloaded once here (if any)
+    // and reused for every privilege/site decision below, never a fresh,
+    // unlocked read taken later.
+    const lockedLinkedUser = locked.user_id ? await lockLinkedUserRoleAndActive(client, locked.user_id) : null;
+
+    const siteId = input.siteId || locked.primary_site_id;
+    const isSiteChange = siteId !== locked.primary_site_id;
+
+    if (isSiteChange) {
+      const scope = employeeSiteFilter(actor);
+      if (scope !== null) {
+        throw new ForbiddenError("Changing an employee's primary site requires company-wide Workforce scope.");
+      }
+      // ESDMS-006: a future-dated cross-site transfer must not corrupt the
+      // employee's CURRENT authorization scope today. No scheduler exists yet
+      // for these, so they are rejected outright rather than silently applied
+      // early or accepted and ignored.
+      if (input.effectiveDate > currentDateInAppTimezone()) {
+        throw new ValidationError(
+          "A cross-site transfer cannot be scheduled for a future date. Use today's date for an effective transfer.",
+        );
+      }
+      // A privileged, active linked User is NEVER silently moved (see the
+      // sync/never-touch split below) — so if it would become
+      // site-inconsistent as a result of this transfer, block the transfer
+      // itself instead. Already-inactive, or already at the target site,
+      // does not block.
+      if (
+        lockedLinkedUser &&
+        lockedLinkedUser.role !== "EMPLOYEE" &&
+        lockedLinkedUser.is_active &&
+        lockedLinkedUser.site_id !== siteId
+      ) {
+        throw new ForbiddenError(
+          "The linked application account holds a privileged role and is still active. Its site cannot be changed by Workforce — adjust it through Governance before transferring this Employee to another site.",
+        );
+      }
+    }
+
+    // A transfer only specifying, say, a new rotation policy must not wipe
+    // out the employee's existing department/position/etc — every field not
+    // explicitly provided carries forward from the current assignment. Only
+    // an explicit `null` clears a field; `undefined` (not sent at all) keeps
+    // the current value.
+    const departmentId = input.departmentId !== undefined ? input.departmentId : current.department_id ?? null;
+    const positionId = input.positionId !== undefined ? input.positionId : current.position_id ?? null;
+    const employmentTypeId = input.employmentTypeId !== undefined ? input.employmentTypeId : current.employment_type_id ?? null;
+    const rotationPolicyId = input.rotationPolicyId !== undefined ? input.rotationPolicyId : current.rotation_policy_id ?? null;
+    const reportingManagerEmployeeId =
+      input.reportingManagerEmployeeId !== undefined
+        ? input.reportingManagerEmployeeId
+        : current.reporting_manager_employee_id ?? null;
+
+    await assertDepartmentUsable(departmentId, siteId);
+    const position = await assertPositionUsable(positionId, siteId);
+    assertPositionDepartmentCoherent(position, departmentId || null);
+    await assertEmploymentTypeUsable(employmentTypeId);
+    await assertRotationPolicyUsable(rotationPolicyId);
+    await assertReportingManagerUsable(actor, locked.id, reportingManagerEmployeeId, client);
+
     const assignment = await insertAssignment(client, {
-      employeeId: employee.id,
+      employeeId: locked.id,
       siteId,
       departmentId,
       positionId,
@@ -324,15 +503,40 @@ export async function createTransfer(actor, employeeId, input) {
       createdByUserId: actor.id,
     });
 
-    if (siteId !== employee.primary_site_id) {
+    let linkedAccountNote = null;
+    if (isSiteChange) {
       await client.query("UPDATE employees SET primary_site_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [
-        employee.id,
+        locked.id,
         siteId,
       ]);
+
+      if (lockedLinkedUser?.role === "EMPLOYEE") {
+        // Safe to synchronize: an ordinary self-service account has no
+        // authority tied to site beyond scoping its own record. Clear a
+        // now-mismatched department_id in the same statement so this
+        // never trips the department/site composite FK.
+        await client.query(
+          `UPDATE users
+           SET site_id = $2,
+               department_id = CASE
+                 WHEN department_id IN (SELECT id FROM departments WHERE site_id = $2) THEN department_id
+                 ELSE NULL
+               END,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [locked.user_id, siteId],
+        );
+      } else if (lockedLinkedUser) {
+        // Privileged account, but not active (otherwise blocked above) —
+        // never silently touched either way. Governance must adjust its
+        // site scope separately if that's still required.
+        linkedAccountNote =
+          "The linked application account holds a privileged role; its own site scope was not changed. Adjust it through Governance if required.";
+      }
     }
 
     await recordHistory(client, {
-      employeeId: employee.id,
+      employeeId: locked.id,
       eventType: "SITE_CHANGED",
       summary: {
         effectiveDate: input.effectiveDate,
@@ -347,12 +551,12 @@ export async function createTransfer(actor, employeeId, input) {
 
     await recordGovernanceAudit(client, {
       actorUserId: actor.id,
-      targetEmployeeId: employee.id,
+      targetEmployeeId: locked.id,
       action: "EMPLOYEE_TRANSFERRED",
       metadata: { effectiveDate: input.effectiveDate, siteId, departmentId: input.departmentId || null },
     });
 
-    return assignment;
+    return linkedAccountNote ? { ...assignment, linkedAccountNote } : assignment;
   });
 }
 
@@ -380,6 +584,25 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
 
   try {
     return await withTransaction(async (client) => {
+      // ESDMS-004: reload/lock the Employee itself under the transaction —
+      // status, linkage, and primary site must all be re-derived from
+      // authoritative current state, not the value read before this
+      // transaction began.
+      const lockedEmployee = await lockEmployeeById(client, employee.id);
+      if (!lockedEmployee) throw new NotFoundError("Employee not found.");
+
+      // TOCTOU: re-run authorization against the locked, current row — a
+      // stale same-site decision from before the lock must not carry over
+      // if the Employee moved sites in the meantime.
+      assertEmployeeManageable(actor, lockedEmployee, "employees.account.link_existing");
+
+      if (lockedEmployee.status !== "ACTIVE") {
+        throw new ValidationError("Only an ACTIVE employee can be linked to a login account.");
+      }
+      if (lockedEmployee.user_id) {
+        throw new ConflictError("This Employee already has a linked login account.");
+      }
+
       const targetResult = await client.query(
         `SELECT u.id, u.email, u.full_name, u.is_active, u.department_id,
                 u.site_id, u.created_at, r.name AS role
@@ -431,7 +654,7 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
         throw new ValidationError("An inactive User account cannot be linked to an Employee.");
       }
 
-      if (targetUser.site_id !== employee.primary_site_id) {
+      if (targetUser.site_id !== lockedEmployee.primary_site_id) {
         throw new ValidationError("The User account and Employee must belong to the same site.");
       }
 
@@ -444,7 +667,7 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
         throw new ConflictError("This User account is already linked to another Employee.");
       }
 
-      const linked = await linkUserAccount(client, employee.id, targetUser.id);
+      const linked = await linkUserAccount(client, lockedEmployee.id, targetUser.id);
 
       if (!linked) {
         throw new ConflictError("This Employee already has a linked login account.");
@@ -499,10 +722,8 @@ export async function createLoginForEmployee(actor, employeeId, input) {
   if (employee.user_id) {
     throw new ConflictError("This Employee already has a linked login account.");
   }
-
-  const existingEmail = await pool.query("SELECT 1 FROM users WHERE LOWER(email) = LOWER($1)", [input.email]);
-  if (existingEmail.rowCount > 0) {
-    throw new ConflictError("A user with this email already exists.");
+  if (employee.status !== "ACTIVE") {
+    throw new ValidationError("Only an ACTIVE employee can be issued a login.");
   }
 
   const employeeRole = await findRoleByName("EMPLOYEE");
@@ -513,70 +734,121 @@ export async function createLoginForEmployee(actor, employeeId, input) {
   const temporaryPassword = input.password || crypto.randomBytes(16).toString("base64url");
   const passwordHash = await argon2.hash(temporaryPassword);
 
-  return withTransaction(async (client) => {
-    const created = await client.query(
-      `INSERT INTO users (email, password_hash, full_name, role_id, site_id, is_active, must_change_password)
-       VALUES ($1, $2, $3, $4, $5, true, true)
-       RETURNING id`,
-      [input.email, passwordHash, employee.full_legal_name, employeeRole.id, employee.primary_site_id],
-    );
-    const userId = created.rows[0].id;
+  try {
+    return await withTransaction(async (client) => {
+      // ESDMS-004: re-derive status and linkage under the row lock — the
+      // checks above are only an early UX signal, not the authoritative
+      // gate.
+      const lockedEmployee = await lockEmployeeById(client, employee.id);
+      if (!lockedEmployee) throw new NotFoundError("Employee not found.");
 
-    const linked = await linkUserAccount(client, employee.id, userId);
-    if (!linked) {
-      throw new ConflictError("This Employee already has a linked login account.");
+      // TOCTOU: re-run authorization against the locked, current row — a
+      // stale same-site decision from before the lock must not carry over
+      // if the Employee moved sites in the meantime.
+      assertEmployeeManageable(actor, lockedEmployee, "employees.account.create");
+
+      if (lockedEmployee.status !== "ACTIVE") {
+        throw new ValidationError("Only an ACTIVE employee can be issued a login.");
+      }
+      if (lockedEmployee.user_id) {
+        throw new ConflictError("This Employee already has a linked login account.");
+      }
+
+      const created = await client.query(
+        `INSERT INTO users (email, password_hash, full_name, role_id, site_id, is_active, must_change_password)
+         VALUES ($1, $2, $3, $4, $5, true, true)
+         RETURNING id`,
+        [input.email, passwordHash, lockedEmployee.full_legal_name, employeeRole.id, lockedEmployee.primary_site_id],
+      );
+      const userId = created.rows[0].id;
+
+      const linked = await linkUserAccount(client, lockedEmployee.id, userId);
+      if (!linked) {
+        throw new ConflictError("This Employee already has a linked login account.");
+      }
+
+      await recordGovernanceAudit(client, {
+        actorUserId: actor.id,
+        targetEmployeeId: lockedEmployee.id,
+        targetUserId: userId,
+        action: "USER_CREATED",
+        metadata: { role: "EMPLOYEE", viaWorkforceOnboarding: true },
+      });
+
+      await recordHistory(client, {
+        employeeId: lockedEmployee.id,
+        eventType: "LOGIN_CREATED",
+        summary: { email: input.email },
+        actorUserId: actor.id,
+      });
+
+      // Never returned/logged again after this response — see
+      // docs/SECURITY.md and AGENTS.md §9.
+      return { userId, email: input.email, temporaryPassword };
+    });
+  } catch (error) {
+    if (error?.code === "23505") {
+      throw new ConflictError("A user with this email already exists.");
     }
-
-    await recordGovernanceAudit(client, {
-      actorUserId: actor.id,
-      targetEmployeeId: employee.id,
-      targetUserId: userId,
-      action: "USER_CREATED",
-      metadata: { role: "EMPLOYEE", viaWorkforceOnboarding: true },
-    });
-
-    await recordHistory(client, {
-      employeeId: employee.id,
-      eventType: "LOGIN_CREATED",
-      summary: { email: input.email },
-      actorUserId: actor.id,
-    });
-
-    // Never returned/logged again after this response — see
-    // docs/SECURITY.md and AGENTS.md §9.
-    return { userId, email: input.email, temporaryPassword };
-  });
+    throw error;
+  }
 }
 
 export async function resetEmployeeLoginPassword(actor, employeeId) {
   const employee = await findEmployeeById(employeeId);
   if (!employee) throw new NotFoundError("Employee not found.");
-  assertEmployeeManageable(actor, employee, "employees.account.reset");
-
-  if (!employee.user_id) {
-    throw new ValidationError("This Employee has no linked login account.");
-  }
-
-  const temporaryPassword = crypto.randomBytes(16).toString("base64url");
-  const passwordHash = await argon2.hash(temporaryPassword);
+  assertEmployeeManageable(actor, employee, "employees.account.reset"); // early UX signal only — re-checked below
 
   return withTransaction(async (client) => {
-    const role = await linkedUserRole(client, employee.user_id);
-    if (role !== "EMPLOYEE") {
+    // Lock order: Employee first, then the linked User — same pattern as
+    // changeEmployeeStatus/createTransfer, for the same reason: a
+    // concurrent Governance role promotion on the linked User must either
+    // have already committed before this Employee lock (and is then seen
+    // fresh below) or block behind this transaction's row lock until it
+    // commits/rolls back — never a decision made from stale, unlocked
+    // reads taken before this transaction began.
+    const locked = await lockEmployeeById(client, employee.id);
+    if (!locked) throw new NotFoundError("Employee not found.");
+
+    // TOCTOU: re-authorize against the LOCKED, current row — a stale
+    // same-site decision from before the lock must not carry over if the
+    // Employee moved sites in the meantime.
+    assertEmployeeManageable(actor, locked, "employees.account.reset");
+
+    if (!locked.user_id) {
+      throw new ValidationError("This Employee has no linked login account.");
+    }
+
+    // Lock order: linked User second — locked/reloaded here, under this
+    // same transaction, before the privilege decision below. Reuses the
+    // exact same helper (and posture) as changeEmployeeStatus: only an
+    // ordinary EMPLOYEE-role linked login is ever in scope for a Workforce
+    // credential reset. A privileged/non-EMPLOYEE account — whether it
+    // already was one, or was just promoted by a Governance transaction
+    // that committed while this one was blocked on the lock — is rejected
+    // and left entirely untouched; that path is Governance's, not
+    // Workforce's (and is a separate feature — see
+    // regenerateTemporaryPassword in users.service.js — not duplicated
+    // here).
+    const lockedLinkedUser = await lockLinkedUserRoleAndActive(client, locked.user_id);
+    if (!lockedLinkedUser || lockedLinkedUser.role !== "EMPLOYEE") {
       throw new ForbiddenError(
         "A privileged linked account cannot be reset through Workforce. Use the governance workflow.",
       );
     }
 
+    const temporaryPassword = crypto.randomBytes(16).toString("base64url");
+    const passwordHash = await argon2.hash(temporaryPassword);
+
     await client.query(
       `UPDATE users
        SET password_hash = $2, must_change_password = true, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
-      [employee.user_id, passwordHash],
+      [locked.user_id, passwordHash],
     );
 
     await recordHistory(client, {
-      employeeId: employee.id,
+      employeeId: locked.id,
       eventType: "LOGIN_PASSWORD_RESET",
       summary: {},
       actorUserId: actor.id,

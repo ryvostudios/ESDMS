@@ -1,4 +1,6 @@
-import { ForbiddenError, NotFoundError } from "../../shared/errors/app-error.js";
+import { ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors/app-error.js";
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Centralized Workforce scope/visibility rules — every service function
 // that loads or lists Employee-scoped data calls through here instead of
@@ -66,4 +68,28 @@ export function resolveCreateSiteId(actor, requestedSiteId) {
     throw new ForbiddenError("You can only create employees within your own site.");
   }
   return actor.siteId;
+}
+
+// ESDMS-035 / PASS1-R04: the active-catalog selector (Departments/Positions
+// dropdowns feeding Add Employee) is a different question from the
+// all-site *management* list — a selector must always resolve to exactly
+// one site's active entries, never an implicit/ambiguous default. A
+// site-scoped actor's own site is used regardless of what's requested
+// (mismatch rejected, same posture as resolveCreateSiteId); a company-wide
+// actor must say which site explicitly — no silent fallback to their own,
+// since they may have none, or want a different one.
+export function resolveTargetSiteId(actor, requestedSiteId) {
+  const scope = employeeSiteFilter(actor);
+
+  if (scope !== null) {
+    if (requestedSiteId && requestedSiteId !== actor.siteId) {
+      throw new ForbiddenError("You can only view catalog data for your own site.");
+    }
+    return actor.siteId;
+  }
+
+  if (!requestedSiteId || !UUID_PATTERN.test(requestedSiteId)) {
+    throw new ValidationError("A valid siteId is required to resolve site-specific catalog data.");
+  }
+  return requestedSiteId;
 }

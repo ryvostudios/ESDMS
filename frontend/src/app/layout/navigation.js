@@ -12,7 +12,12 @@ export const NAV_ITEMS = [
   { label: "Gate Passes", to: "/gate-passes", icon: TruckIcon, permission: OFFICE_PERMISSIONS },
   { label: "Approvals", to: "/approvals", icon: ClipboardCheckIcon, permission: ["gate_pass.approve"] },
   { label: "Gate", to: "/guard", icon: ScanIcon, end: true, permission: GUARD_PERMISSIONS },
-  { label: "My Workforce", to: "/workforce/me", icon: HomeIcon, permission: ["profile.self.view"], requiresEmployee: true },
+  // ESDMS-018: no `permission` gate here — My Workforce bundles several
+  // independently-gated self-service capabilities (documents/rotation/
+  // contracts/compensation need no permission at all beyond having a
+  // linked Employee record; only its Profile/Leave children additionally
+  // check profile.self.view/leave.self.*, inside MyWorkforcePage itself).
+  { label: "My Workforce", to: "/workforce/me", icon: HomeIcon, requiresEmployee: true },
   { label: "Workforce", to: "/workforce", icon: HomeIcon, end: true, permission: ["employees.view"] },
   { label: "Employees", to: "/workforce/employees", icon: ClipboardCheckIcon, permission: ["employees.view"] },
   { label: "Workforce Ops", to: "/workforce/operations", icon: ClipboardCheckIcon, permission: ["leave.approve", "employee_documents.view", "rotation.adjust"] },

@@ -15,9 +15,16 @@ export async function findDepartmentById(id) {
   return result.rows[0] || null;
 }
 
+// ESDMS-035: siteId === null means a company-wide (CEO/all-sites) actor —
+// return every site's departments, not an empty result. A joined site name
+// gives the caller meaningful site identity to group/filter by.
 export async function listDepartmentsForSite(siteId) {
   const result = await pool.query(
-    "SELECT id, name, is_active, site_id FROM departments WHERE site_id = $1 ORDER BY name",
+    `SELECT d.id, d.name, d.is_active, d.site_id, s.name AS site_name
+     FROM departments d
+     JOIN sites s ON s.id = d.site_id
+     WHERE ($1::uuid IS NULL OR d.site_id = $1)
+     ORDER BY s.name, d.name`,
     [siteId],
   );
 

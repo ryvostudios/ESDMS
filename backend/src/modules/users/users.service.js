@@ -1,4 +1,5 @@
 import argon2 from "argon2";
+import crypto from "node:crypto";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from "../../shared/errors/app-error.js";
 import { recordGovernanceAudit } from "../../shared/audit/governance-audit.repository.js";
@@ -15,9 +16,17 @@ import {
   listOverridesForUser,
   upsertOverride,
   deleteOverride,
+  lockUserById,
+  replacePasswordAndBumpSession,
 } from "./users.repository.js";
 import { getUserProfileById } from "../../shared/users/user-profile.repository.js";
-import { guardGovernanceTarget, guardUmCreateAuthority, CEO_ROLE, UM_MANAGE_PERMISSION } from "./users.authorization.js";
+import {
+  guardGovernanceTarget,
+  guardUmCreateAuthority,
+  CEO_ROLE,
+  UM_ROLE,
+  UM_MANAGE_PERMISSION,
+} from "./users.authorization.js";
 
 // An actor without site-wide/company-wide reach can only create users
 // within their own site — and an explicit mismatch is a denial, not a
@@ -62,7 +71,14 @@ export async function createUser(actor, input) {
 
   await assertDepartmentUsable(input.departmentId, siteId);
 
-  const passwordHash = await argon2.hash(input.password);
+  // ESDMS-001: no invitation infrastructure — a governance-created account
+  // gets a server-generated temporary password and must_change_password,
+  // reusing the same forced-first-login-change mechanism Workforce
+  // onboarding already relies on. The creator never chooses/sees a
+  // permanent shared credential; the plaintext value below is returned in
+  // this response only and is never logged or persisted anywhere.
+  const temporaryPassword = crypto.randomBytes(16).toString("base64url");
+  const passwordHash = await argon2.hash(temporaryPassword);
 
   return withTransaction(async (client) => {
     const created = await insertUser(client, {
@@ -81,7 +97,7 @@ export async function createUser(actor, input) {
       metadata: { role: input.role, siteId },
     });
 
-    return created;
+    return { ...created, temporaryPassword };
   });
 }
 
@@ -162,6 +178,68 @@ async function setUserActive(actor, targetUserId, isActive) {
 
 export const activateUser = (actor, targetUserId) => setUserActive(actor, targetUserId, true);
 export const deactivateUser = (actor, targetUserId) => setUserActive(actor, targetUserId, false);
+
+// Recovery path for a Governance-created account whose one-time temporary
+// password was lost before first login — NOT a general password reset.
+//
+// guardGovernanceTarget runs first, unlocked, exactly like every other
+// caller in this module (changeUserRole/setUserActive/assertOverridable) —
+// its escalation-attempt audit write goes through a separate pool
+// connection, which is only safe when no lock is held on the target row.
+// Holding a FOR UPDATE lock on that row here and then calling it would
+// deadlock: the audit INSERT needs a foreign-key share lock on the very
+// row this transaction holds exclusively, while this transaction is
+// awaiting that same INSERT before it can rollback and release the lock.
+//
+// The transaction below re-locks and re-reads the target immediately
+// before mutating, and re-checks the same protected-status conditions
+// against that fresh snapshot (without re-invoking guardGovernanceTarget)
+// so a concurrent role/active change or first-login completion between
+// the check above and the lock can't race the eligibility check — same
+// reasoning as lockLinkedUserRoleAndActive in employees.service.js. The
+// plaintext temporary password is returned once here and never persisted
+// or audited — only the fact that a regeneration happened is recorded.
+export async function regenerateTemporaryPassword(actor, targetUserId) {
+  const target = await getUser(actor, targetUserId);
+
+  await guardGovernanceTarget(actor, target, {
+    action: "USER_TEMP_PASSWORD_REGENERATED",
+    umPermission: { code: UM_MANAGE_PERMISSION, nextRole: target.role },
+  });
+
+  return withTransaction(async (client) => {
+    const locked = await lockUserById(client, targetUserId);
+    if (!locked) throw new NotFoundError("User not found.");
+
+    if (
+      locked.role === CEO_ROLE ||
+      locked.id === actor.id ||
+      ((locked.role === UM_ROLE || target.role === UM_ROLE) && !actor.permissions.has(UM_MANAGE_PERMISSION))
+    ) {
+      throw new ForbiddenError();
+    }
+
+    if (!locked.must_change_password) {
+      throw new ValidationError(
+        "This account has already completed its first login. This is not a general password reset feature.",
+      );
+    }
+
+    const temporaryPassword = crypto.randomBytes(16).toString("base64url");
+    const passwordHash = await argon2.hash(temporaryPassword);
+
+    await replacePasswordAndBumpSession(client, targetUserId, passwordHash);
+
+    await recordGovernanceAudit(client, {
+      actorUserId: actor.id,
+      targetUserId,
+      action: "USER_TEMP_PASSWORD_REGENERATED",
+      metadata: {},
+    });
+
+    return { id: targetUserId, temporaryPassword };
+  });
+}
 
 export async function getPermissionOverview(actor, targetUserId) {
   const target = await getUser(actor, targetUserId);

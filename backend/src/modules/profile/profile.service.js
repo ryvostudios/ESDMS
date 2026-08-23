@@ -1,4 +1,3 @@
-import pool from "../../config/database.js";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { storageService } from "../../shared/storage/storage-service.js";
 import { ValidationError, ForbiddenError, NotFoundError, ServiceUnavailableError } from "../../shared/errors/app-error.js";
@@ -98,6 +97,8 @@ async function computeProfileCompletion(actor, self, personalDetails, customFiel
 // employeeCode/etc.) has no path through here at all.
 const PERSONAL_DETAIL_FIELDS = ["cnic", "mobile", "address", "personalEmail"];
 
+// ESDMS-008: the personal-details write and its history entry commit as
+// one transaction.
 export async function updatePersonalDetails(actor, employeeId, input) {
   const employee = await getEmployee(actor, employeeId);
   assertWritable(actor, employee);
@@ -107,16 +108,18 @@ export async function updatePersonalDetails(actor, employeeId, input) {
     if (input[key] !== undefined) allowed[key] = input[key];
   }
 
-  const updated = await upsertPersonalDetails(employee.id, allowed);
+  return withTransaction(async (client) => {
+    const updated = await upsertPersonalDetails(client, employee.id, allowed);
 
-  await recordHistory(pool, {
-    employeeId: employee.id,
-    eventType: "PROFILE_UPDATED",
-    summary: { fields: Object.keys(allowed) },
-    actorUserId: actor.id,
+    await recordHistory(client, {
+      employeeId: employee.id,
+      eventType: "PROFILE_UPDATED",
+      summary: { fields: Object.keys(allowed) },
+      actorUserId: actor.id,
+    });
+
+    return updated;
   });
-
-  return updated;
 }
 
 export async function addEmergencyContact(actor, employeeId, input) {

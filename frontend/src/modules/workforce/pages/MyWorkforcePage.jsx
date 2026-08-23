@@ -9,17 +9,35 @@ import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.
 import { formatDate } from "../../../shared/utilities/datetime.js";
 import * as api from "../api.js";
 
-const TABS = ["Profile", "Documents", "Leave", "Rotation", "Contracts", "Compensation"];
+// ESDMS-018: each child is gated by its OWN capability, never by
+// profile.self.view as an umbrella. Documents/Rotation/Contracts/
+// Compensation self-access is identity-based on the backend (no permission
+// code exists or is required for it — see documents/rotation/contracts/
+// compensation .service.js's isSelfActor checks); only Profile and Leave
+// have an actual self permission gate.
+const TAB_CONFIG = [
+  { key: "Profile", allowed: (hasPermission) => hasPermission("profile.self.view") },
+  { key: "Documents", allowed: () => true },
+  { key: "Leave", allowed: (hasPermission) => hasPermission("leave.self.view") || hasPermission("leave.self.create") },
+  { key: "Rotation", allowed: () => true },
+  { key: "Contracts", allowed: () => true },
+  { key: "Compensation", allowed: () => true },
+];
 
 export function MyWorkforcePage() {
   const { user, hasPermission } = useAuth();
-  const [tab, setTab] = useState("Profile");
+  const availableTabs = TAB_CONFIG.filter((t) => t.allowed(hasPermission)).map((t) => t.key);
+  const profileAllowed = availableTabs.includes("Profile");
+
+  const [tab, setTab] = useState(() => availableTabs[0] || null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    if (!user?.employeeId) {
+    // Loading (or failing to load) the profile object must never block
+    // access to unrelated self-service tabs that don't need it at all.
+    if (!user?.employeeId || !profileAllowed) {
       setLoading(false);
       setError(null);
       setProfile(null);
@@ -36,7 +54,7 @@ export function MyWorkforcePage() {
     } finally {
       setLoading(false);
     }
-  }, [user?.employeeId]);
+  }, [user?.employeeId, profileAllowed]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -56,25 +74,36 @@ export function MyWorkforcePage() {
     );
   }
 
-  if (loading) return <LoadingState message="Loading your profile…" />;
-  if (error) return <ErrorState message={error} onRetry={load} />;
-  if (!profile) return null;
+  if (availableTabs.length === 0) {
+    return (
+      <ErrorState
+        title="My Workforce unavailable"
+        message="You do not have access to any self-service feature."
+      />
+    );
+  }
+
+  if (tab === "Profile") {
+    if (loading) return <LoadingState message="Loading your profile…" />;
+    if (error) return <ErrorState message={error} onRetry={load} />;
+    if (!profile) return null;
+  }
 
   return (
     <div>
       <PageHeader
         title="My Workforce"
-        description={`Profile ${profile.completion.percent}% complete`}
+        description={profile ? `Profile ${profile.completion.percent}% complete` : "Self-service"}
       />
       <nav style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {TABS.map((t) => (
+        {availableTabs.map((t) => (
           <Button key={t} variant={tab === t ? "primary" : "secondary"} onClick={() => setTab(t)}>
             {t}
           </Button>
         ))}
       </nav>
 
-      {tab === "Profile" && <ProfileTab profile={profile} onChanged={load} />}
+      {tab === "Profile" && profile && <ProfileTab profile={profile} onChanged={load} />}
       {tab === "Documents" && <DocumentsTab />}
       {tab === "Leave" && <LeaveTab />}
       {tab === "Rotation" && <RotationTab />}
@@ -111,7 +140,7 @@ function ProfileTab({ profile, onChanged }) {
     }
   }
 
-  useEffect(() => { api.listCustomFields().then((result) => setFields(result.data)); }, []);
+  useEffect(() => { api.listCustomFieldsSelf().then((result) => setFields(result.data)); }, []);
 
   async function addContact(event) {
     event.preventDefault();
@@ -203,7 +232,7 @@ function DocumentsTab() {
 
   const load = useCallback(async () => {
     try {
-      const [docsRes, reqRes, typeRes] = await Promise.all([api.getMyDocuments(), api.getMyDocumentRequests(), api.listDocumentTypesManage()]);
+      const [docsRes, reqRes, typeRes] = await Promise.all([api.getMyDocuments(), api.getMyDocumentRequests(), api.listDocumentTypesSelf()]);
       setDocuments(docsRes.data);
       setRequests(reqRes.data);
       setTypes(typeRes.data.filter((type) => type.can_upload));
@@ -252,6 +281,7 @@ function DocumentsTab() {
 }
 
 function LeaveTab() {
+  const { hasPermission } = useAuth();
   const [types, setTypes] = useState([]);
   const [requests, setRequests] = useState([]);
   const [leaveTypeId, setLeaveTypeId] = useState("");
@@ -318,7 +348,9 @@ function LeaveTab() {
       {requests.map((r) => (
         <p key={r.id}>
           {formatDate(r.start_date)} – {formatDate(r.end_date)} ({r.leave_type_name}) — {r.status}
-          {r.status === "SUBMITTED" && <Button variant="secondary" onClick={async () => { await api.cancelMyLeave(r.id); load(); }}>Cancel</Button>}
+          {r.status === "SUBMITTED" && hasPermission("leave.self.cancel") && (
+            <Button variant="secondary" onClick={async () => { await api.cancelMyLeave(r.id); load(); }}>Cancel</Button>
+          )}
         </p>
       ))}
     </div>

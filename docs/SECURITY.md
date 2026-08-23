@@ -127,6 +127,19 @@ Do not casually store long-lived bearer tokens in browser localStorage.
   `src/shared/users/user-profile.repository.js`) — a JWT issued while
   everything was active does not remain valid after an admin deactivates the
   site or account mid-session.
+- `POST /auth/change-password` also bumps `session_version` and clears the
+  session cookie on success (`src/modules/auth/auth.controller.js`) —
+  every previously issued token for that user, including the one used to
+  make the request, is revoked, and a fresh login with the new password is
+  required. See `docs/DECISIONS.md`'s "Pre-Pilot Security &
+  Data-Integrity Hardening Pass" entry (ESDMS-020) for why this replaced
+  the prior "same session continues" design.
+- Authenticated requests are additionally rate-limited **per user id**
+  (`apiUserRateLimiter`, applied in `authenticate.js` once `req.user` is
+  known), separate from the broad per-IP ceiling (`apiRateLimiter`) applied
+  to every request regardless of authentication — see ESDMS-017 in
+  `docs/DECISIONS.md`. This keeps many employees sharing one site's IP from
+  sharing one request budget.
 
 ### 5.2 Render Cookie Topology (Deployment-Critical)
 

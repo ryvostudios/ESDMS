@@ -1,4 +1,4 @@
-import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
+import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from "../../shared/errors/app-error.js";
 import * as repo from "./workforce-config.repository.js";
 
 export async function createSection(input) {
@@ -59,18 +59,46 @@ function managesConfiguration(actor) {
   return actor.permissions.has("workforce.configuration.manage");
 }
 
+// ESDMS-018: "am I fetching the SELF-visible catalog or the
+// MANAGEMENT-visible one" must never be inferred from which permissions an
+// actor happens to hold (an HR/UM/CEO actor viewing THEIR OWN self-service
+// page still needs the self catalog, not the management one, just because
+// they also hold employees.view). The caller states the context explicitly;
+// this only authorizes that the actor may actually use the requested context.
+function assertContextUsable(actor, context) {
+  if (context === "management" && !managesConfiguration(actor) && !actor.permissions.has("employees.view") && !actor.permissions.has("employees.create")) {
+    throw new ForbiddenError();
+  }
+  // "self" has no further gate here — every authenticated Workforce actor
+  // may see what's visible/editable on their own profile; whether they
+  // actually have an Employee record to apply it to is checked elsewhere.
+}
+
 export async function listSectionsForActor(actor) {
   return repo.listSections({ activeOnly: !managesConfiguration(actor) });
 }
 
-export async function listFieldsForActor(actor) {
+export async function listFieldsForActor(actor, context) {
+  assertContextUsable(actor, context);
   const rows = await repo.listFields({ activeOnly: !managesConfiguration(actor) });
-  if (managesConfiguration(actor)) return rows;
-  const selfOnly = !actor.permissions.has("employees.view");
+  if (context === "management") {
+    if (managesConfiguration(actor)) return rows;
+    return rows
+      .filter((row) => (actor.role === "UPPER_MANAGEMENT" ? row.management_can_view : row.hr_can_view))
+      .map((row) => ({
+        id: row.id,
+        section_id: row.section_id,
+        label: row.label,
+        field_key: row.field_key,
+        field_type: row.field_type,
+        help_text: row.help_text,
+        validation: row.validation,
+        sort_order: row.sort_order,
+      }));
+  }
+
   return rows
-    .filter((row) => selfOnly
-      ? row.employee_can_view || row.employee_can_edit
-      : actor.role === "UPPER_MANAGEMENT" ? row.management_can_view : row.hr_can_view)
+    .filter((row) => row.employee_can_view || row.employee_can_edit)
     .map((row) => ({
       id: row.id,
       section_id: row.section_id,
@@ -78,27 +106,41 @@ export async function listFieldsForActor(actor) {
       field_key: row.field_key,
       field_type: row.field_type,
       help_text: row.help_text,
-      employee_can_view: selfOnly ? row.employee_can_view : undefined,
-      employee_can_edit: selfOnly ? row.employee_can_edit : undefined,
+      employee_can_view: row.employee_can_view,
+      employee_can_edit: row.employee_can_edit,
       validation: row.validation,
       sort_order: row.sort_order,
     }));
 }
 
-export async function listDocumentTypesForActor(actor) {
+export async function listDocumentTypesForActor(actor, context) {
+  assertContextUsable(actor, context);
   const rows = await repo.listDocumentTypes({ activeOnly: !managesConfiguration(actor) });
-  if (managesConfiguration(actor)) return rows;
-  const selfOnly = !actor.permissions.has("employees.view");
+  if (context === "management") {
+    if (managesConfiguration(actor)) return rows;
+    return rows
+      .filter((row) => row.hr_can_view || row.hr_can_upload)
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        is_required: row.is_required,
+        can_upload: row.hr_can_upload,
+        can_view: row.hr_can_view,
+        expiry_required: row.expiry_required,
+        verification_required: row.verification_required,
+        allowed_mime_types: row.allowed_mime_types,
+        sort_order: row.sort_order,
+      }));
+  }
+
   return rows
-    .filter((row) => selfOnly
-      ? row.employee_can_view || row.employee_can_upload
-      : row.hr_can_view || row.hr_can_upload)
+    .filter((row) => row.employee_can_view || row.employee_can_upload)
     .map((row) => ({
       id: row.id,
       name: row.name,
       is_required: row.is_required,
-      can_upload: selfOnly ? row.employee_can_upload : row.hr_can_upload,
-      can_view: selfOnly ? row.employee_can_view : row.hr_can_view,
+      can_upload: row.employee_can_upload,
+      can_view: row.employee_can_view,
       expiry_required: row.expiry_required,
       verification_required: row.verification_required,
       allowed_mime_types: row.allowed_mime_types,

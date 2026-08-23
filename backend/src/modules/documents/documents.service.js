@@ -1,4 +1,3 @@
-import pool from "../../config/database.js";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { storageService } from "../../shared/storage/storage-service.js";
 import { ValidationError, ForbiddenError, NotFoundError, ConflictError, ServiceUnavailableError } from "../../shared/errors/app-error.js";
@@ -145,27 +144,37 @@ export async function verifyDocument(actor, documentId, { status, remark }) {
   });
 }
 
+// ESDMS-008: the request row, its business-history entry, and the durable
+// notification-outbox enqueue all commit as one transaction — a failure
+// partway through must never leave the request row committed with no
+// history/notification (or vice versa). No external provider is called
+// here; notifyEmployee only enqueues a DB row for later delivery.
 export async function requestDocument(actor, employeeId, documentTypeId, note) {
   const employee = await getEmployee(actor, employeeId);
   const docType = await findDocumentTypeById(documentTypeId);
   if (!docType || !docType.is_active) throw new ValidationError("Invalid document type.");
 
-  const request = await insertRequest(employee.id, docType.id, actor.id, note);
-  await recordHistory(pool, {
-    employeeId: employee.id,
-    eventType: "DOCUMENT_REQUESTED",
-    summary: { documentTypeId: docType.id },
-    actorUserId: actor.id,
+  return withTransaction(async (client) => {
+    const request = await insertRequest(client, employee.id, docType.id, actor.id, note);
+
+    await recordHistory(client, {
+      employeeId: employee.id,
+      eventType: "DOCUMENT_REQUESTED",
+      summary: { documentTypeId: docType.id },
+      actorUserId: actor.id,
+    });
+
+    await notifyEmployee(client, {
+      employeeUserId: employee.user_id,
+      siteId: employee.primary_site_id,
+      eventType: "DOCUMENT_REQUESTED",
+      entityType: "EMPLOYEE_DOCUMENT_REQUEST",
+      entityId: request.id,
+      payload: { documentTypeName: docType.name },
+    });
+
+    return request;
   });
-  await notifyEmployee(pool, {
-    employeeUserId: employee.user_id,
-    siteId: employee.primary_site_id,
-    eventType: "DOCUMENT_REQUESTED",
-    entityType: "EMPLOYEE_DOCUMENT_REQUEST",
-    entityId: request.id,
-    payload: { documentTypeName: docType.name },
-  });
-  return request;
 }
 
 export async function pendingRequestsFor(actor, employeeId) {

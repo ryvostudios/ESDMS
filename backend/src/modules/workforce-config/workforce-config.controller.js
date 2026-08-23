@@ -8,12 +8,19 @@ import {
   updateFieldSchema,
   createDocumentTypeSchema,
   updateDocumentTypeSchema,
+  catalogContextSchema,
 } from "./workforce-config.validation.js";
 
 function parseBody(schema, body) {
   const parsed = schema.safeParse(body);
   if (!parsed.success) throw new ValidationError("Invalid request.", parsed.error.flatten());
   return parsed.data;
+}
+
+function parseContext(query) {
+  const parsed = catalogContextSchema.safeParse(query);
+  if (!parsed.success) throw new ValidationError("A catalog context ('self' or 'management') is required.", parsed.error.flatten());
+  return parsed.data.context;
 }
 
 export const listSections = asyncHandler(async (req, res) => {
@@ -29,7 +36,7 @@ export const updateSection = asyncHandler(async (req, res) => {
 });
 
 export const listFields = asyncHandler(async (req, res) => {
-  res.status(200).json({ success: true, data: await service.listFieldsForActor(req.user) });
+  res.status(200).json({ success: true, data: await service.listFieldsForActor(req.user, parseContext(req.query)) });
 });
 export const createField = asyncHandler(async (req, res) => {
   const input = parseBody(createFieldSchema, req.body);
@@ -41,7 +48,7 @@ export const updateField = asyncHandler(async (req, res) => {
 });
 
 export const listDocumentTypes = asyncHandler(async (req, res) => {
-  res.status(200).json({ success: true, data: await service.listDocumentTypesForActor(req.user) });
+  res.status(200).json({ success: true, data: await service.listDocumentTypesForActor(req.user, parseContext(req.query)) });
 });
 export const createDocumentType = asyncHandler(async (req, res) => {
   const input = parseBody(createDocumentTypeSchema, req.body);

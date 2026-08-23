@@ -26,7 +26,9 @@ async function startServer() {
     process.on("SIGTERM", () => shutdown("SIGTERM"));
     process.on("SIGINT", () => shutdown("SIGINT"));
   } catch (error) {
-    console.error("Failed to connect to PostgreSQL:", error.message);
+    // Never log error.message here: a pg connection failure's message can
+    // echo back connection details (host, user) from a misconfigured URL.
+    console.error("Failed to connect to PostgreSQL:", error.name || "unknown error");
     process.exit(1);
   }
 }

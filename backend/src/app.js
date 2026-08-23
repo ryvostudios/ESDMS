@@ -22,7 +22,7 @@ import { typeRouter as leaveTypeRoutes, requestRouter as leaveRequestRoutes, app
 import businessHistoryRoutes from "./modules/workforce/business-history.routes.js";
 import reportRoutes from "./modules/reports/reports.routes.js";
 import notificationRoutes from "./shared/notifications/notifications.routes.js";
-import { apiRateLimiter } from "./middleware/rate-limit.js";
+import { apiUnauthenticatedIpRateLimiter, apiAuthenticatedIpRateLimiter } from "./middleware/rate-limit.js";
 import { notFoundHandler, errorHandler } from "./middleware/error-handler.js";
 import { ForbiddenError } from "./shared/errors/app-error.js";
 
@@ -54,7 +54,17 @@ app.use(
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
-app.use(apiRateLimiter);
+// Coarse ceiling FIRST, unconditionally, for every request — no `skip`,
+// no dependency on token validity. Closes a bypass: a token with a valid
+// signature/expiry/issuer/audience but a revoked session_version or a
+// deactivated user is cryptographically "valid" enough to skip the
+// unauthenticated limiter below, yet authenticate.js still rejects it
+// before it ever reaches the authenticated-only limiters — previously
+// leaving it with NO rate-limit coverage at all. Applying this same ceiling
+// globally guarantees every request, regardless of outcome, is covered by
+// at least one meaningful bucket. See rate-limit.js for the full picture.
+app.use(apiAuthenticatedIpRateLimiter);
+app.use(apiUnauthenticatedIpRateLimiter);
 
 app.use("/api/v1/health", healthRoutes);
 app.use("/api/v1/auth", authRoutes);

@@ -30,7 +30,12 @@ export const create = asyncHandler(async (req, res) => {
   const input = parseBody(createUserSchema, req.body);
   const created = await service.createUser(req.user, input);
 
-  res.status(201).json({ success: true, data: toUserDto({ ...created, role: input.role }) });
+  // temporaryPassword is shown exactly once, in this response only — never
+  // logged, never retrievable again (ESDMS-001).
+  res.status(201).json({
+    success: true,
+    data: { ...toUserDto({ ...created, role: input.role }), temporaryPassword: created.temporaryPassword },
+  });
 });
 
 export const list = asyncHandler(async (req, res) => {
@@ -79,4 +84,15 @@ export const setPermission = asyncHandler(async (req, res) => {
 export const removePermission = asyncHandler(async (req, res) => {
   const result = await service.removePermissionOverride(req.user, req.params.id, req.params.code);
   res.status(200).json({ success: true, data: result });
+});
+
+export const regenerateTempPassword = asyncHandler(async (req, res) => {
+  const result = await service.regenerateTemporaryPassword(req.user, req.params.id);
+
+  // temporaryPassword is shown exactly once, in this response only — never
+  // logged, never retrievable again (same posture as create's ESDMS-001).
+  res.status(200).json({
+    success: true,
+    data: { id: result.id, temporaryPassword: result.temporaryPassword },
+  });
 });

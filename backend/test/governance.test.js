@@ -32,6 +32,88 @@ async function latestAuditRow(action, targetUserId) {
 }
 
 // ---------------------------------------------------------------------
+// A. Governance-created users get a temporary password, not a caller-
+// supplied permanent one (ESDMS-001).
+// ---------------------------------------------------------------------
+
+test("a governance-created user gets a server-generated temporary password shown only once, and must change it before any permission-gated action", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const email = uniqueEmail("temp-pw");
+
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
+    token: ceoToken,
+    // No password field is even accepted — the caller cannot establish a
+    // permanent shared credential through this endpoint.
+    body: { email, fullName: "Temp Password User", role: "EMPLOYEE", password: "Caller-Supplied-Pw-123" },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const temporaryPassword = created.body.data.temporaryPassword;
+  assert.ok(temporaryPassword, "a one-time temporary credential is returned");
+  assert.notEqual(temporaryPassword, "Caller-Supplied-Pw-123", "a caller-supplied password is ignored, not honored");
+
+  const roleCheck = await pool.query(
+    "SELECT must_change_password, password_hash FROM users WHERE id = $1",
+    [created.body.data.id],
+  );
+  assert.equal(roleCheck.rows[0].must_change_password, true);
+  assert.ok(!roleCheck.rows[0].password_hash.includes(temporaryPassword), "never stored/exposed as plaintext");
+
+  const loginResponse = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+    body: { email, password: temporaryPassword },
+  });
+  assert.equal(loginResponse.status, 200);
+  assert.equal(loginResponse.body.data.user.mustChangePassword, true);
+
+  const targetToken = await authHeader(server.baseUrl, email, temporaryPassword);
+
+  const blocked = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/me", { token: targetToken });
+  assert.equal(blocked.status, 403, "permission-gated operational actions are blocked before the password is changed");
+
+  const changed = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/change-password", {
+    token: targetToken,
+    body: { currentPassword: temporaryPassword, newPassword: "Brand-New-Governance-Pw-123" },
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+});
+
+test("ESDMS-020: a successful password change revokes every previously issued session, not just the one used to change it", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const email = uniqueEmail("pw-revoke");
+
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
+    token: ceoToken,
+    body: { email, fullName: "Password Revocation User", role: "EMPLOYEE" },
+  });
+  const temporaryPassword = created.body.data.temporaryPassword;
+
+  // Two independently issued sessions for the same account.
+  const sessionA = await authHeader(server.baseUrl, email, temporaryPassword);
+  const sessionB = await authHeader(server.baseUrl, email, temporaryPassword);
+
+  const changed = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/change-password", {
+    token: sessionA,
+    body: { currentPassword: temporaryPassword, newPassword: "Revocation-New-Pw-123" },
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+
+  const sessionAAfter = await apiRequest(server.baseUrl, "GET", "/api/v1/auth/me", { token: sessionA });
+  assert.equal(sessionAAfter.status, 401, "the session used to change the password is itself revoked");
+
+  const sessionBAfter = await apiRequest(server.baseUrl, "GET", "/api/v1/auth/me", { token: sessionB });
+  assert.equal(sessionBAfter.status, 401, "a second, unrelated pre-existing session is also revoked");
+
+  const loginWithOldPassword = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+    body: { email, password: temporaryPassword },
+  });
+  assert.equal(loginWithOldPassword.status, 401, "the old password no longer authenticates");
+
+  const loginWithNewPassword = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+    body: { email, password: "Revocation-New-Pw-123" },
+  });
+  assert.equal(loginWithNewPassword.status, 200, "the new password authenticates immediately");
+});
+
+// ---------------------------------------------------------------------
 // B. Hierarchy
 // ---------------------------------------------------------------------
 
@@ -364,11 +446,12 @@ test("a role change is reflected on the next request without a new login", async
 
   const created = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
     token: ceoToken,
-    body: { email, fullName: "Role Live", password: "Role-Live-Password-123", role: "EMPLOYEE" },
+    body: { email, fullName: "Role Live", role: "EMPLOYEE" },
   });
   const targetId = created.body.data.id;
+  assert.ok(created.body.data.temporaryPassword, "governance-created users get a server-generated temporary password");
 
-  const targetToken = await authHeader(server.baseUrl, email, "Role-Live-Password-123");
+  const targetToken = await authHeader(server.baseUrl, email, created.body.data.temporaryPassword);
 
   const before = await apiRequest(server.baseUrl, "GET", "/api/v1/auth/me", { token: targetToken });
   assert.equal(before.body.data.user.role, "EMPLOYEE");
@@ -391,10 +474,10 @@ test("deactivation is rejected on the very next request under the same still-une
 
   const created = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
     token: ceoToken,
-    body: { email, fullName: "Deactivate Live", password: "Deactivate-Live-Pw-123", role: "EMPLOYEE" },
+    body: { email, fullName: "Deactivate Live", role: "EMPLOYEE" },
   });
   const targetId = created.body.data.id;
-  const targetToken = await authHeader(server.baseUrl, email, "Deactivate-Live-Pw-123");
+  const targetToken = await authHeader(server.baseUrl, email, created.body.data.temporaryPassword);
 
   const before = await apiRequest(server.baseUrl, "GET", "/api/v1/auth/me", { token: targetToken });
   assert.equal(before.status, 200);
@@ -497,4 +580,162 @@ test("governance_audit_log is append-only: UPDATE and DELETE are rejected", asyn
     /append-only/,
   );
   await assert.rejects(pool.query("DELETE FROM governance_audit_log WHERE id = $1", [id]), /append-only/);
+});
+
+// ---------------------------------------------------------------------
+// F. Temporary password regeneration — recovery only for a
+// must_change_password=true account, never a general password reset.
+// ---------------------------------------------------------------------
+
+async function createFirstLoginUser(ceoToken, label) {
+  const email = uniqueEmail(label);
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
+    token: ceoToken,
+    body: { email, fullName: "Regen Test User", role: "EMPLOYEE" },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  return { id: created.body.data.id, email, temporaryPassword: created.body.data.temporaryPassword };
+}
+
+test("CEO can regenerate a temporary password for a must_change_password=true account, and the new plaintext authenticates while the old one no longer does", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const target = await createFirstLoginUser(ceoToken, "regen-ok");
+
+  const before = await pool.query("SELECT session_version FROM users WHERE id = $1", [target.id]);
+
+  const response = await apiRequest(server.baseUrl, "POST", `/api/v1/users/${target.id}/regenerate-temp-password`, {
+    token: ceoToken,
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const newTemporaryPassword = response.body.data.temporaryPassword;
+  assert.ok(newTemporaryPassword, "a new one-time temporary credential is returned");
+  assert.notEqual(newTemporaryPassword, target.temporaryPassword);
+
+  const row = await pool.query(
+    "SELECT must_change_password, session_version FROM users WHERE id = $1",
+    [target.id],
+  );
+  assert.equal(row.rows[0].must_change_password, true, "still must_change_password — not a general reset");
+  assert.equal(
+    row.rows[0].session_version,
+    before.rows[0].session_version + 1,
+    "session_version increments to invalidate any prior session",
+  );
+
+  const loginWithNew = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+    body: { email: target.email, password: newTemporaryPassword },
+  });
+  assert.equal(loginWithNew.status, 200, "the returned plaintext authenticates");
+
+  const loginWithOld = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+    body: { email: target.email, password: target.temporaryPassword },
+  });
+  assert.equal(loginWithOld.status, 401, "the lost/old temporary password no longer authenticates");
+});
+
+test("regenerating a temporary password is rejected for an account that already completed first login (must_change_password=false)", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+
+  // users.employee is a seeded fixture with must_change_password=false.
+  const response = await apiRequest(server.baseUrl, "POST", `/api/v1/users/${users.employee}/regenerate-temp-password`, {
+    token: ceoToken,
+  });
+  assert.equal(response.status, 400, JSON.stringify(response.body));
+});
+
+test("an actor without users.regenerate_temp_password cannot regenerate a temporary password", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const hrToken = await authHeader(server.baseUrl, "hr@test.eset.local");
+  const target = await createFirstLoginUser(ceoToken, "regen-unauthorized");
+
+  const response = await apiRequest(server.baseUrl, "POST", `/api/v1/users/${target.id}/regenerate-temp-password`, {
+    token: hrToken,
+  });
+  assert.equal(response.status, 403);
+});
+
+test("temporary password regeneration preserves CEO-target protection and Upper Management authority rules", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+
+  const onCeo = await apiRequest(server.baseUrl, "POST", `/api/v1/users/${users.ceo}/regenerate-temp-password`, {
+    token: ceoToken,
+  });
+  assert.equal(onCeo.status, 403, "CEO accounts can never be targeted through this API, even by another CEO");
+
+  const hrToken = await authHeader(server.baseUrl, "hr@test.eset.local");
+  const grant = await apiRequest(
+    server.baseUrl,
+    "PUT",
+    `/api/v1/users/${users.hr}/permissions/users.regenerate_temp_password`,
+    { token: ceoToken, body: { effect: "GRANT" } },
+  );
+  assert.equal(grant.status, 200, JSON.stringify(grant.body));
+
+  try {
+    const onUm = await apiRequest(server.baseUrl, "POST", `/api/v1/users/${users.upperManagement}/regenerate-temp-password`, {
+      token: hrToken,
+    });
+    assert.equal(onUm.status, 403, "an actor without users.manage_um cannot regenerate a UM account's credential");
+  } finally {
+    await apiRequest(server.baseUrl, "DELETE", `/api/v1/users/${users.hr}/permissions/users.regenerate_temp_password`, {
+      token: ceoToken,
+    });
+  }
+});
+
+test("temporary password regeneration audit record identifies actor/target/action only — the plaintext credential never appears in the audit log", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const target = await createFirstLoginUser(ceoToken, "regen-audit");
+
+  const response = await apiRequest(server.baseUrl, "POST", `/api/v1/users/${target.id}/regenerate-temp-password`, {
+    token: ceoToken,
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const newTemporaryPassword = response.body.data.temporaryPassword;
+
+  const audit = await latestAuditRow("USER_TEMP_PASSWORD_REGENERATED", target.id);
+  assert.ok(audit, "a safe audit record is created for the regeneration");
+  assert.equal(audit.actor_user_id, users.ceo, "audit identifies the acting user");
+  assert.equal(audit.target_user_id, target.id, "audit identifies the target user");
+
+  const metadataText = JSON.stringify(audit.metadata || {});
+  assert.ok(!metadataText.includes(newTemporaryPassword), "the plaintext credential must never appear in audit metadata");
+  assert.ok(
+    !metadataText.toLowerCase().includes("password"),
+    "audit metadata for this action must not carry any password-shaped field",
+  );
+});
+
+test("a concurrent first login (flipping must_change_password to false) that commits while a regeneration is blocked on the row lock is honored, not raced", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const target = await createFirstLoginUser(ceoToken, "regen-race");
+
+  const lockHolder = await pool.connect();
+  try {
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [target.id]);
+
+    const regenPromise = apiRequest(server.baseUrl, "POST", `/api/v1/users/${target.id}/regenerate-temp-password`, {
+      token: ceoToken,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Simulates the user completing first login concurrently, while the
+    // regeneration request above is still blocked waiting on this lock.
+    await lockHolder.query(
+      "UPDATE users SET must_change_password = false, session_version = session_version + 1 WHERE id = $1",
+      [target.id],
+    );
+    await lockHolder.query("COMMIT");
+
+    const regen = await regenPromise;
+    assert.equal(
+      regen.status,
+      400,
+      "the eligibility check re-reads the row after acquiring the lock, so the concurrently-committed first login is honored instead of being raced",
+    );
+  } finally {
+    lockHolder.release();
+  }
 });

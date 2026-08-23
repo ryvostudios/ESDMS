@@ -74,8 +74,12 @@ export const logout = asyncHandler(async (req, res) => {
     if (payload) {
       try {
         await bumpSessionVersion(payload.sub);
-      } catch (error) {
-        console.error("Logout: failed to revoke session_version for a valid session:", error);
+      } catch {
+        // ESDMS-021: do NOT log here too — this throws a 500+ AppError,
+        // which the central error-handler middleware already logs exactly
+        // once (with the SAME requestId it also returns in the response
+        // body). Logging here as well produced two records for one
+        // failure, each with its own unrelated random requestId.
         throw new ServiceUnavailableError("Could not securely sign out. Please try again.");
       }
     }
@@ -107,9 +111,14 @@ export const me = asyncHandler(async (req, res) => {
 
 // Deliberately bypasses requirePermission (see require-permission.js) —
 // this is the one action a mustChangePassword=true user must still be able
-// to take. Never bumps session_version: the current, already-authenticated
-// session is allowed to continue past this exact request rather than
-// forcing an immediate re-login loop.
+// to take.
+//
+// ESDMS-020: a successful change bumps session_version, invalidating every
+// previously issued token for this user — including the one used to make
+// this very request. The caller must log in again with the new password;
+// the response's own session cookie is cleared to match (see
+// docs/DECISIONS.md, superseding the prior "same session continues"
+// design).
 export const changePassword = asyncHandler(async (req, res) => {
   const parsed = changePasswordSchema.safeParse(req.body);
   if (!parsed.success) throw new ValidationError("Invalid request.", parsed.error.flatten());
@@ -123,9 +132,13 @@ export const changePassword = asyncHandler(async (req, res) => {
 
   const newHash = await argon2.hash(parsed.data.newPassword);
   await pool.query(
-    "UPDATE users SET password_hash = $2, must_change_password = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    `UPDATE users
+     SET password_hash = $2, must_change_password = false, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1`,
     [req.user.id, newHash],
   );
 
-  return res.status(200).json({ success: true, data: null });
+  clearSessionCookie(res);
+
+  return res.status(200).json({ success: true, data: { requiresLogin: true } });
 });

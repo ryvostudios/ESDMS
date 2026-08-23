@@ -189,7 +189,7 @@ function CustomFieldsSection() {
   const [fieldKey, setFieldKey] = useState("");
   const [fieldType, setFieldType] = useState("TEXT");
   const [message, setMessage] = useState(null);
-  const load = useCallback(async () => { const [sectionResult, fieldResult] = await Promise.all([api.listProfileSections(), api.listCustomFields()]); setSections(sectionResult.data); setRows(fieldResult.data); if (sectionResult.data[0]) setSectionId((current) => current || sectionResult.data[0].id); }, []);
+  const load = useCallback(async () => { const [sectionResult, fieldResult] = await Promise.all([api.listProfileSections(), api.listCustomFieldsManage()]); setSections(sectionResult.data); setRows(fieldResult.data); if (sectionResult.data[0]) setSectionId((current) => current || sectionResult.data[0].id); }, []);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();

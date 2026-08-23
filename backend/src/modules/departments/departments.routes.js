@@ -8,10 +8,15 @@ const router = Router();
 router.param("id", validateUuidParam("id"));
 
 // Department/master data is not "any authenticated user" data — only roles
-// that can actually create or edit a Gate Pass need it. Guard in
-// particular must never get this for free just by being logged in.
-// Unchanged from the original Gate Pass module — see docs/DECISIONS.md.
-router.get("/", authenticate, requirePermission("gate_pass.create", "gate_pass.edit_draft"), list);
+// that can actually create/edit a Gate Pass, or create/transfer an
+// Employee, need it. Guard in particular must never get this for free just
+// by being logged in.
+router.get(
+  "/",
+  authenticate,
+  requirePermission("gate_pass.create", "gate_pass.edit_draft", "employees.create", "employees.transfer"),
+  list,
+);
 
 // Workforce configuration surface, additive — gated by the new
 // departments.manage permission (HR/CEO baseline; see

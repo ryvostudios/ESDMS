@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+// ESDMS-018: the caller must say explicitly which catalog it wants — never
+// inferred backend-side from whether the actor also happens to hold a
+// management permission (see workforce-config.service.js).
+export const catalogContextSchema = z.object({
+  context: z.enum(["self", "management"]),
+});
+
 export const FIELD_TYPES = [
   "TEXT",
   "LONG_TEXT",

@@ -200,21 +200,44 @@ async function fetchCatalogRows(actor, key, siteId, filters) {
        ORDER BY e.full_legal_name`, [siteId]); return result.rows;
   }
   if (key === "missing-required-documents") {
+    // ESDMS-007: a hidden document type (not hr_can_view, unless the actor
+    // is CEO) must not leak even as a "missing" row — same visibility rule
+    // as the ordinary document APIs (documents.service.js).
     const result = await pool.query(
       `SELECT e.employee_code AS "Employee ID", e.full_legal_name AS "Full Legal Name", dt.name AS "Missing Document Type"
        FROM employees e CROSS JOIN employee_document_types dt
        WHERE dt.is_active=true AND dt.is_required=true AND ($1::uuid IS NULL OR e.primary_site_id=$1)
+         AND ($2::boolean OR dt.hr_can_view=true)
          AND NOT EXISTS (SELECT 1 FROM employee_documents d WHERE d.employee_id=e.id AND d.document_type_id=dt.id)
-       ORDER BY e.employee_code, dt.sort_order, dt.name`, [siteId]); return result.rows;
+       ORDER BY e.employee_code, dt.sort_order, dt.name`, [siteId, actor.role === "CEO"]); return result.rows;
   }
   if (key === "expiring-documents") {
+    // ESDMS-007/012: hidden document types are excluded (same visibility
+    // rule as the ordinary document APIs), and the latest version per
+    // (employee, type) is resolved BEFORE any expiry classification — the
+    // subquery carries NO filter at all (not even "expiry_date IS NOT
+    // NULL"), so a NULL-expiry latest version is never silently passed
+    // over in favor of an older, expired version that happens to have a
+    // non-null expiry_date. Mirrors documents.repository.js's listExpiring
+    // exactly (deliberately not called directly — different output column
+    // shape for the Excel report).
     const result = await pool.query(
-      `SELECT DISTINCT ON (d.employee_id,d.document_type_id) e.employee_code AS "Employee ID", e.full_legal_name AS "Full Legal Name",
-              dt.name AS "Document Type", d.expiry_date AS "Expiry Date", d.verification_status AS "Verification Status"
-       FROM employee_documents d JOIN employees e ON e.id=d.employee_id JOIN employee_document_types dt ON dt.id=d.document_type_id
-       WHERE ($1::uuid IS NULL OR e.primary_site_id=$1) AND d.expiry_date IS NOT NULL
+      `SELECT e.employee_code AS "Employee ID", e.full_legal_name AS "Full Legal Name",
+              dt.name AS "Document Type", d.expiry_date AS "Expiry Date",
+              CASE WHEN d.expiry_date < CURRENT_DATE THEN 'Expired' ELSE 'Expiring Soon' END AS "Status",
+              d.verification_status AS "Verification Status"
+       FROM (
+         SELECT DISTINCT ON (employee_id, document_type_id) *
+         FROM employee_documents
+         ORDER BY employee_id, document_type_id, version DESC
+       ) d
+       JOIN employees e ON e.id=d.employee_id
+       JOIN employee_document_types dt ON dt.id=d.document_type_id
+       WHERE d.expiry_date IS NOT NULL
+         AND ($1::uuid IS NULL OR e.primary_site_id=$1)
+         AND ($3::boolean OR dt.hr_can_view=true)
          AND d.expiry_date <= CURRENT_DATE + $2::int
-       ORDER BY d.employee_id,d.document_type_id,d.version DESC`, [siteId, filters.withinDays]); return result.rows;
+       ORDER BY d.expiry_date`, [siteId, filters.withinDays, actor.role === "CEO"]); return result.rows;
   }
   if (key === "rotation-balance") {
     const result = await pool.query(

@@ -42,11 +42,17 @@ export const changeEmployeeStatus = (id, body) => apiClient.post(`/employees/${i
 export const createEmployeeLogin = (id, body) => apiClient.post(`/employees/${id}/login`, body);
 export const resetEmployeeLoginPassword = (id) => apiClient.post(`/employees/${id}/login/reset`, {});
 
+export const listSites = () => apiClient.get("/employees/sites");
+
+// Active selector (Add Employee/transfer dropdowns) — requires an explicit
+// target siteId for an all-site actor; a site-scoped actor's own site is
+// used regardless (see backend resolveTargetSiteId).
+export const listDepartments = (siteId) => apiClient.get(`/departments${siteId ? `?siteId=${siteId}` : ""}`);
 export const listDepartmentsManage = () => apiClient.get("/departments/manage");
 export const createDepartment = (body) => apiClient.post("/departments", body);
 export const archiveDepartment = (id, isActive) => apiClient.patch(`/departments/${id}`, { isActive });
 
-export const listPositions = () => apiClient.get("/positions");
+export const listPositions = (siteId) => apiClient.get(`/positions${siteId ? `?siteId=${siteId}` : ""}`);
 export const listPositionsManage = () => apiClient.get("/positions/manage");
 export const createPosition = (body) => apiClient.post("/positions", body);
 export const updatePosition = (id, body) => apiClient.patch(`/positions/${id}`, body);
@@ -80,14 +86,20 @@ export const getEmployeeLeave = (id) => apiClient.get(`/employees/${id}/leave`);
 export const listPendingLeave = () => apiClient.get("/leave/pending");
 export const decideLeave = (requestId, body) => apiClient.post(`/leave/${requestId}/decide`, body);
 
-export const listDocumentTypesManage = () => apiClient.get("/workforce-config/document-types");
+// ESDMS-018: the catalog context (SELF vs MANAGEMENT visibility/edit
+// rules) is always explicit — never inferred backend-side from whether the
+// caller also happens to hold a management permission. Callers must state
+// which one they mean; see workforce-config.service.js.
+export const listDocumentTypesManage = () => apiClient.get("/workforce-config/document-types?context=management");
+export const listDocumentTypesSelf = () => apiClient.get("/workforce-config/document-types?context=self");
 export const createDocumentType = (body) => apiClient.post("/workforce-config/document-types", body);
 export const updateDocumentType = (id, body) => apiClient.patch(`/workforce-config/document-types/${id}`, body);
 
 export const listProfileSections = () => apiClient.get("/workforce-config/sections");
 export const createProfileSection = (body) => apiClient.post("/workforce-config/sections", body);
 export const updateProfileSection = (id, body) => apiClient.patch(`/workforce-config/sections/${id}`, body);
-export const listCustomFields = () => apiClient.get("/workforce-config/fields");
+export const listCustomFieldsManage = () => apiClient.get("/workforce-config/fields?context=management");
+export const listCustomFieldsSelf = () => apiClient.get("/workforce-config/fields?context=self");
 export const createCustomField = (body) => apiClient.post("/workforce-config/fields", body);
 export const updateCustomField = (id, body) => apiClient.patch(`/workforce-config/fields/${id}`, body);
 
@@ -115,3 +127,4 @@ export const removeUserPermission = (id, code) => apiClient.del(`/users/${id}/pe
 export const changeUserRole = (id, role) => apiClient.patch(`/users/${id}/role`, { role });
 export const activateUser = (id) => apiClient.post(`/users/${id}/activate`, {});
 export const deactivateUser = (id) => apiClient.post(`/users/${id}/deactivate`, {});
+export const regenerateTempPassword = (id) => apiClient.post(`/users/${id}/regenerate-temp-password`, {});

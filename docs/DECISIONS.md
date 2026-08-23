@@ -1799,3 +1799,210 @@ database after the hardening migration completed a down/up cycle:
 These are local integration/build results, not deployment validation. No
 production migration, user provisioning, Storage change, push, or deploy
 was performed.
+
+---
+
+## 2026-08-23 — Pre-Pilot Security & Data-Integrity Hardening Pass
+
+### Decision
+
+An external audit of the Workforce module (findings ESDMS-001 through
+ESDMS-041) was reviewed against current code and a first remediation pass
+applied to the highest-priority findings per this repository's own stated
+priority order (security, then data integrity, then authorization — see
+`AGENTS.md` §3). This entry records what changed; a separate, much larger
+remaining scope (frontend UI for governance/employee administration/
+documents/contracts, mobile/responsive layout, visual design system,
+accessibility, PWA offline-state handling, and further reporting/dashboard
+work) is deliberately **not** covered here and remains open — see the
+corresponding session's final report for the full accounting.
+
+**ESDMS-001 — Governance-created User temporary password.**
+`POST /api/v1/users` no longer accepts a caller-supplied `password` at all;
+`users.service.js#createUser` generates one server-side
+(`crypto.randomBytes(16)`), sets `must_change_password = true` (reusing the
+existing forced-first-login mechanism Workforce onboarding already relies
+on), and returns it in the response body exactly once. It is never logged
+or persisted anywhere else.
+
+**ESDMS-002 — Cross-site duplicate-check privacy.**
+`employees.service.js#checkDuplicates` now redacts a duplicate match
+outside the actor's own site scope (derived from `employeeSiteFilter`,
+never a client-supplied site) down to a generic
+`{ outOfScope: true, message: "..." }` — no id, code, name, status, or
+which field matched. A company-wide (CEO) actor, or a same-site match,
+still receives full detail. Applied to both the standalone duplicate-check
+endpoint and `createEmployee`'s own duplicate-warning path, since both now
+share the same redaction function.
+
+**ESDMS-003 — Leave self-view/self-cancel identity shortcut.**
+`leave.service.js#listMyOrEmployeeLeave` and `#cancelMyLeave` no longer
+treat "this is the caller's own record" as sufficient by itself — an
+explicit `leave.self.view` (for reads) or `leave.self.create` (for
+cancellation) DENY now wins even for a self-directed request. The
+management path (`leave.approve`/`leave.manage`) is consulted only for
+non-self requests, so it can never be used to route around a self-view
+denial for one's own record.
+
+**ESDMS-004 — Login creation/linking must recheck ACTIVE status under lock.**
+Both `POST /employees/:id/login` and `.../login/link-existing` now lock the
+Employee row (`FOR UPDATE`, new `lockEmployeeById`) inside the mutating
+transaction and re-verify status, linkage, and primary site from that
+locked row — not the value read before the transaction began. Neither
+route previously checked Employee status at all.
+
+**ESDMS-005 — Offboarding policy for a privileged linked login.**
+`changeEmployeeStatus` now blocks permanent offboarding only when the
+linked login is both privileged (non-`EMPLOYEE` role) **and currently
+active** — matching the intended workflow (Governance deactivates the
+privileged account first; HR's offboarding then succeeds without touching
+the now-inactive login's role). Previously it unconditionally blocked on
+role alone, which would have kept blocking offboarding even after
+Governance had already deactivated the account.
+
+**ESDMS-033 — Employee status transition matrix and concurrency.**
+`changeEmployeeStatus` now (a) locks the Employee row before validating the
+transition, so a race with a concurrent status change is resolved by
+whichever request's transaction commits first, and (b) validates the
+transition against an explicit table — only `ACTIVE→{INACTIVE,RESIGNED,
+TERMINATED}` and `INACTIVE→ACTIVE` are allowed; `RESIGNED→ACTIVE` and
+`TERMINATED→ACTIVE` are explicitly rejected. A reason of at least 3
+characters is now required at the validation layer for `RESIGNED`/
+`TERMINATED`. Reactivating (`INACTIVE→ACTIVE`) still never touches a linked
+login's active state — that remains an explicit Governance action.
+
+**ESDMS-006 — Cross-site transfer.**
+`createTransfer` rejects a cross-site transfer whose `effectiveDate` is in
+the future (compared via `currentDateInAppTimezone()`, the business
+timezone, not host-local time) — no scheduler exists yet for these. For an
+effective-immediate cross-site transfer, an ordinary `EMPLOYEE`-role linked
+login's `site_id` (and, if now mismatched, `department_id`) is synchronized
+in the same transaction; a privileged linked login's site scope is never
+touched and the response carries a `linkedAccountNote` saying Governance
+must adjust it separately if needed.
+
+**ESDMS-007 — Hidden document types leaking through reports.**
+The `missing-required-documents` and `expiring-documents` report queries
+(`reports.service.js`) now apply the same document-type visibility rule the
+ordinary document APIs already use (`actor.role === 'CEO' OR
+dt.hr_can_view`) — a hidden type no longer appears even as a "missing"
+row.
+
+**ESDMS-008 — Transactional consistency.**
+`documents.service.js#requestDocument`, `leave.service.js#submitLeave`/
+`#decideLeave`/`#cancelMyLeave`, and `profile.service.js
+#updatePersonalDetails` previously wrote their primary row via the bare
+pool and then wrote history/notification as separate, non-transactional
+follow-up calls — a failure partway through could commit the business
+mutation with no history/notification, or vice versa. All five now run
+under one `withTransaction` client end to end. No external provider is
+called inside any of these transactions; `notifyEmployee` only enqueues a
+durable outbox row.
+
+**ESDMS-012 — Document expiry analytics: latest version before
+classification.** `documents.repository.js#listExpiring` (used by both the
+`GET /documents/expiring` endpoint and, independently, the reports
+catalog's `expiring-documents` entry) previously applied the
+expiry-threshold `WHERE` filter *before* picking the latest version per
+(employee, document type) — an obsolete, long-expired v1 could stand in for
+a current, non-expiring v2 that itself didn't match the filter. Both
+queries now resolve the latest version in a subquery first, then classify
+it (`Expired` if `expiry_date < CURRENT_DATE`, `Expiring Soon` otherwise,
+within the requested window).
+
+**ESDMS-017 — Rate limiting behind a shared site NAT.**
+`apiRateLimiter` (global per-IP) is raised from 600 to 3000/15min and
+demoted to a broad abuse safety net; a new `apiUserRateLimiter` (600/15min
+per authenticated user id) is applied inside `authenticate.js` — the one
+choke point every authenticated request already passes through — once
+`req.user` is resolved. Employees sharing one site's IP no longer share one
+budget. `NotificationBell` (frontend) now pauses polling while the tab is
+hidden, resumes without an immediate burst if it already polled recently,
+and backs off (doubling, capped at 5 minutes) after a failed/429 poll
+instead of retrying at fixed cadence.
+
+**ESDMS-018 — Explicit self/management catalog context.**
+`workforce-config.service.js#listFieldsForActor`/`#listDocumentTypesForActor`
+previously inferred "self" purely from `!actor.permissions.has
+("employees.view")` — an HR/UM/CEO actor viewing their *own* self-service
+page would incorrectly receive the management-visibility catalog instead
+of the self one. `GET /workforce-config/fields` and `.../document-types`
+now require an explicit `?context=self|management` query parameter;
+`management` additionally requires the actor actually hold a management
+permission. The frontend's `MyWorkforcePage` (self-service) now calls the
+`context=self` variants; `WorkforceConfigPage`/`EmployeeDetailPage`
+(management) call `context=management`, matching what each surface is.
+
+**ESDMS-020 — Password change now revokes every session (supersedes
+nothing written above, but reverses the prior in-code design note in
+`auth.controller.js`).** `POST /auth/change-password` now bumps
+`session_version` and clears the session cookie on success — every
+previously issued token for that user, including the one used to make the
+request, stops working, and a fresh login is required. This was previously
+deliberate ("the current session continues, no forced re-login") to avoid
+an awkward loop right after forced onboarding; per this pass's approved
+policy, a simple "log in again" after any password change is preferred
+over the more complex alternative of keeping the current session alive
+under a new token.
+
+**ESDMS-021 — Safe production logging.** A new
+`shared/logging/safe-logger.js#logServerError` replaces every
+`console.error(rawError)` call on a request path (central error handler,
+logout's revocation-failure path) and the two background paths (outbox
+processor, storage cleanup). It logs a generated correlation id (also
+returned to the client as `error.requestId` on a 5xx), method/route,
+error name, and — only for `AppError` (a message this codebase authored
+itself) — the message. An arbitrary/unexpected exception's own
+`.message`/`.detail` (which, for a Postgres/driver error, routinely embeds
+the actual submitted row values) is never logged. A stack trace is included
+only outside production.
+
+**ESDMS-035 — CEO/all-sites catalogs returning `[]`.**
+`departments.controller.js#listAll` and `positions.controller.js#listAll`
+previously special-cased `scope === null` (a company-wide actor) to return
+`[]`, because the underlying repository queries didn't support a null
+site filter. Both repository queries now accept `siteId = null` as "every
+site" (`WHERE ($1::uuid IS NULL OR site_id = $1)`) and join `sites` for a
+`site_name` column, so a CEO gets real company-wide results with meaningful
+site identity instead of an empty list.
+
+**ESDMS-040 — Reporting-manager cycle detection.**
+`employees.repository.js#wouldCreateReportingCycle` replaced a hop-capped
+(25) sequential walk — which could be bypassed by a hierarchy deeper than
+the cap — with a single recursive CTE that walks the full current
+reporting chain, guarded against infinite recursion by a `visited` array
+rather than a hop limit. No depth can bypass it.
+
+### Reason
+
+Per `AGENTS.md` §3 and `docs/SECURITY.md` §2, security and data-integrity
+findings take priority over authorization/UX findings, which in turn take
+priority over polish. This pass worked through the highest-priority,
+best-scoped findings first, each verified against current code (not
+assumed from the audit report), fixed with the smallest correct change,
+and covered by a new or updated backend test — see the corresponding
+session's final report for the exact test names and full pass/fail
+accounting.
+
+### Status
+
+Accepted. Full backend suite after this pass: 282/283 (the one failure is
+the same pre-existing local-Postgres-host-auth artifact noted in every
+prior entry — confirmed unchanged, not a new failure). Frontend: 34/34,
+ESLint clean, production/PWA build clean. `npm audit`: 0 vulnerabilities,
+both backend and frontend.
+
+Not addressed in this pass — tracked as open scope, not silently dropped:
+ESDMS-009 through ESDMS-011 and ESDMS-013 through ESDMS-016 (mobile layout,
+governance/employee-administration/documents/contracts/configuration UI);
+ESDMS-019 (historical Gate Pass department snapshot — needs a new forward
+migration); ESDMS-022 through ESDMS-032 and ESDMS-036 through ESDMS-039
+(mobile shell, dialogs, PWA offline/auth-state distinction, iOS file
+viewing, visual design system, motion, workforce dashboard, accessibility,
+contract/report timezone, leave/rotation policy conservatism, reporting
+policy, remaining N+1/import review); and ESDMS-034 (a full route/
+permission-matrix audit beyond the specific catalog-scope and
+catalog-context findings fixed above). ESDMS-039 (query-string logging) was
+explicitly out of scope for a route rewrite per instruction; the safe
+logger above already ensures request query strings are never logged
+verbatim as part of this pass's redaction work.

@@ -39,14 +39,13 @@ export function AppRoutes() {
         <Route path="/change-password" element={<ChangePasswordPage />} />
         <Route path="/workforce" element={<PermissionRoute permissions={["employees.view"]}><WorkforceDashboardPage /></PermissionRoute>} />
 
-        <Route
-          path="/workforce/me"
-          element={
-            <PermissionRoute permissions={["profile.self.view"]}>
-              <MyWorkforcePage />
-            </PermissionRoute>
-          }
-        />
+        {/* ESDMS-018: no PermissionRoute gate — MyWorkforcePage is fully
+            self-guarding (no linked Employee -> unavailable message; each
+            child tab is independently gated inside the page). Documents/
+            Rotation/Contracts/Compensation need no permission at all, so a
+            single permission-code gate here would have hidden them for a
+            linked Employee who legitimately lacks profile.self.view. */}
+        <Route path="/workforce/me" element={<MyWorkforcePage />} />
         <Route
           path="/workforce/employees"
           element={

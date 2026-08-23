@@ -32,10 +32,17 @@ export const updateEmployeeSchema = z.object({
   employeeCode: EMPLOYEE_CODE.optional(),
 });
 
-export const changeStatusSchema = z.object({
-  status: z.enum(EMPLOYMENT_STATUSES),
-  reason: z.string().trim().max(500).optional(),
-});
+const PERMANENT_OFFBOARDING_STATUSES = ["RESIGNED", "TERMINATED"];
+
+export const changeStatusSchema = z
+  .object({
+    status: z.enum(EMPLOYMENT_STATUSES),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine(
+    (data) => !PERMANENT_OFFBOARDING_STATUSES.includes(data.status) || (data.reason && data.reason.trim().length >= 3),
+    { message: "A reason of at least 3 characters is required for this status change.", path: ["reason"] },
+  );
 
 export const createAssignmentSchema = z.object({
   siteId: z.string().uuid().optional(),

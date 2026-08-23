@@ -20,4 +20,10 @@ router.get("/:id/permissions", requirePermission("permission_overrides.view"), c
 router.put("/:id/permissions/:code", requirePermission("permission_overrides.manage"), controller.setPermission);
 router.delete("/:id/permissions/:code", requirePermission("permission_overrides.manage"), controller.removePermission);
 
+router.post(
+  "/:id/regenerate-temp-password",
+  requirePermission("users.regenerate_temp_password"),
+  controller.regenerateTempPassword,
+);
+
 export default router;

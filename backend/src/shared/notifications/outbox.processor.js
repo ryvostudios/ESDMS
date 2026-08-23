@@ -1,7 +1,24 @@
 import pool from "../../config/database.js";
 import { whatsAppProvider } from "./whatsapp-provider.js";
-import { storageService } from "../storage/storage-service.js";
+import { storageService, StorageTimeoutError } from "../storage/storage-service.js";
 import { claimBatch, markDelivered, markFailed, reconcileStaleExternalDeliveries } from "./outbox.repository.js";
+import { logServerError } from "../logging/safe-logger.js";
+import { AppError } from "../errors/app-error.js";
+
+const MAX_PERSISTED_FAILURE_LENGTH = 300;
+
+// ESDMS-021: never persist a raw thrown/provider error.message into the
+// durable outbox row — a provider's own error text, or a Postgres error's
+// message, can embed submitted data. AppError's message is the one
+// exception: it's authored by this codebase, never derived from raw
+// external/provider input (same reasoning as safe-logger.js), so it's safe
+// to keep verbatim (bounded, just in case).
+export function classifyOutboxFailure(error) {
+  if (error instanceof StorageTimeoutError) return "TIMEOUT: storage operation timed out";
+  if (error?.name === "AbortError") return "TIMEOUT: operation aborted";
+  if (error instanceof AppError) return `${error.code}: ${error.message}`.slice(0, MAX_PERSISTED_FAILURE_LENGTH);
+  return "PROVIDER_ERROR: delivery attempt failed";
+}
 
 // SYSTEM jobs are shared-shape (same outbox table/claim logic) but their
 // actual work is domain-specific — a module registers its own handler by
@@ -51,7 +68,8 @@ async function drain(channel, processItem) {
         const { status, providerMessageId = null } = await processItem(item);
         await markDelivered(pool, item.id, status, providerMessageId);
       } catch (error) {
-        await markFailed(pool, item.id, error.message);
+        await markFailed(pool, item.id, classifyOutboxFailure(error));
+        logServerError(error, undefined, { operation: "outbox.process", channel, entityType: item.entity_type });
       }
     }
 
@@ -127,7 +145,7 @@ async function processOnceNonOverlapping() {
   try {
     await processOnce();
   } catch (error) {
-    console.error("Outbox processor error:", error);
+    logServerError(error);
   } finally {
     running = false;
   }

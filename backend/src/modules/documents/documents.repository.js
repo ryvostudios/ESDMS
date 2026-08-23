@@ -65,16 +65,33 @@ export async function setVerificationStatus(client, documentId, { status, verifi
   return result.rows[0];
 }
 
+// ESDMS-012: the latest version per (employee, document_type) is resolved
+// FIRST, in its own subquery with NO filter of any kind — not even
+// "expiry_date IS NOT NULL" — before any expiry classification is applied.
+// A prior version of this fix still filtered the subquery on
+// "expiry_date IS NOT NULL" before the DISTINCT ON/ORDER BY version DESC,
+// which excludes the true latest version whenever ITS expiry_date happens
+// to be NULL — silently letting an older, expired version with a non-null
+// expiry_date be picked up as "the latest" instead. The subquery must
+// select the single latest row per (employee, type) unconditionally; only
+// the OUTER query may then decide whether that row is null/expired/
+// expiring, so a NULL-expiry latest version is correctly excluded outright
+// rather than falling back to a stale earlier version.
 export async function listExpiring(siteId, withinDays) {
   const result = await pool.query(
-    `SELECT DISTINCT ON (d.employee_id, d.document_type_id) ${DOC_COLUMNS}, e.employee_code, e.full_legal_name
-     FROM employee_documents d
+    `SELECT ${DOC_COLUMNS}, e.employee_code, e.full_legal_name,
+            (d.expiry_date < CURRENT_DATE) AS is_expired
+     FROM (
+       SELECT DISTINCT ON (employee_id, document_type_id) *
+       FROM employee_documents
+       ORDER BY employee_id, document_type_id, version DESC
+     ) d
      JOIN employee_document_types dt ON dt.id = d.document_type_id
      JOIN employees e ON e.id = d.employee_id
      WHERE d.expiry_date IS NOT NULL
        AND d.expiry_date <= CURRENT_DATE + $2::int
        AND ($1::uuid IS NULL OR e.primary_site_id = $1)
-     ORDER BY d.employee_id, d.document_type_id, d.version DESC`,
+     ORDER BY d.expiry_date`,
     [siteId, withinDays],
   );
   return result.rows;
@@ -82,8 +99,8 @@ export async function listExpiring(siteId, withinDays) {
 
 // --- Document requests -----------------------------------------------------
 
-export async function insertRequest(employeeId, documentTypeId, requestedByUserId, note) {
-  const result = await pool.query(
+export async function insertRequest(client, employeeId, documentTypeId, requestedByUserId, note) {
+  const result = await client.query(
     `INSERT INTO employee_document_requests (employee_id, document_type_id, requested_by_user_id, note)
      VALUES ($1, $2, $3, $4) RETURNING id, status, created_at`,
     [employeeId, documentTypeId, requestedByUserId, note || null],

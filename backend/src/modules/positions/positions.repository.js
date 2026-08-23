@@ -11,9 +11,15 @@ export async function listActivePositionsForSite(siteId) {
   return result.rows;
 }
 
+// ESDMS-035: siteId === null means a company-wide (CEO/all-sites) actor —
+// return every site's positions, not an empty result.
 export async function listPositionsForSite(siteId) {
   const result = await pool.query(
-    "SELECT id, code, name, department_id, description, is_active, site_id FROM positions WHERE site_id = $1 ORDER BY name",
+    `SELECT p.id, p.code, p.name, p.department_id, p.description, p.is_active, p.site_id, s.name AS site_name
+     FROM positions p
+     JOIN sites s ON s.id = p.site_id
+     WHERE ($1::uuid IS NULL OR p.site_id = $1)
+     ORDER BY s.name, p.name`,
     [siteId],
   );
   return result.rows;

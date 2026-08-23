@@ -11,7 +11,7 @@ import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 // real enforcement boundary (requirePermission/requirePasswordChanged);
 // this page exists so that boundary has somewhere to send the user.
 export function ChangePasswordPage() {
-  const { refreshUser } = useAuth();
+  const { clearSession } = useAuth();
   const navigate = useNavigate();
 
   const [currentPassword, setCurrentPassword] = useState("");
@@ -36,11 +36,14 @@ export function ChangePasswordPage() {
     setSubmitting(true);
     try {
       await apiClient.post("/auth/change-password", { currentPassword, newPassword });
-      await refreshUser();
-      navigate("/", { replace: true });
+      // ESDMS-020: the backend has already revoked this session and
+      // cleared the cookie — there is no session left to refresh. Clear
+      // local auth state directly (no network call, so it can't itself
+      // surface a misleading 401) and send the user to sign in again.
+      clearSession();
+      navigate("/login", { replace: true, state: { info: "Password changed. Sign in again." } });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to change password. Please try again.");
-    } finally {
       setSubmitting(false);
     }
   }

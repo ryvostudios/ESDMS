@@ -26,15 +26,18 @@ describe("permission-driven Workforce navigation", () => {
     expect(screen.queryByRole("link", { name: "Governance" })).toBeNull();
   });
 
-  test("My Workforce requires both self-service permission and a linked Employee record", () => {
+  test("My Workforce requires only a linked Employee record — not profile.self.view (ESDMS-018)", () => {
+    // No linked Employee at all: hidden regardless of permissions.
     authState.permissions = new Set(["profile.self.view"]);
-
     const { rerender } = render(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.queryByRole("link", { name: "My Workforce" })).toBeNull();
 
+    // Linked Employee, but NO profile.self.view at all — Documents/
+    // Rotation/Contracts/Compensation need no permission, so the shell
+    // must still be reachable.
+    authState.permissions = new Set(["leave.self.view"]);
     authState.user = { employeeId: "employee-1" };
     rerender(<MemoryRouter><NavList /></MemoryRouter>);
-
     expect(screen.getByRole("link", { name: "My Workforce" })).toBeTruthy();
   });
 

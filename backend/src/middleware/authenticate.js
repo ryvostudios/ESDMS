@@ -1,25 +1,15 @@
 import jwt from "jsonwebtoken";
 import config from "../config/env.js";
 import { getUserProfileById, isProfileActive } from "../shared/users/user-profile.repository.js";
-import { readSessionCookie } from "../shared/http/session-cookie.js";
 import { UnauthorizedError } from "../shared/errors/app-error.js";
+import { extractToken } from "../shared/http/extract-token.js";
+import { apiUserRateLimiter } from "./rate-limit.js";
 
-// Browsers authenticate via the HttpOnly session cookie set at login; the
-// Authorization header remains supported for non-browser API clients (CI,
-// scripts, this project's own test suite) — see docs/DECISIONS.md for why
-// both are kept rather than removing bearer support outright. The cookie
-// is checked first since it's what the real product UI uses. Exported so
-// logout (see auth.controller.js) can identify whose session to revoke
-// without duplicating this extraction logic.
-export function extractToken(req) {
-  const cookieToken = readSessionCookie(req);
-  if (cookieToken) return cookieToken;
-
-  const authorization = req.get("authorization");
-  if (authorization?.startsWith("Bearer ")) return authorization.slice(7);
-
-  return null;
-}
+// Re-exported for existing callers (e.g. auth.controller.js's logout) —
+// the implementation itself lives in shared/http/extract-token.js so
+// rate-limit.js can use it too without importing this module (which itself
+// imports rate-limit.js, below) and creating a circular dependency.
+export { extractToken };
 
 export async function authenticate(req, res, next) {
   const token = extractToken(req);
@@ -69,5 +59,12 @@ export async function authenticate(req, res, next) {
     permissions: new Set(user.permissions),
   };
 
-  return next();
+  // ESDMS-017: the broad per-IP abuse ceiling (apiAuthenticatedIpRateLimiter)
+  // is applied globally in app.js now, for every request regardless of
+  // outcome — see the comment there for why (closing a bypass where a
+  // revoked-but-signature-valid token got zero rate-limit coverage). Only
+  // the per-identity quota is applied here, now that req.user is known —
+  // many users sharing an IP each get their own budget instead of
+  // splitting one.
+  return apiUserRateLimiter(req, res, next);
 }

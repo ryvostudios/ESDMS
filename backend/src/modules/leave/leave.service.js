@@ -2,7 +2,7 @@ import { ForbiddenError, ValidationError, NotFoundError, ConflictError } from ".
 import { getEmployee } from "../employees/employees.service.js";
 import { recordHistory } from "../workforce/business-history.repository.js";
 import { notifyEmployee } from "../workforce/workforce-notify.js";
-import pool from "../../config/database.js";
+import { withTransaction } from "../../shared/db/with-transaction.js";
 import * as repo from "./leave.repository.js";
 
 function isSelfActor(actor, employeeId) {
@@ -26,6 +26,9 @@ function daysBetweenInclusive(startDate, endDate) {
   return Math.round(ms / (24 * 60 * 60 * 1000)) + 1;
 }
 
+// ESDMS-008: the request row and its history entry commit as one
+// transaction — a history-write failure must not leave a leave request
+// created with no audit trail of how it got there.
 export async function submitLeave(actor, employeeId, input) {
   const employee = await getEmployee(actor, employeeId);
   if (!isSelfActor(actor, employee.id)) {
@@ -40,21 +43,35 @@ export async function submitLeave(actor, employeeId, input) {
   const span = daysBetweenInclusive(input.startDate, input.endDate);
   if (input.requestedDays > span) throw new ValidationError("Requested days cannot exceed the date range.");
 
-  const request = await repo.insertRequest(employee.id, input);
-  await recordHistory(pool, {
-    employeeId: employee.id,
-    eventType: "LEAVE_SUBMITTED",
-    summary: { leaveTypeId: input.leaveTypeId, startDate: input.startDate, endDate: input.endDate },
-    actorUserId: actor.id,
+  return withTransaction(async (client) => {
+    const request = await repo.insertRequest(client, employee.id, input);
+
+    await recordHistory(client, {
+      employeeId: employee.id,
+      eventType: "LEAVE_SUBMITTED",
+      summary: { leaveTypeId: input.leaveTypeId, startDate: input.startDate, endDate: input.endDate },
+      actorUserId: actor.id,
+    });
+
+    return request;
   });
-  return request;
 }
 
+// ESDMS-003: identity alone (isSelfActor) is never sufficient for a self
+// leave read — leave.self.view must still be checked, so an explicit CEO
+// DENY on that permission actually wins. The management path
+// (leave.approve/leave.manage) is a separate, independent grant of access
+// to OTHER employees' leave — it is not consulted for a self-directed read,
+// so it can never be used to route around a self.view denial either.
 export async function listMyOrEmployeeLeave(actor, employeeId) {
   const employee = await getEmployee(actor, employeeId);
-  if (!isSelfActor(actor, employee.id) && !actor.permissions.has("leave.approve") && !actor.permissions.has("leave.manage")) {
+
+  if (isSelfActor(actor, employee.id)) {
+    if (!actor.permissions.has("leave.self.view")) throw new ForbiddenError();
+  } else if (!actor.permissions.has("leave.approve") && !actor.permissions.has("leave.manage")) {
     throw new ForbiddenError();
   }
+
   return repo.listForEmployee(employee.id);
 }
 
@@ -67,6 +84,9 @@ export async function listPending(actor) {
 // Explicit state transitions only — no arbitrary status PATCH. An actor
 // can never decide their own leave request, mirroring the self-block
 // pattern used across governance/compensation.
+//
+// ESDMS-008: the decision, its history entry, and the notification enqueue
+// commit as one transaction.
 export async function decideLeave(actor, requestId, { status, remark }) {
   if (!actor.permissions.has("leave.approve")) throw new ForbiddenError();
 
@@ -78,31 +98,51 @@ export async function decideLeave(actor, requestId, { status, remark }) {
   if (request.status !== "SUBMITTED") throw new ConflictError("This request has already been decided.");
 
   const employee = await getEmployee(actor, request.employee_id);
-  const updated = await repo.decide(requestId, { status, decidedByUserId: actor.id, remark });
-  if (!updated) throw new ConflictError("This request has already been decided.");
 
-  await recordHistory(pool, {
-    employeeId: employee.id,
-    eventType: status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
-    summary: { requestId, remark: remark || null },
-    actorUserId: actor.id,
+  return withTransaction(async (client) => {
+    const updated = await repo.decide(client, requestId, { status, decidedByUserId: actor.id, remark });
+    if (!updated) throw new ConflictError("This request has already been decided.");
+
+    await recordHistory(client, {
+      employeeId: employee.id,
+      eventType: status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+      summary: { requestId, remark: remark || null },
+      actorUserId: actor.id,
+    });
+
+    await notifyEmployee(client, {
+      employeeUserId: employee.user_id,
+      siteId: employee.primary_site_id,
+      eventType: status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+      entityType: "LEAVE_REQUEST",
+      entityId: requestId,
+      payload: { status },
+    });
+
+    return updated;
   });
-
-  await notifyEmployee(pool, {
-    employeeUserId: employee.user_id,
-    siteId: employee.primary_site_id,
-    eventType: status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
-    entityType: "LEAVE_REQUEST",
-    entityId: requestId,
-    payload: { status },
-  });
-
-  return updated;
 }
 
+// Submit and cancel are separate actions with their own dedicated
+// permission (leave.self.cancel) — an actor whose leave.self.create has
+// been explicitly denied can still cancel their own request if granted
+// leave.self.cancel, and vice versa. repo.cancel's own WHERE clause
+// separately restricts this to the actor's own record regardless.
 export async function cancelMyLeave(actor, requestId) {
   if (!actor.employeeId) throw new NotFoundError("No Employee record is linked to your account.");
-  const updated = await repo.cancel(requestId, actor.employeeId);
-  if (!updated) throw new ConflictError("Only your own SUBMITTED request can be cancelled.");
-  return updated;
+  if (!actor.permissions.has("leave.self.cancel")) throw new ForbiddenError();
+
+  return withTransaction(async (client) => {
+    const updated = await repo.cancel(client, requestId, actor.employeeId);
+    if (!updated) throw new ConflictError("Only your own SUBMITTED request can be cancelled.");
+
+    await recordHistory(client, {
+      employeeId: actor.employeeId,
+      eventType: "LEAVE_CANCELLED",
+      summary: { requestId },
+      actorUserId: actor.id,
+    });
+
+    return updated;
+  });
 }

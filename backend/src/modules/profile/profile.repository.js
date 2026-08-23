@@ -9,8 +9,8 @@ export async function getPersonalDetails(employeeId) {
   return result.rows[0] || null;
 }
 
-export async function upsertPersonalDetails(employeeId, { cnic, mobile, address, personalEmail }) {
-  const result = await pool.query(
+export async function upsertPersonalDetails(client, employeeId, { cnic, mobile, address, personalEmail }) {
+  const result = await client.query(
     `INSERT INTO employee_personal_details (employee_id, cnic, mobile, address, personal_email)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (employee_id) DO UPDATE SET
