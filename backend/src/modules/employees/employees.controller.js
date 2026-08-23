@@ -10,6 +10,7 @@ import {
   changeStatusSchema,
   createAssignmentSchema,
   createLoginSchema,
+  linkExistingUserSchema,
   listQuerySchema,
 } from "./employees.validation.js";
 
@@ -91,6 +92,12 @@ export const transfer = asyncHandler(async (req, res) => {
   const input = parseBody(createAssignmentSchema, req.body);
   const created = await service.createTransfer(req.user, req.params.id, input);
   res.status(201).json({ success: true, data: created });
+});
+
+export const linkExistingUser = asyncHandler(async (req, res) => {
+  const input = parseBody(linkExistingUserSchema, req.body);
+  const result = await service.linkExistingUserForEmployee(req.user, req.params.id, input);
+  res.status(200).json({ success: true, data: result });
 });
 
 export const createLogin = asyncHandler(async (req, res) => {

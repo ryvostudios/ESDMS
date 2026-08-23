@@ -26,6 +26,11 @@ router.patch("/:id", requirePermission("employees.update"), controller.update);
 router.get("/:id/assignments", requirePermission("employees.view"), controller.assignmentHistory);
 router.post("/:id/transfer", requirePermission("employees.transfer"), controller.transfer);
 router.post("/:id/status", requirePermission("employees.status_change"), controller.changeStatus);
+router.post(
+  "/:id/login/link-existing",
+  requirePermission("employees.account.link_existing"),
+  controller.linkExistingUser,
+);
 router.post("/:id/login", requirePermission("employees.account.create"), controller.createLogin);
 router.post("/:id/login/reset", requirePermission("employees.account.reset"), controller.resetLoginPassword);
 

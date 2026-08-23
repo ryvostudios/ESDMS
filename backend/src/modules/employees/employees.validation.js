@@ -48,6 +48,10 @@ export const createAssignmentSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
 
+export const linkExistingUserSchema = z.object({
+  userId: z.string().uuid(),
+});
+
 export const createLoginSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(12, "Password must be at least 12 characters.").optional(),

@@ -133,10 +133,16 @@ export async function insertEmployee(client, { employeeCode, fullLegalName, prim
 }
 
 export async function linkUserAccount(client, employeeId, userId) {
-  await client.query("UPDATE employees SET user_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [
-    employeeId,
-    userId,
-  ]);
+  const result = await client.query(
+    `UPDATE employees
+     SET user_id = $2, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1
+       AND user_id IS NULL
+     RETURNING user_id`,
+    [employeeId, userId],
+  );
+
+  return result.rows[0] || null;
 }
 
 export async function updateEmployeeStatus(client, employeeId, { status, statusReason }) {

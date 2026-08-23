@@ -323,3 +323,252 @@ test("self-service /employees/me resolves the caller's own record with no id in 
   assert.equal(me.status, 200);
   assert.equal(me.body.data.id, created.body.data.id);
 });
+
+// --- Existing User <-> Employee linking ------------------------------------
+
+test("HR cannot link an existing User without explicit link-existing authority", async () => {
+  const created = await createTestEmployee();
+
+  const response = await apiRequest(
+    server.baseUrl,
+    "POST",
+    `/api/v1/employees/${created.body.data.id}/login/link-existing`,
+    {
+      token: hrToken,
+      body: { userId: users.admin },
+    },
+  );
+
+  assert.equal(response.status, 403);
+});
+
+test("CEO can link an existing Admin without changing the Admin role", async () => {
+  const created = await createTestEmployee();
+  const employeeId = created.body.data.id;
+
+  try {
+    const linked = await apiRequest(
+      server.baseUrl,
+      "POST",
+      `/api/v1/employees/${employeeId}/login/link-existing`,
+      {
+        token: ceoToken,
+        body: { userId: users.admin },
+      },
+    );
+
+    assert.equal(linked.status, 200, JSON.stringify(linked.body));
+    assert.equal(linked.body.data.userId, users.admin);
+    assert.equal(linked.body.data.role, "ADMIN");
+
+    const userState = await pool.query(
+      `SELECT r.name AS role
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+       WHERE u.id = $1`,
+      [users.admin],
+    );
+
+    assert.equal(userState.rows[0].role, "ADMIN");
+
+    const adminToken = await authHeader(server.baseUrl, "admin@test.eset.local");
+    const me = await apiRequest(server.baseUrl, "GET", "/api/v1/auth/me", {
+      token: adminToken,
+    });
+
+    assert.equal(me.status, 200);
+    assert.equal(me.body.data.user.employeeId, employeeId);
+
+    const audit = await pool.query(
+      `SELECT action
+       FROM governance_audit_log
+       WHERE target_employee_id = $1
+         AND target_user_id = $2
+         AND action = 'EMPLOYEE_EXISTING_USER_LINKED'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [employeeId, users.admin],
+    );
+    assert.equal(audit.rowCount, 1);
+
+    const history = await pool.query(
+      `SELECT event_type
+       FROM employee_business_history
+       WHERE employee_id = $1
+         AND event_type = 'LOGIN_LINKED_EXISTING'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [employeeId],
+    );
+    assert.equal(history.rowCount, 1);
+  } finally {
+    await pool.query("UPDATE employees SET user_id = NULL WHERE id = $1", [employeeId]);
+  }
+});
+
+test("one User cannot be linked to two Employee records", async () => {
+  const first = await createTestEmployee();
+  const second = await createTestEmployee();
+
+  try {
+    const firstLink = await apiRequest(
+      server.baseUrl,
+      "POST",
+      `/api/v1/employees/${first.body.data.id}/login/link-existing`,
+      {
+        token: ceoToken,
+        body: { userId: users.admin },
+      },
+    );
+
+    assert.equal(firstLink.status, 200, JSON.stringify(firstLink.body));
+
+    const secondLink = await apiRequest(
+      server.baseUrl,
+      "POST",
+      `/api/v1/employees/${second.body.data.id}/login/link-existing`,
+      {
+        token: ceoToken,
+        body: { userId: users.admin },
+      },
+    );
+
+    assert.equal(secondLink.status, 409, JSON.stringify(secondLink.body));
+  } finally {
+    await pool.query(
+      "UPDATE employees SET user_id = NULL WHERE id IN ($1, $2)",
+      [first.body.data.id, second.body.data.id],
+    );
+  }
+});
+
+test("database independently enforces one Employee per User", async () => {
+  const first = await createTestEmployee();
+  const second = await createTestEmployee();
+
+  try {
+    await pool.query(
+      "UPDATE employees SET user_id = $2 WHERE id = $1",
+      [first.body.data.id, users.admin],
+    );
+
+    await assert.rejects(
+      pool.query(
+        "UPDATE employees SET user_id = $2 WHERE id = $1",
+        [second.body.data.id, users.admin],
+      ),
+      (error) => error?.code === "23505",
+    );
+  } finally {
+    await pool.query(
+      "UPDATE employees SET user_id = NULL WHERE id IN ($1, $2)",
+      [first.body.data.id, second.body.data.id],
+    );
+  }
+});
+
+test("CEO account cannot be linked through the ordinary Workforce link API", async () => {
+  const created = await createTestEmployee();
+
+  const response = await apiRequest(
+    server.baseUrl,
+    "POST",
+    `/api/v1/employees/${created.body.data.id}/login/link-existing`,
+    {
+      token: ceoToken,
+      body: { userId: users.ceo },
+    },
+  );
+
+  assert.equal(response.status, 403);
+
+  const state = await pool.query(
+    "SELECT user_id FROM employees WHERE id = $1",
+    [created.body.data.id],
+  );
+  assert.equal(state.rows[0].user_id, null);
+});
+
+test("Upper Management linking additionally requires users.manage_um", async () => {
+  const email = `${unique("link-um")}@test.eset.local`;
+
+  const createdUm = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
+    token: ceoToken,
+    body: {
+      email,
+      fullName: "Existing UM Link Test",
+      password: "Existing-Um-Link-Password-123",
+      role: "UPPER_MANAGEMENT",
+    },
+  });
+
+  assert.equal(createdUm.status, 201, JSON.stringify(createdUm.body));
+
+  const employee = await createTestEmployee();
+
+  await apiRequest(
+    server.baseUrl,
+    "PUT",
+    `/api/v1/users/${users.hr}/permissions/employees.account.link_existing`,
+    {
+      token: ceoToken,
+      body: { effect: "GRANT" },
+    },
+  );
+
+  try {
+    const denied = await apiRequest(
+      server.baseUrl,
+      "POST",
+      `/api/v1/employees/${employee.body.data.id}/login/link-existing`,
+      {
+        token: hrToken,
+        body: { userId: createdUm.body.data.id },
+      },
+    );
+
+    assert.equal(denied.status, 403);
+
+    await apiRequest(
+      server.baseUrl,
+      "PUT",
+      `/api/v1/users/${users.hr}/permissions/users.manage_um`,
+      {
+        token: ceoToken,
+        body: { effect: "GRANT" },
+      },
+    );
+
+    const allowed = await apiRequest(
+      server.baseUrl,
+      "POST",
+      `/api/v1/employees/${employee.body.data.id}/login/link-existing`,
+      {
+        token: hrToken,
+        body: { userId: createdUm.body.data.id },
+      },
+    );
+
+    assert.equal(allowed.status, 200, JSON.stringify(allowed.body));
+    assert.equal(allowed.body.data.role, "UPPER_MANAGEMENT");
+  } finally {
+    await pool.query(
+      "UPDATE employees SET user_id = NULL WHERE id = $1",
+      [employee.body.data.id],
+    );
+
+    await apiRequest(
+      server.baseUrl,
+      "DELETE",
+      `/api/v1/users/${users.hr}/permissions/employees.account.link_existing`,
+      { token: ceoToken },
+    );
+
+    await apiRequest(
+      server.baseUrl,
+      "DELETE",
+      `/api/v1/users/${users.hr}/permissions/users.manage_um`,
+      { token: ceoToken },
+    );
+  }
+});

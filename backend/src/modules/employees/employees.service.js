@@ -9,7 +9,8 @@ import { resolveCreateSiteId, employeeSiteFilter, assertEmployeeViewable, assert
 import { findDepartmentById } from "../departments/departments.repository.js";
 import { findPositionById } from "../positions/positions.repository.js";
 import { findEmploymentTypeById } from "../employment-types/employment-types.repository.js";
-import { findRoleByName } from "../users/users.repository.js";
+import { findRoleByName, findUserById } from "../users/users.repository.js";
+import { guardGovernanceTarget, UM_MANAGE_PERMISSION, CEO_ROLE, UM_ROLE } from "../users/users.authorization.js";
 import { findPolicyById } from "../rotation/rotation.repository.js";
 import {
   listEmployees as repoListEmployees,
@@ -355,6 +356,137 @@ export async function createTransfer(actor, employeeId, input) {
   });
 }
 
+export async function linkExistingUserForEmployee(actor, employeeId, input) {
+  const employee = await findEmployeeById(employeeId);
+  if (!employee) throw new NotFoundError("Employee not found.");
+
+  assertEmployeeManageable(actor, employee, "employees.account.link_existing");
+
+  if (employee.user_id) {
+    throw new ConflictError("This Employee already has a linked login account.");
+  }
+
+  // Run the ordinary governance guard before taking row locks. Besides
+  // enforcing the normal hierarchy rules, this preserves the existing
+  // denied-attempt audit behavior without making that audit compete with
+  // our own FOR UPDATE lock.
+  const targetPreview = await findUserById(input.userId);
+  if (!targetPreview) throw new NotFoundError("User not found.");
+
+  await guardGovernanceTarget(actor, targetPreview, {
+    action: "EMPLOYEE_EXISTING_USER_LINK",
+    umPermission: { code: UM_MANAGE_PERMISSION },
+  });
+
+  try {
+    return await withTransaction(async (client) => {
+      const targetResult = await client.query(
+        `SELECT u.id, u.email, u.full_name, u.is_active, u.department_id,
+                u.site_id, u.created_at, r.name AS role
+         FROM users u
+         JOIN roles r ON r.id = u.role_id
+         WHERE u.id = $1
+         FOR UPDATE OF u`,
+        [input.userId],
+      );
+
+      const targetUser = targetResult.rows[0];
+      if (!targetUser) throw new NotFoundError("User not found.");
+
+      // Re-check the governance invariants under the User row lock in case
+      // the account changed between the initial guard and this transaction.
+      const violations = [];
+      if (targetUser.role === CEO_ROLE) violations.push("target_is_ceo");
+      if (targetUser.id === actor.id) violations.push("self_target");
+      if (
+        targetUser.role === UM_ROLE &&
+        !actor.permissions.has(UM_MANAGE_PERMISSION)
+      ) {
+        violations.push("missing_um_authority");
+      }
+
+      if (violations.length > 0) {
+        await recordGovernanceAudit(client, {
+          actorUserId: actor.id,
+          targetUserId: targetUser.id,
+          action: "PRIVILEGE_ESCALATION_ATTEMPT",
+          metadata: {
+            attemptedAction: "EMPLOYEE_EXISTING_USER_LINK",
+            violations,
+          },
+        });
+
+        if (violations.includes("target_is_ceo")) {
+          throw new ForbiddenError("CEO accounts cannot be modified through this API.");
+        }
+        if (violations.includes("self_target")) {
+          throw new ForbiddenError("You cannot perform this action on your own account.");
+        }
+        throw new ForbiddenError(
+          "Managing an Upper Management account requires explicit UM authority.",
+        );
+      }
+
+      if (!targetUser.is_active) {
+        throw new ValidationError("An inactive User account cannot be linked to an Employee.");
+      }
+
+      if (targetUser.site_id !== employee.primary_site_id) {
+        throw new ValidationError("The User account and Employee must belong to the same site.");
+      }
+
+      const alreadyLinked = await client.query(
+        "SELECT id FROM employees WHERE user_id = $1 LIMIT 1",
+        [targetUser.id],
+      );
+
+      if (alreadyLinked.rowCount > 0) {
+        throw new ConflictError("This User account is already linked to another Employee.");
+      }
+
+      const linked = await linkUserAccount(client, employee.id, targetUser.id);
+
+      if (!linked) {
+        throw new ConflictError("This Employee already has a linked login account.");
+      }
+
+      await recordGovernanceAudit(client, {
+        actorUserId: actor.id,
+        targetEmployeeId: employee.id,
+        targetUserId: targetUser.id,
+        action: "EMPLOYEE_EXISTING_USER_LINKED",
+        metadata: {
+          role: targetUser.role,
+          email: targetUser.email,
+        },
+      });
+
+      await recordHistory(client, {
+        employeeId: employee.id,
+        eventType: "LOGIN_LINKED_EXISTING",
+        summary: {
+          userId: targetUser.id,
+          email: targetUser.email,
+          role: targetUser.role,
+        },
+        actorUserId: actor.id,
+      });
+
+      return {
+        employeeId: employee.id,
+        userId: targetUser.id,
+        email: targetUser.email,
+        role: targetUser.role,
+      };
+    });
+  } catch (error) {
+    if (error?.code === "23505") {
+      throw new ConflictError("This User account is already linked to another Employee.");
+    }
+    throw error;
+  }
+}
+
 // Narrow, single-purpose: role is ALWAYS EMPLOYEE — never accepts a role
 // from the caller, unlike the governance createUser service. This is what
 // makes "HR cannot manipulate the payload to create a privileged role"
@@ -390,7 +522,10 @@ export async function createLoginForEmployee(actor, employeeId, input) {
     );
     const userId = created.rows[0].id;
 
-    await linkUserAccount(client, employee.id, userId);
+    const linked = await linkUserAccount(client, employee.id, userId);
+    if (!linked) {
+      throw new ConflictError("This Employee already has a linked login account.");
+    }
 
     await recordGovernanceAudit(client, {
       actorUserId: actor.id,
