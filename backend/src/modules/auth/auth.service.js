@@ -13,7 +13,7 @@ import { getUserProfileById } from "../../shared/users/user-profile.repository.j
 const DUMMY_PASSWORD_HASH =
   "$argon2id$v=19$m=65536,p=4,t=3$Qi26MXI97heIwfZvilM3AA$3AxkXENWudP7d3HPehPEIyLkPS1mhN5EKOqpFwKjSgo";
 
-export async function loginUser(email, password) {
+export async function loginUser(email, password, rememberMe = false) {
   const normalizedEmail = email.trim().toLowerCase();
 
   const result = await pool.query(
@@ -55,7 +55,15 @@ export async function loginUser(email, password) {
     },
     config.jwtSecret,
     {
-      expiresIn: config.jwtExpiresIn,
+      // "Remember me": a longer-lived token, opted into per-login — see
+      // config/env.js. Everything else about the token (claims, revocation
+      // via sv/session_version) is identical either way. Remember-me passes
+      // a plain NUMBER of seconds (never a duration string) — jsonwebtoken
+      // interprets a number as an unambiguous seconds count, avoiding the
+      // string-parsing mismatch described in config/env.js.
+      expiresIn: rememberMe
+        ? config.rememberMeTtlSeconds
+        : config.jwtExpiresIn,
       issuer: config.jwtIssuer,
       audience: config.jwtAudience,
     },

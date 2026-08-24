@@ -126,6 +126,27 @@ if (jwtSecret.length < 32) {
 // passes over the same source value.
 const frontendOrigins = parseOrigins(required("FRONTEND_ORIGIN")).map(toOrigin);
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || "8h";
+// "Remember me" login: a longer-lived JWT + matching cookie maxAge, issued
+// only when the caller explicitly opts in (see auth.controller.js). Same
+// token/cookie mechanism as the default session — no refresh token, no
+// session table — so the existing session_version revocation (logout,
+// password change, deactivation) invalidates a remembered session exactly
+// as it does a normal one; the only difference is how long an unrevoked
+// token stays valid.
+//
+// Deliberately a fixed constant, NOT deployment-configurable like
+// JWT_EXPIRES_IN: a configurable duration STRING here would need identical
+// parsing by both parseDurationMs (for the cookie) and jsonwebtoken (for
+// the JWT's exp claim) — those disagree on a bare unitless value like
+// "604800" (parseDurationMs treats it as seconds; jsonwebtoken's own zeit/ms
+// parser treats a bare *string* number as milliseconds), which could
+// silently mint a JWT and cookie with very different lifetimes. A single
+// canonical NUMBER of seconds sidesteps that ambiguity entirely —
+// jsonwebtoken's `expiresIn` treats a numeric value as an unambiguous
+// seconds count, and the cookie's maxAge below is just that same number of
+// seconds converted to milliseconds. Nothing else may derive its own
+// remember-me duration from anywhere but this constant.
+const REMEMBER_ME_TTL_SECONDS = 7 * 24 * 60 * 60; // 604800
 const isProduction = nodeEnv === "production";
 
 // Render (and most PaaS reverse proxies) route public traffic to the
@@ -211,6 +232,12 @@ export const config = {
   jwtSecret,
   jwtExpiresIn,
   jwtExpiresInMs: parseDurationMs(jwtExpiresIn),
+  // The one canonical remember-me duration — see REMEMBER_ME_TTL_SECONDS
+  // above. jwt.sign's `expiresIn` gets the number of seconds directly (never
+  // a string); the cookie's maxAge gets that same number * 1000. Both
+  // consumers read these two fields and nothing else, so they cannot drift.
+  rememberMeTtlSeconds: REMEMBER_ME_TTL_SECONDS,
+  rememberMeTtlMs: REMEMBER_ME_TTL_SECONDS * 1000,
   // Fixed, non-secret identifiers — not deployment-specific, so not env
   // vars. Rejecting tokens without a matching iss/aud is cheap defense in
   // depth against a token minted for a different purpose ever being

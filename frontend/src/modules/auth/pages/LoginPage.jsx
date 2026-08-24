@@ -4,7 +4,29 @@ import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { ApiError } from "../../../core/api/client.js";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input } from "../../../shared/components/FormField.jsx";
+import { LoginMeshBackground } from "./LoginMeshBackground.jsx";
 import styles from "./LoginPage.module.css";
+
+// Wraps Input so FormField's aria-describedby cloning (it clones its
+// `children` element directly) still lands on the actual <input>, not on
+// a wrapping div — the toggle button sits alongside via CSS, not as a
+// sibling FormField would need to know about.
+function PasswordInput({ visible, onToggleVisible, ...inputProps }) {
+  return (
+    <div className={styles.passwordWrapper}>
+      <Input {...inputProps} type={visible ? "text" : "password"} className={styles.passwordInput} />
+      <button
+        type="button"
+        className={styles.togglePassword}
+        onClick={onToggleVisible}
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+      >
+        {visible ? "Hide" : "Show"}
+      </button>
+    </div>
+  );
+}
 
 export function LoginPage() {
   const { status, login } = useAuth();
@@ -12,6 +34,8 @@ export function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -39,7 +63,7 @@ export function LoginPage() {
     setSubmitting(true);
 
     try {
-      await login(email, password);
+      await login(email, password, rememberMe);
     } catch (error) {
       if (error instanceof ApiError) {
         setFormError(error.message);
@@ -53,6 +77,7 @@ export function LoginPage() {
 
   return (
     <div className={styles.screen}>
+      <LoginMeshBackground />
       <div className={styles.brandPanel}>
         <span className={styles.brandMark} aria-hidden="true">
           ES
@@ -106,17 +131,28 @@ export function LoginPage() {
             </FormField>
 
             <FormField label="Password" htmlFor="password" required error={fieldErrors.password}>
-              <Input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 error={fieldErrors.password}
                 disabled={submitting}
+                visible={passwordVisible}
+                onToggleVisible={() => setPasswordVisible((current) => !current)}
               />
             </FormField>
+
+            <label className={styles.rememberMe}>
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                disabled={submitting}
+              />
+              Keep me signed in for 7 days
+            </label>
 
             <Button type="submit" className={styles.submit} loading={submitting}>
               Sign in

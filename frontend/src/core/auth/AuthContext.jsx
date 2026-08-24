@@ -31,10 +31,10 @@ export function AuthProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const login = useCallback(async (email, password) => {
+  const login = useCallback(async (email, password, rememberMe = false) => {
     const response = await apiClient.post(
       "/auth/login",
-      { email, password },
+      { email, password, rememberMe },
       { suppressUnauthorizedHandling: true },
     );
     setUser(response.data.user);

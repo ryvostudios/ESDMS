@@ -114,15 +114,26 @@ export async function seedUsers() {
   };
 }
 
-export async function login(baseUrl, email, password = TEST_PASSWORD) {
+// `rememberMe` is deliberately left out of the request body entirely when
+// not passed (not sent as `false`/`undefined`) — every existing call site
+// that doesn't care about it keeps sending the exact same body as before
+// this option existed.
+export async function login(baseUrl, email, password = TEST_PASSWORD, rememberMe) {
   const response = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: "http://localhost:5173" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(rememberMe === undefined ? { email, password } : { email, password, rememberMe }),
   });
 
   const body = await response.json();
   const setCookie = response.headers.get("set-cookie");
 
-  return { status: response.status, body, cookie: setCookie ? setCookie.split(";")[0] : null };
+  return {
+    status: response.status,
+    body,
+    cookie: setCookie ? setCookie.split(";")[0] : null,
+    // Full Set-Cookie header (Max-Age/Expires included) — only needed by
+    // rememberMe-lifetime assertions; existing callers use `cookie` above.
+    rawSetCookie: setCookie,
+  };
 }

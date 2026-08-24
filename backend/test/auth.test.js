@@ -1,5 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import jwt from "jsonwebtoken";
 import pool from "../src/config/database.js";
 import { startTestServer, seedUsers, login, TEST_PASSWORD } from "./setup.js";
 
@@ -246,6 +247,143 @@ test("CORS rejects an unrecognized origin", async () => {
 // Placed last: intentionally exhausts the login rate limit for the rest of
 // this process, which would break earlier 401-expecting tests if it ran
 // before them.
+// --- "Remember me" login ---------------------------------------------
+
+// Matches .env.test's JWT_EXPIRES_IN=8h exactly — not a loose upper bound.
+const EIGHT_HOURS_SECONDS = 8 * 60 * 60; // 28800
+const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60; // 604800
+// Wall-clock seconds this test file may reasonably spend between a login
+// response landing and this process reading the token/cookie back — NOT a
+// tolerance for "close enough" duration confusion (that's exactly the bug
+// class LOGIN-01 fixes: a string like "604800" being parsed as 604800
+// seconds in one place and ~604 seconds in another). Any drift bigger than
+// a couple of seconds here would indicate a real regression, not clock
+// noise.
+const CLOCK_TOLERANCE_SECONDS = 5;
+
+function maxAgeSecondsFrom(setCookieHeader) {
+  const match = /Max-Age=(\d+)/i.exec(setCookieHeader || "");
+  return match ? Number(match[1]) : null;
+}
+
+function jwtLifetimeSecondsFrom(cookie) {
+  const token = decodeURIComponent(cookie.split("=").slice(1).join("="));
+  const payload = jwt.decode(token);
+  return payload.exp - payload.iat;
+}
+
+function assertCloseTo(actual, expected, label) {
+  assert.ok(
+    Math.abs(actual - expected) <= CLOCK_TOLERANCE_SECONDS,
+    `${label}: expected ~${expected}s (±${CLOCK_TOLERANCE_SECONDS}s), got ${actual}s`,
+  );
+}
+
+async function loginWithRawBody(body) {
+  const response = await fetch(`${server.baseUrl}/api/v1/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:5173" },
+    body: JSON.stringify(body),
+  });
+  const rawSetCookie = response.headers.get("set-cookie");
+  return {
+    status: response.status,
+    body: await response.json(),
+    cookie: rawSetCookie ? rawSetCookie.split(";")[0] : null,
+    rawSetCookie,
+  };
+}
+
+test("A) omitted rememberMe behaves as false: exact 8h JWT and cookie lifetime", async () => {
+  const { status, cookie, rawSetCookie } = await login(server.baseUrl, "admin@test.eset.local");
+  assert.equal(status, 200);
+
+  assertCloseTo(maxAgeSecondsFrom(rawSetCookie), EIGHT_HOURS_SECONDS, "cookie Max-Age");
+  assertCloseTo(jwtLifetimeSecondsFrom(cookie), EIGHT_HOURS_SECONDS, "JWT lifetime");
+});
+
+test("B) explicit rememberMe:false: exact 8h JWT and cookie lifetime", async () => {
+  const { status, cookie, rawSetCookie } = await loginWithRawBody({
+    email: "admin@test.eset.local",
+    password: TEST_PASSWORD,
+    rememberMe: false,
+  });
+  assert.equal(status, 200);
+
+  assertCloseTo(maxAgeSecondsFrom(rawSetCookie), EIGHT_HOURS_SECONDS, "cookie Max-Age");
+  assertCloseTo(jwtLifetimeSecondsFrom(cookie), EIGHT_HOURS_SECONDS, "JWT lifetime");
+});
+
+test("C) rememberMe:true: exact 7-day JWT and cookie lifetime", async () => {
+  const { status, cookie, rawSetCookie } = await login(server.baseUrl, "admin@test.eset.local", TEST_PASSWORD, true);
+  assert.equal(status, 200);
+
+  assertCloseTo(maxAgeSecondsFrom(rawSetCookie), SEVEN_DAYS_SECONDS, "cookie Max-Age");
+  assertCloseTo(jwtLifetimeSecondsFrom(cookie), SEVEN_DAYS_SECONDS, "JWT lifetime");
+});
+
+test("D) JWT and cookie lifetimes never drift apart — normal login", async () => {
+  const { cookie, rawSetCookie } = await login(server.baseUrl, "admin@test.eset.local");
+  const cookieSeconds = maxAgeSecondsFrom(rawSetCookie);
+  const jwtSeconds = jwtLifetimeSecondsFrom(cookie);
+
+  assert.ok(
+    Math.abs(jwtSeconds - cookieSeconds) <= CLOCK_TOLERANCE_SECONDS,
+    `JWT (${jwtSeconds}s) and cookie (${cookieSeconds}s) lifetimes drifted apart`,
+  );
+});
+
+test("D) JWT and cookie lifetimes never drift apart — remembered login", async () => {
+  const { cookie, rawSetCookie } = await login(server.baseUrl, "admin@test.eset.local", TEST_PASSWORD, true);
+  const cookieSeconds = maxAgeSecondsFrom(rawSetCookie);
+  const jwtSeconds = jwtLifetimeSecondsFrom(cookie);
+
+  assert.ok(
+    Math.abs(jwtSeconds - cookieSeconds) <= CLOCK_TOLERANCE_SECONDS,
+    `JWT (${jwtSeconds}s) and cookie (${cookieSeconds}s) lifetimes drifted apart`,
+  );
+});
+
+test("F) logout still clears and revokes a remembered (rememberMe: true) session", async () => {
+  const { cookie } = await login(server.baseUrl, "admin@test.eset.local", TEST_PASSWORD, true);
+
+  const logoutResponse = await fetch(`${server.baseUrl}/api/v1/auth/logout`, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: "http://localhost:5173" },
+  });
+  assert.equal(logoutResponse.status, 200);
+
+  const replay = await fetch(`${server.baseUrl}/api/v1/auth/me`, {
+    headers: { Cookie: cookie, Origin: "http://localhost:5173" },
+  });
+  assert.equal(replay.status, 401, "the remembered session must be just as revoked by logout as a normal one");
+});
+
+for (const invalidValue of ["true", "false", 1, 0]) {
+  test(`E) rememberMe: ${JSON.stringify(invalidValue)} (not a real boolean) is rejected as a validation error`, async () => {
+    const { status, body } = await loginWithRawBody({
+      email: "admin@test.eset.local",
+      password: TEST_PASSWORD,
+      rememberMe: invalidValue,
+    });
+
+    assert.equal(status, 400);
+    assert.equal(body.error.code, "VALIDATION_ERROR");
+  });
+}
+
+for (const invalidValue of [null, [], {}]) {
+  test(`E) rememberMe: ${JSON.stringify(invalidValue)} is rejected as a validation error`, async () => {
+    const { status, body } = await loginWithRawBody({
+      email: "admin@test.eset.local",
+      password: TEST_PASSWORD,
+      rememberMe: invalidValue,
+    });
+
+    assert.equal(status, 400);
+    assert.equal(body.error.code, "VALIDATION_ERROR");
+  });
+}
 test("repeated failed logins are rate-limited, but successful logins never count against that budget", async () => {
   // Several people can share one IP behind a site/office NAT — a shared
   // budget across successful logins would let one person's normal sign-ins

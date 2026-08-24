@@ -15,10 +15,14 @@ const COOKIE_OPTIONS = {
   domain: config.cookieDomain,
 };
 
-export function setSessionCookie(res, token) {
+// `maxAgeMs` defaults to the normal session lifetime; the login controller
+// passes the longer "remember me" lifetime explicitly when the caller
+// opted in, so this cookie's maxAge always matches the JWT's own
+// expiresIn — the two must never drift apart.
+export function setSessionCookie(res, token, maxAgeMs = config.jwtExpiresInMs) {
   res.cookie(config.sessionCookieName, token, {
     ...COOKIE_OPTIONS,
-    maxAge: config.jwtExpiresInMs,
+    maxAge: maxAgeMs,
   });
 }
 

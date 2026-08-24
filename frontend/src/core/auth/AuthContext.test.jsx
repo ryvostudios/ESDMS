@@ -60,6 +60,40 @@ describe("AuthContext critical flow", () => {
     expect(result.current.hasPermission("gate_pass.approve")).toBe(false);
   });
 
+  test("login sends rememberMe as a boolean, defaulting to false when omitted", async () => {
+    const user = { id: "u1", role: "ADMIN", permissions: [] };
+    let capturedBody = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url, init) => {
+        if (String(url).includes("/auth/me")) {
+          return Promise.resolve(jsonResponse(401, { success: false, error: {} }));
+        }
+        if (String(url).includes("/auth/login")) {
+          capturedBody = JSON.parse(init.body);
+          return Promise.resolve(jsonResponse(200, { success: true, data: { token: "t", user } }));
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      }),
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(result.current.status).toBe("unauthenticated"));
+
+    await act(async () => {
+      await result.current.login("admin@example.com", "password");
+    });
+
+    expect(capturedBody.rememberMe).toBe(false);
+
+    await act(async () => {
+      await result.current.login("admin@example.com", "password", true);
+    });
+
+    expect(capturedBody.rememberMe).toBe(true);
+  });
+
   test("logout: clears the user and returns to unauthenticated", async () => {
     const user = { id: "u1", role: "ADMIN", permissions: [] };
 

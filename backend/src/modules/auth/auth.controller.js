@@ -17,7 +17,7 @@ export const login = asyncHandler(async (req, res) => {
     throw new ValidationError("Email and password are required.");
   }
 
-  const result = await loginUser(parsed.data.email, parsed.data.password);
+  const result = await loginUser(parsed.data.email, parsed.data.password, parsed.data.rememberMe);
 
   if (!result) {
     // Deliberately identical response whether the email doesn't exist,
@@ -31,7 +31,11 @@ export const login = asyncHandler(async (req, res) => {
   // response (XSS, a misconfigured logging proxy, browser devtools network
   // tab left open) gets the user's profile, not a bearer credential it
   // could replay. See docs/DECISIONS.md.
-  setSessionCookie(res, result.token);
+  //
+  // Cookie maxAge always matches the JWT's own expiresIn (loginUser used
+  // the same rememberMe flag) — an unchecked login gets the normal
+  // lifetime unchanged from before this feature existed.
+  setSessionCookie(res, result.token, parsed.data.rememberMe ? config.rememberMeTtlMs : config.jwtExpiresInMs);
 
   return res.status(200).json({
     success: true,

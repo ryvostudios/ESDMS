@@ -4,6 +4,8 @@
 }
 
 .brandPanel {
+  position: relative;
+  z-index: 1;
   flex: 1;
   background: var(--color-surface-alt);
   color: var(--color-text-inverse);
@@ -37,6 +39,9 @@
 }
 
 .brandCopy h2 {
+  /* Login page only — overrides the global h1-h4 heading color (charcoal),
+     which otherwise blends into this panel's dark background. */
+  color: #ffffff;
   font-size: var(--text-3xl);
   margin-bottom: var(--space-3);
 }
@@ -53,12 +58,22 @@
 }
 
 .formPanel {
+  position: relative;
+  z-index: 1;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-6);
-  background: var(--color-bg);
+  /* Restrained steel/blue-tinted gradient (semi-transparent so the mesh
+     canvas behind the page reads faintly through it) replacing the old
+     flat --color-bg fill. The form card below stays fully opaque. */
+  background: linear-gradient(
+    135deg,
+    rgba(246, 249, 251, 0.62) 0%,
+    rgba(238, 242, 245, 0.55) 55%,
+    rgba(220, 229, 234, 0.62) 100%
+  );
 }
 
 .formCard {
@@ -136,4 +151,56 @@
 .submit {
   width: 100%;
   margin-top: var(--space-2);
+}
+
+.passwordWrapper {
+  position: relative;
+}
+
+/* Element + class beats FormField's bare .input class regardless of CSS
+   module source order, so the toggle button never overlaps typed text. */
+.passwordWrapper input.passwordInput {
+  padding-right: calc(var(--space-3) + 52px);
+}
+
+.togglePassword {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.togglePassword:hover {
+  color: var(--color-primary-hover);
+}
+
+.togglePassword:focus-visible {
+  /* LOGIN-02: the previous pale box-shadow (--color-primary-bg, #e4f6fc)
+     measured ~1.11:1 against white — effectively invisible. The accessible
+     focus token (--color-focus-ring, #008eb2) clears ~3.81:1. */
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.rememberMe {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.rememberMe input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
