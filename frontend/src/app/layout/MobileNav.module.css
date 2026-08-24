@@ -1,8 +1,9 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(21, 25, 30, 0.45);
   z-index: 20;
+  animation: fadeIn var(--transition-base);
 }
 
 .drawer {
@@ -20,6 +21,19 @@
   padding: calc(var(--space-4) + env(safe-area-inset-top)) var(--space-3)
     calc(var(--space-4) + env(safe-area-inset-bottom)) calc(var(--space-3) + env(safe-area-inset-left));
   box-shadow: var(--shadow-lg);
+  animation: slideIn var(--transition-slow);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(-100%);
+  }
 }
 
 .header {

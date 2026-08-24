@@ -257,50 +257,64 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
 
         {items.map((item, index) => (
           <div className={styles.itemRow} key={index}>
-            <FormField label="Description" htmlFor={`item-description-${index}`} required error={itemErrors[index]?.description}>
-              <Input
-                id={`item-description-${index}`}
-                value={item.description}
-                onChange={(event) => updateItem(index, "description", event.target.value)}
-                error={itemErrors[index]?.description}
-                disabled={submitting}
-              />
-            </FormField>
-            <FormField label="Part Number" htmlFor={`item-part-${index}`}>
-              <Input
-                id={`item-part-${index}`}
-                value={item.partNumber}
-                onChange={(event) => updateItem(index, "partNumber", event.target.value)}
-                disabled={submitting}
-              />
-            </FormField>
-            <FormField label="Quantity" htmlFor={`item-quantity-${index}`} required error={itemErrors[index]?.quantity}>
-              <Input
-                id={`item-quantity-${index}`}
-                type="number"
-                min="0"
-                step="any"
-                value={item.quantity}
-                onChange={(event) => updateItem(index, "quantity", event.target.value)}
-                error={itemErrors[index]?.quantity}
-                disabled={submitting}
-              />
-            </FormField>
-            <FormField label="Unit" htmlFor={`item-unit-${index}`}>
-              <Input
-                id={`item-unit-${index}`}
-                value={item.unit}
-                onChange={(event) => updateItem(index, "unit", event.target.value)}
-                disabled={submitting}
-              />
-            </FormField>
+            <span className={styles.itemIndex}>Item {index + 1}</span>
+
+            <div className={styles.itemDescription}>
+              <FormField label="Description" htmlFor={`item-description-${index}`} required error={itemErrors[index]?.description}>
+                <Input
+                  id={`item-description-${index}`}
+                  value={item.description}
+                  onChange={(event) => updateItem(index, "description", event.target.value)}
+                  error={itemErrors[index]?.description}
+                  disabled={submitting}
+                />
+              </FormField>
+            </div>
+
+            <div className={styles.itemPart}>
+              <FormField label="Part Number" htmlFor={`item-part-${index}`}>
+                <Input
+                  id={`item-part-${index}`}
+                  value={item.partNumber}
+                  onChange={(event) => updateItem(index, "partNumber", event.target.value)}
+                  disabled={submitting}
+                />
+              </FormField>
+            </div>
+
+            <div className={styles.itemQuantity}>
+              <FormField label="Quantity" htmlFor={`item-quantity-${index}`} required error={itemErrors[index]?.quantity}>
+                <Input
+                  id={`item-quantity-${index}`}
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={item.quantity}
+                  onChange={(event) => updateItem(index, "quantity", event.target.value)}
+                  error={itemErrors[index]?.quantity}
+                  disabled={submitting}
+                />
+              </FormField>
+            </div>
+
+            <div className={styles.itemUnit}>
+              <FormField label="Unit" htmlFor={`item-unit-${index}`}>
+                <Input
+                  id={`item-unit-${index}`}
+                  value={item.unit}
+                  onChange={(event) => updateItem(index, "unit", event.target.value)}
+                  disabled={submitting}
+                />
+              </FormField>
+            </div>
+
             <Button
               type="button"
               variant="ghost"
               className={styles.removeButton}
               onClick={() => removeItem(index)}
               disabled={submitting || items.length === 1}
-              aria-label="Remove item"
+              aria-label={`Remove item ${index + 1}`}
             >
               <TrashIcon width={16} height={16} />
             </Button>

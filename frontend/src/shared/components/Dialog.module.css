@@ -1,17 +1,20 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(21, 25, 30, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
   z-index: 30;
+  animation: backdropIn var(--transition-base) ease;
 }
 
 .dialog {
   width: 100%;
   max-width: 420px;
+  max-height: calc(100vh - var(--space-8));
+  overflow-y: auto;
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -19,6 +22,26 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  animation: dialogIn var(--transition-slow) ease;
+}
+
+@keyframes backdropIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@media (max-width: 480px) {
+  .dialog {
+    padding: var(--space-4);
+  }
 }
 
 .title {
@@ -28,15 +51,18 @@
 .message {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }
 
 .errorMessage {
   color: var(--color-danger);
   font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-3);
   margin-top: var(--space-2);

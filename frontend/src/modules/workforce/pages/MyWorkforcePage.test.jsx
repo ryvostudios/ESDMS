@@ -152,6 +152,8 @@ describe("MyWorkforcePage Leave tab: submit and cancel are independently permiss
     await openLeaveTab();
 
     const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    // Cancel must read as destructive, distinct from Submit's primary styling.
+    expect(cancelButton.className).toMatch(/danger/i);
     await act(async () => {
       fireEvent.click(cancelButton);
     });
@@ -168,5 +170,14 @@ describe("MyWorkforcePage Leave tab: submit and cancel are independently permiss
       fireEvent.click(submitButton);
     });
     expect(submitMyLeaveMock).toHaveBeenCalled();
+  });
+
+  test("no requests yet renders a compact empty state, not a blank panel", async () => {
+    mockPermissions = new Set(["leave.self.view"]);
+    getMyLeaveMock.mockResolvedValue({ data: [] });
+    await renderPage();
+    await openLeaveTab();
+
+    expect(await screen.findByText("No leave requests yet.")).toBeTruthy();
   });
 });

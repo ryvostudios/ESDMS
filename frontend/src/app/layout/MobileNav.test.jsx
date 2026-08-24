@@ -82,4 +82,35 @@ describe("MobileNav focus trap", () => {
 
     expect(screen.getByRole("dialog").id).toBe("mobile-nav-drawer");
   });
+
+  test("clicking the backdrop closes the drawer", async () => {
+    const onClose = vi.fn();
+    let container;
+    await act(async () => {
+      ({ container } = render(
+        <MemoryRouter>
+          <MobileNav open onClose={onClose} triggerRef={{ current: null }} />
+        </MemoryRouter>,
+      ));
+    });
+
+    fireEvent.click(container.querySelector('[class*="backdrop"]'));
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test("clicking a navigation link closes the drawer", async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <MobileNav open onClose={onClose} triggerRef={{ current: null }} />
+        </MemoryRouter>,
+      );
+    });
+
+    fireEvent.click(screen.getAllByRole("link")[0]);
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });

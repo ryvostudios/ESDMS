@@ -17,14 +17,16 @@ vi.mock("../api.js", () => ({
   listEmploymentTypes: () => Promise.resolve({ data: [] }),
 }));
 
+const mockNavigate = vi.hoisted(() => vi.fn());
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, useNavigate: () => vi.fn() };
+  return { ...actual, useNavigate: () => mockNavigate };
 });
 
 afterEach(() => {
   cleanup();
   mockCreateEmployee.mockReset();
+  mockNavigate.mockReset();
   mockListSites.mockReset().mockResolvedValue({ data: [{ id: "site-1", name: "Only Site" }] });
   mockListDepartments.mockReset().mockResolvedValue({ data: [] });
   mockListPositions.mockReset().mockResolvedValue({ data: [] });
@@ -162,5 +164,44 @@ describe("AddEmployeePage site-first selector (ESDMS-035 / PASS1-R04)", () => {
     await fillAndSubmit();
 
     expect(mockCreateEmployee).toHaveBeenCalledWith(expect.objectContaining({ siteId: "site-1" }));
+  });
+});
+
+describe("AddEmployeePage layout and actions", () => {
+  test("a site-scoped actor sees the fixed site as read-only context, not an editable picker", async () => {
+    await act(async () => renderPage());
+
+    expect(screen.queryByLabelText(/^site/i)).toBeNull();
+    expect(screen.getByText("Only Site")).toBeTruthy();
+  });
+
+  test("Department/Position show a helpful hint before a site is chosen (all-site actor)", async () => {
+    mockListSites.mockResolvedValue({
+      data: [
+        { id: "site-A", name: "Site A" },
+        { id: "site-B", name: "Site B" },
+      ],
+    });
+
+    await act(async () => renderPage());
+
+    expect(screen.getAllByText("Choose a site first.").length).toBe(2);
+  });
+
+  test("Cancel navigates back to the employee directory without creating anything", async () => {
+    await act(async () => renderPage());
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(mockNavigate).toHaveBeenCalledWith("/workforce/employees");
+    expect(mockCreateEmployee).not.toHaveBeenCalled();
+  });
+
+  test("the outside-of-scope duplicate notice is visually distinct from a fatal validation error", async () => {
+    render409({ matches: [], outsideScopeMatch: true });
+    await fillAndSubmit();
+
+    const notice = screen.getByText("A possible matching Employee exists outside your access scope.").closest("div");
+    expect(notice.className).toMatch(/outsideScopeNotice/);
   });
 });

@@ -288,3 +288,40 @@ describe("EmployeeDetailPage transfer: target-site / active-catalog consistency"
     expect(await screen.findByText("Assignment recorded.")).toBeTruthy();
   });
 });
+
+describe("EmployeeDetailPage identity header and layout", () => {
+  test("the identity header shows name, employee code, and a status badge", async () => {
+    await renderWithStatus("ACTIVE");
+
+    expect(screen.getByText("Test Employee")).toBeTruthy();
+    expect(screen.getByText("EMP-1")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
+  });
+
+  test("destructive status transitions (RESIGNED/TERMINATED) render with the danger button variant, routine ones do not", async () => {
+    await renderWithStatus("ACTIVE");
+    const section = within(statusSection());
+
+    const resigned = section.getByRole("button", { name: "RESIGNED" });
+    const terminated = section.getByRole("button", { name: "TERMINATED" });
+    const inactive = section.getByRole("button", { name: "INACTIVE" });
+
+    expect(resigned.className).toMatch(/danger/i);
+    expect(terminated.className).toMatch(/danger/i);
+    expect(inactive.className).not.toMatch(/danger/i);
+  });
+
+  test("the tab navigation sits in a contained horizontal scroller, not a page-level overflow container", async () => {
+    await renderWithStatus("ACTIVE");
+
+    const assignmentsTabButton = screen.getByRole("button", { name: "Assignments" });
+    expect(assignmentsTabButton.closest('[class*="tabScroller"]')).toBeTruthy();
+  });
+
+  test("all tabs still render their expected content", async () => {
+    await renderWithStatus("ACTIVE");
+
+    fireEvent.click(screen.getByRole("button", { name: "Compensation" }));
+    expect(await screen.findByText(/Not set|permission to view compensation/)).toBeTruthy();
+  });
+});

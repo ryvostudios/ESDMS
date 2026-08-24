@@ -4,6 +4,13 @@
   border-radius: var(--radius-lg);
   padding: var(--space-6);
   margin-bottom: var(--space-5);
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .section {
+    padding: var(--space-4);
+  }
 }
 
 .sectionTitle {
@@ -30,18 +37,72 @@
 .itemRow {
   display: grid;
   grid-template-columns: 2fr 1fr 0.7fr 0.8fr auto;
+  grid-template-areas: "description part quantity unit remove";
   gap: var(--space-3);
   align-items: end;
   margin-bottom: var(--space-3);
 }
 
+.itemIndex {
+  display: none;
+}
+
+.itemDescription {
+  grid-area: description;
+  min-width: 0;
+}
+
+.itemPart {
+  grid-area: part;
+  min-width: 0;
+}
+
+.itemQuantity {
+  grid-area: quantity;
+  min-width: 0;
+}
+
+.itemUnit {
+  grid-area: unit;
+  min-width: 0;
+}
+
+/* Below 768px there isn't room for five side-by-side fields without
+   clipping (Part Number/Unit/Quantity were getting squeezed off-screen) —
+   each item becomes its own compact card instead of a dense row. */
 @media (max-width: 768px) {
   .itemRow {
     grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "index remove"
+      "description description"
+      "part quantity"
+      "unit unit";
+    align-items: start;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+  }
+
+  .itemIndex {
+    display: flex;
+    align-items: center;
+    grid-area: index;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .removeButton {
+    justify-self: end;
   }
 }
 
 .removeButton {
+  grid-area: remove;
   height: 42px;
   width: 42px;
   flex-shrink: 0;
@@ -55,6 +116,7 @@
 
 .formActions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-3);
 }

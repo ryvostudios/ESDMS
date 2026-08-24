@@ -1,0 +1,137 @@
+.tabScroller {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: var(--space-5);
+}
+
+.tabList {
+  display: flex;
+  gap: var(--space-2);
+  width: max-content;
+  min-width: 100%;
+}
+
+.section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-4);
+  min-width: 0;
+}
+
+.sectionTitle {
+  font-size: var(--text-base);
+  margin: 0 0 var(--space-3);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.identityRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.identityName {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.identityMeta {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.missingNote {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+}
+
+.rowMain {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rowTitle {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.rowMeta {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.emptyText {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.formActions {
+  margin-top: var(--space-3);
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.statusMessage {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 0 0 var(--space-3);
+}
+
+.compensationValue {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .section {
+    padding: var(--space-4);
+  }
+}

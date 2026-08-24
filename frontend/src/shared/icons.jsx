@@ -123,3 +123,14 @@ export function BellIcon(props) {
     </svg>
   );
 }
+
+export function UsersIcon(props) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <circle cx="7.5" cy="7" r="2.5" />
+      <path d="M2.5 16c0-2.8 2.2-5 5-5s5 2.2 5 5" />
+      <circle cx="14" cy="7.5" r="2" />
+      <path d="M13 11.2c1.9.4 3.5 2 3.5 4.3" />
+    </svg>
+  );
+}

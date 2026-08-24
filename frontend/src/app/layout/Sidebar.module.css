@@ -60,6 +60,7 @@
 }
 
 .navLink {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -81,4 +82,17 @@
 .navLinkActive {
   background: var(--color-surface-alt-hover);
   color: var(--color-text-inverse);
+}
+
+/* A cyan accent bar, not just a background shade, so the active item is
+   unambiguous at a glance — the one deliberate accent use in the sidebar. */
+.navLinkActive::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
 }

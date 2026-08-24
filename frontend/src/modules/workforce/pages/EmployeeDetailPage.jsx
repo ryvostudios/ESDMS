@@ -2,13 +2,16 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { ApiError } from "../../../core/api/client.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
-import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Select } from "../../../shared/components/FormField.jsx";
 import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
+import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
+import { formatEnumLabel } from "../../../shared/utilities/format.js";
+import { EMPLOYEE_STATUS_TONE } from "../constants.js";
 import * as api from "../api.js";
+import styles from "./EmployeeDetailPage.module.css";
 
 // Mirrors employees.service.js's ALLOWED_STATUS_TRANSITIONS exactly — the
 // backend remains authoritative; this only keeps the UI from offering a
@@ -20,6 +23,7 @@ const STATUS_TRANSITIONS = {
   TERMINATED: [],
 };
 const REASON_REQUIRED_STATUSES = new Set(["RESIGNED", "TERMINATED"]);
+const DESTRUCTIVE_STATUSES = new Set(["RESIGNED", "TERMINATED"]);
 
 const TABS = ["Overview", "Profile", "Assignments", "Compensation", "Contracts", "Documents", "Rotation", "Leave"];
 
@@ -29,6 +33,7 @@ export function EmployeeDetailPage() {
   const [employee, setEmployee] = useState(null);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("Overview");
+  const [sites, setSites] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -44,28 +49,59 @@ export function EmployeeDetailPage() {
     load();
   }, [load]);
 
+  // Resolves a human-readable Site name for the identity header only — the
+  // same existing endpoint the Assignments tab already uses for its own,
+  // separate purpose (target-site selection), under the same permission
+  // gate (a plain employees.view-only actor, e.g. Upper Management, simply
+  // never calls it and the header falls back to showing the site id).
+  useEffect(() => {
+    if (!hasPermission("employees.transfer")) return;
+    api
+      .listSites()
+      .then((r) => setSites(r.data))
+      .catch(() => {});
+  }, [hasPermission]);
+
   if (error) return <ErrorState message={error} onRetry={load} />;
   if (!employee) return <LoadingState />;
 
+  const siteName = sites.find((s) => s.id === employee.primarySiteId)?.name || employee.primarySiteId;
+
   return (
     <div>
-      <PageHeader title={employee.fullLegalName} description={`${employee.employeeCode} · ${employee.status}`} />
-      <nav style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {TABS.map((t) => (
-          <Button key={t} variant={tab === t ? "primary" : "secondary"} onClick={() => setTab(t)}>
-            {t}
-          </Button>
-        ))}
-      </nav>
+      <div className={styles.identity}>
+        <div className={styles.identityTitleRow}>
+          <h1 className={styles.identityName}>{employee.fullLegalName}</h1>
+          <StatusBadge tone={EMPLOYEE_STATUS_TONE[employee.status] || "neutral"} label={formatEnumLabel(employee.status)} />
+        </div>
+        <p className={styles.identityCode}>{employee.employeeCode}</p>
+        <div className={styles.identityMeta}>
+          <span>{employee.positionName || "No position"}</span>
+          <span>{employee.departmentName || "No department"}</span>
+          <span>{siteName || "No site"}</span>
+        </div>
+      </div>
 
-      {tab === "Overview" && <OverviewTab employee={employee} onChanged={load} hasPermission={hasPermission} />}
-      {tab === "Profile" && <ProfileTab employeeId={id} />}
-      {tab === "Assignments" && <AssignmentsTab employee={employee} hasPermission={hasPermission} onChanged={load} />}
-      {tab === "Compensation" && <CompensationTab employeeId={id} hasPermission={hasPermission} />}
-      {tab === "Contracts" && <ContractsTab employeeId={id} hasPermission={hasPermission} />}
-      {tab === "Documents" && <DocumentsTab employeeId={id} hasPermission={hasPermission} />}
-      {tab === "Rotation" && <RotationTab employeeId={id} hasPermission={hasPermission} />}
-      {tab === "Leave" && <EmployeeLeaveTab employeeId={id} hasPermission={hasPermission} />}
+      <div className={styles.tabScroller}>
+        <nav className={styles.tabNav}>
+          {TABS.map((t) => (
+            <Button key={t} variant={tab === t ? "primary" : "secondary"} onClick={() => setTab(t)}>
+              {t}
+            </Button>
+          ))}
+        </nav>
+      </div>
+
+      <div className={styles.panel}>
+        {tab === "Overview" && <OverviewTab employee={employee} onChanged={load} hasPermission={hasPermission} />}
+        {tab === "Profile" && <ProfileTab employeeId={id} />}
+        {tab === "Assignments" && <AssignmentsTab employee={employee} hasPermission={hasPermission} onChanged={load} />}
+        {tab === "Compensation" && <CompensationTab employeeId={id} hasPermission={hasPermission} />}
+        {tab === "Contracts" && <ContractsTab employeeId={id} hasPermission={hasPermission} />}
+        {tab === "Documents" && <DocumentsTab employeeId={id} hasPermission={hasPermission} />}
+        {tab === "Rotation" && <RotationTab employeeId={id} hasPermission={hasPermission} />}
+        {tab === "Leave" && <EmployeeLeaveTab employeeId={id} hasPermission={hasPermission} />}
+      </div>
     </div>
   );
 }
@@ -143,7 +179,85 @@ function AssignmentsTab({ employee, hasPermission, onChanged }) {
     }
   }
 
-  return <div>{message && <p role="status">{message}</p>}<h3>Assignment history</h3>{history.map((item) => <p key={item.id}>{item.effective_date} — {item.department_name || "No department"} · {item.position_name || "No position"}</p>)}{hasPermission("employees.transfer") && <form onSubmit={transfer}>{sites.length > 1 && <FormField label="Site" htmlFor="transferSite" required><Select id="transferSite" value={siteId} onChange={(e) => changeSite(e.target.value)} required><option value="">— Select a site —</option>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></FormField>}<FormField label="Department" htmlFor="transferDepartment"><Select id="transferDepartment" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} disabled={!siteId}><option value="">None</option>{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Position" htmlFor="transferPosition"><Select id="transferPosition" value={positionId} onChange={(e) => setPositionId(e.target.value)} disabled={!siteId}><option value="">None</option>{positions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Employment type" htmlFor="transferType"><Select id="transferType" value={employmentTypeId} onChange={(e) => setEmploymentTypeId(e.target.value)}><option value="">None</option>{types.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></FormField><FormField label="Effective date" htmlFor="transferDate"><Input id="transferDate" type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} required /></FormField><FormField label="Reason" htmlFor="transferReason"><Input id="transferReason" value={reason} onChange={(e) => setReason(e.target.value)} /></FormField><Button type="submit">Record assignment / transfer</Button></form>}</div>;
+  return (
+    <div>
+      {message && (
+        <p className={styles.actionMessage} role="status">
+          {message}
+        </p>
+      )}
+
+      <h3 className={styles.actionGroupTitle}>Assignment history</h3>
+      {history.length === 0 && <p className={styles.detailValue}>No assignment history yet.</p>}
+      <ul className={styles.historyList}>
+        {history.map((item) => (
+          <li key={item.id} className={styles.historyRow}>
+            <span className={styles.historyDate}>{item.effective_date}</span>
+            <span>{item.department_name || "No department"} · {item.position_name || "No position"}</span>
+          </li>
+        ))}
+      </ul>
+
+      {hasPermission("employees.transfer") && (
+        <form onSubmit={transfer} className={styles.transferForm}>
+          <h3 className={styles.actionGroupTitle}>Record transfer / assignment</h3>
+          <div className={styles.formGrid}>
+            {sites.length > 1 && (
+              <FormField label="Site" htmlFor="transferSite" required>
+                <Select id="transferSite" value={siteId} onChange={(e) => changeSite(e.target.value)} required>
+                  <option value="">— Select a site —</option>
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+            )}
+            <FormField label="Department" htmlFor="transferDepartment">
+              <Select id="transferDepartment" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} disabled={!siteId}>
+                <option value="">None</option>
+                {departments.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField label="Position" htmlFor="transferPosition">
+              <Select id="transferPosition" value={positionId} onChange={(e) => setPositionId(e.target.value)} disabled={!siteId}>
+                <option value="">None</option>
+                {positions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField label="Employment type" htmlFor="transferType">
+              <Select id="transferType" value={employmentTypeId} onChange={(e) => setEmploymentTypeId(e.target.value)}>
+                <option value="">None</option>
+                {types.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField label="Effective date" htmlFor="transferDate" required>
+              <Input id="transferDate" type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} required />
+            </FormField>
+            <FormField label="Reason" htmlFor="transferReason" hint="Optional notes for this transfer.">
+              <Input id="transferReason" value={reason} onChange={(e) => setReason(e.target.value)} />
+            </FormField>
+          </div>
+          <div className={styles.formActions}>
+            <Button type="submit">Record assignment / transfer</Button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 }
 
 function OverviewTab({ employee, onChanged, hasPermission }) {
@@ -185,36 +299,71 @@ function OverviewTab({ employee, onChanged, hasPermission }) {
 
   return (
     <div>
-      <p>Site: {employee.primarySiteId}</p>
-      <p>Department: {employee.departmentName || "—"}</p>
-      <p>Position: {employee.positionName || "—"}</p>
-      <p>Employment type: {employee.employmentTypeName || "—"}</p>
-      {message && <p role="status">{message}</p>}
+      <div className={styles.detailsGrid}>
+        <div>
+          <span className={styles.detailLabel}>Department</span>
+          <span className={styles.detailValue}>{employee.departmentName || "—"}</span>
+        </div>
+        <div>
+          <span className={styles.detailLabel}>Position</span>
+          <span className={styles.detailValue}>{employee.positionName || "—"}</span>
+        </div>
+        <div>
+          <span className={styles.detailLabel}>Employment type</span>
+          <span className={styles.detailValue}>{employee.employmentTypeName || "—"}</span>
+        </div>
+      </div>
 
-      {!employee.hasLogin && hasPermission("employees.account.create") && (
-        <form onSubmit={createLogin}>
-          <h3>Create login</h3>
-          <FormField label="Email" htmlFor="loginEmail" required>
-            <Input id="loginEmail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </FormField>
-          <Button type="submit">Create login (EMPLOYEE role)</Button>
-        </form>
+      {message && (
+        <p className={styles.actionMessage} role="status">
+          {message}
+        </p>
       )}
 
-      {employee.hasLogin && hasPermission("employees.account.reset") && (
-        <Button variant="secondary" onClick={resetPassword}>
-          Reset login password
-        </Button>
-      )}
+      {/* Account actions: routine (create/reset login) vs. permanent
+          offboarding are visually separated so a permanent action is never
+          one accidental click away from a routine one. */}
+      <div className={styles.actionGroup}>
+        <h3 className={styles.actionGroupTitle}>Account</h3>
+        <div className={styles.actionRow}>
+          {!employee.hasLogin && hasPermission("employees.account.create") && (
+            <form onSubmit={createLogin} className={styles.inlineForm}>
+              <FormField label="Email" htmlFor="loginEmail" required>
+                <Input id="loginEmail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </FormField>
+              <Button type="submit">Create login (EMPLOYEE role)</Button>
+            </form>
+          )}
+
+          {employee.hasLogin && hasPermission("employees.account.reset") && (
+            <Button variant="secondary" onClick={resetPassword}>
+              Reset login password
+            </Button>
+          )}
+
+          {employee.hasLogin === false && !hasPermission("employees.account.create") && !hasPermission("employees.account.reset") && (
+            <p className={styles.detailValue}>No login account.</p>
+          )}
+        </div>
+      </div>
 
       {hasPermission("employees.status_change") && (
-        <div>
-          <h3>Status</h3>
-          {(STATUS_TRANSITIONS[employee.status] || []).map((s) => (
-            <Button key={s} variant="secondary" onClick={() => setPendingStatus(s)}>
-              {s}
-            </Button>
-          ))}
+        <div className={styles.actionGroup}>
+          <h3 className={styles.actionGroupTitle}>Status</h3>
+          <div className={styles.actionRow}>
+            {(STATUS_TRANSITIONS[employee.status] || []).map((s) => (
+              <Button
+                key={s}
+                variant={DESTRUCTIVE_STATUSES.has(s) ? "danger" : "secondary"}
+                onClick={() => setPendingStatus(s)}
+              >
+                {s}
+              </Button>
+            ))}
+            {(STATUS_TRANSITIONS[employee.status] || []).length === 0 && (
+              <p className={styles.detailValue}>No further status changes are available.</p>
+            )}
+          </div>
         </div>
       )}
 

@@ -6,7 +6,9 @@ import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Textarea, Select } from "../../../shared/components/FormField.jsx";
 import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { formatDate } from "../../../shared/utilities/datetime.js";
+import styles from "./MyWorkforcePage.module.css";
 import * as api from "../api.js";
 
 // ESDMS-018: each child is gated by its OWN capability, never by
@@ -23,6 +25,17 @@ const TAB_CONFIG = [
   { key: "Contracts", allowed: () => true },
   { key: "Compensation", allowed: () => true },
 ];
+
+// Generic status → badge tone mapping, presentation-only: unrecognized
+// statuses (any workflow value we don't specifically call out) fall back to
+// neutral rather than guessing.
+function statusTone(status) {
+  if (["APPROVED", "VERIFIED", "ACTIVE"].includes(status)) return "success";
+  if (["REJECTED", "EXPIRED"].includes(status)) return "danger";
+  if (["SUBMITTED", "PENDING", "DRAFT"].includes(status)) return "info";
+  if (status === "CANCELLED") return "neutral";
+  return "neutral";
+}
 
 export function MyWorkforcePage() {
   const { user, hasPermission } = useAuth();
@@ -95,13 +108,16 @@ export function MyWorkforcePage() {
         title="My Workforce"
         description={profile ? `Profile ${profile.completion.percent}% complete` : "Self-service"}
       />
-      <nav style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {availableTabs.map((t) => (
-          <Button key={t} variant={tab === t ? "primary" : "secondary"} onClick={() => setTab(t)}>
-            {t}
-          </Button>
-        ))}
-      </nav>
+
+      <div className={styles.tabScroller}>
+        <nav className={styles.tabList}>
+          {availableTabs.map((t) => (
+            <Button key={t} variant={tab === t ? "primary" : "secondary"} onClick={() => setTab(t)}>
+              {t}
+            </Button>
+          ))}
+        </nav>
+      </div>
 
       {tab === "Profile" && profile && <ProfileTab profile={profile} onChanged={load} />}
       {tab === "Documents" && <DocumentsTab />}
@@ -171,51 +187,95 @@ function ProfileTab({ profile, onChanged }) {
 
   return (
     <div>
-      <h2>{profile.employee.full_legal_name}</h2>
-      <p>
-        {profile.employee.employee_code} · {profile.employee.status}
-      </p>
+      <div className={styles.identityRow}>
+        <h2 className={styles.identityName}>{profile.employee.full_legal_name}</h2>
+        <span className={styles.identityMeta}>{profile.employee.employee_code}</span>
+        <StatusBadge tone={statusTone(profile.employee.status)} label={profile.employee.status} />
+      </div>
 
-      <FormField label="Profile photo" htmlFor="photo">
-        <input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} />
-      </FormField>
+      {message && <p role="status" className={styles.statusMessage}>{message}</p>}
 
-      <form onSubmit={savePersonalDetails}>
-        {message && <p role="status">{message}</p>}
-        <FormField label="Mobile" htmlFor="mobile">
-          <Input id="mobile" value={mobile} onChange={(e) => setMobile(e.target.value)} disabled={saving} />
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>Personal details</h3>
+        <FormField label="Profile photo" htmlFor="photo">
+          <input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} />
         </FormField>
-        <FormField label="CNIC" htmlFor="cnic">
-          <Input id="cnic" value={cnic} onChange={(e) => setCnic(e.target.value)} disabled={saving} />
-        </FormField>
-        <FormField label="Address" htmlFor="address">
-          <Textarea id="address" value={address} onChange={(e) => setAddress(e.target.value)} disabled={saving} />
-        </FormField>
-        <FormField label="Personal email" htmlFor="personalEmail">
-          <Input id="personalEmail" type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} disabled={saving} />
-        </FormField>
-        <Button type="submit" loading={saving}>
-          Save
-        </Button>
-      </form>
 
-      <h3>Emergency contacts</h3>
-      {profile.emergencyContacts.map((contact) => <p key={contact.id}>{contact.name} — {contact.phone} <Button variant="secondary" onClick={async () => { await api.removeMyEmergencyContact(contact.id); onChanged(); }}>Remove</Button></p>)}
-      <form onSubmit={addContact}>
-        <FormField label="Contact name" htmlFor="contactName"><Input id="contactName" value={contactName} onChange={(e) => setContactName(e.target.value)} required /></FormField>
-        <FormField label="Contact phone" htmlFor="contactPhone"><Input id="contactPhone" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} required /></FormField>
-        <Button type="submit">Add emergency contact</Button>
-      </form>
+        <form onSubmit={savePersonalDetails}>
+          <div className={styles.grid}>
+            <FormField label="Mobile" htmlFor="mobile">
+              <Input id="mobile" value={mobile} onChange={(e) => setMobile(e.target.value)} disabled={saving} />
+            </FormField>
+            <FormField label="CNIC" htmlFor="cnic">
+              <Input id="cnic" value={cnic} onChange={(e) => setCnic(e.target.value)} disabled={saving} />
+            </FormField>
+            <FormField label="Personal email" htmlFor="personalEmail">
+              <Input id="personalEmail" type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} disabled={saving} />
+            </FormField>
+            <FormField label="Address" htmlFor="address">
+              <Textarea id="address" value={address} onChange={(e) => setAddress(e.target.value)} disabled={saving} />
+            </FormField>
+          </div>
+          <div className={styles.formActions}>
+            <Button type="submit" loading={saving}>
+              Save
+            </Button>
+          </div>
+        </form>
+
+        {profile.completion.missingCoreFields.length > 0 && (
+          <p className={styles.missingNote}>Missing: {profile.completion.missingCoreFields.join(", ")}</p>
+        )}
+      </div>
+
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>Emergency contacts</h3>
+        {profile.emergencyContacts.length === 0 && <p className={styles.emptyText}>No emergency contacts on file.</p>}
+        <ul className={styles.list}>
+          {profile.emergencyContacts.map((contact) => (
+            <li key={contact.id} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{contact.name}</span>
+                <span className={styles.rowMeta}>{contact.phone}</span>
+              </span>
+              <span className={styles.rowActions}>
+                <Button variant="secondary" onClick={async () => { await api.removeMyEmergencyContact(contact.id); onChanged(); }}>
+                  Remove
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <form onSubmit={addContact} className={styles.formActions} style={{ marginTop: "var(--space-3)", flexWrap: "wrap" }}>
+          <FormField label="Contact name" htmlFor="contactName"><Input id="contactName" value={contactName} onChange={(e) => setContactName(e.target.value)} required /></FormField>
+          <FormField label="Contact phone" htmlFor="contactPhone"><Input id="contactPhone" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} required /></FormField>
+          <Button type="submit">Add emergency contact</Button>
+        </form>
+      </div>
 
       {fields.length > 0 && (
-        <div>
-          <h3>Additional information</h3>
-          {fields.map((field) => <div key={field.id}><FormField label={field.label} htmlFor={`field-${field.id}`}><Input id={`field-${field.id}`} value={String(fieldValues[field.id] ?? "")} disabled={!field.employee_can_edit} onChange={(e) => setFieldValues((current) => ({ ...current, [field.id]: e.target.value }))} /></FormField>{field.employee_can_edit && <Button variant="secondary" onClick={() => saveField(field)}>Save field</Button>}</div>)}
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Additional information</h3>
+          <div className={styles.grid}>
+            {fields.map((field) => (
+              <div key={field.id}>
+                <FormField label={field.label} htmlFor={`field-${field.id}`}>
+                  <Input
+                    id={`field-${field.id}`}
+                    value={String(fieldValues[field.id] ?? "")}
+                    disabled={!field.employee_can_edit}
+                    onChange={(e) => setFieldValues((current) => ({ ...current, [field.id]: e.target.value }))}
+                  />
+                </FormField>
+                {field.employee_can_edit && (
+                  <Button variant="secondary" onClick={() => saveField(field)}>
+                    Save field
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
-      )}
-
-      {profile.completion.missingCoreFields.length > 0 && (
-        <p>Missing: {profile.completion.missingCoreFields.join(", ")}</p>
       )}
     </div>
   );
@@ -260,22 +320,58 @@ function DocumentsTab() {
   return (
     <div>
       {error && <ErrorState message={error} onRetry={load} />}
+
       {requests.length > 0 && (
-        <div role="status">
-          <h3>Pending actions</h3>
-          {requests.map((r) => (
-            <p key={r.id}>Please upload: {r.document_type_name}</p>
-          ))}
+        <div className={styles.section} role="status">
+          <h3 className={styles.sectionTitle}>Pending actions</h3>
+          <ul className={styles.list}>
+            {requests.map((r) => (
+              <li key={r.id} className={styles.row}>
+                <span className={styles.rowTitle}>Please upload: {r.document_type_name}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
-      <h3>My documents</h3>
-      {types.length > 0 && <form onSubmit={upload}><FormField label="Document type" htmlFor="myDocumentType"><Select id="myDocumentType" value={documentTypeId} onChange={(e) => setDocumentTypeId(e.target.value)}>{types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></FormField><FormField label="Expiry date (when applicable)" htmlFor="myDocumentExpiry"><Input id="myDocumentExpiry" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} /></FormField><FormField label="File" htmlFor="myDocumentFile"><input id="myDocumentFile" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] || null)} required /></FormField><Button type="submit" disabled={!file}>Upload new version</Button></form>}
-      {documents.length === 0 && <p>No documents uploaded yet.</p>}
-      {documents.map((d) => (
-        <p key={d.id}>
-          {d.document_type_name} — v{d.version} — {d.verification_status} <Button variant="secondary" onClick={() => download(d)}>Download</Button>
-        </p>
-      ))}
+
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>My documents</h3>
+
+        {types.length > 0 && (
+          <form onSubmit={upload} className={styles.grid}>
+            <FormField label="Document type" htmlFor="myDocumentType">
+              <Select id="myDocumentType" value={documentTypeId} onChange={(e) => setDocumentTypeId(e.target.value)}>
+                {types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+              </Select>
+            </FormField>
+            <FormField label="Expiry date (when applicable)" htmlFor="myDocumentExpiry">
+              <Input id="myDocumentExpiry" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+            </FormField>
+            <FormField label="File" htmlFor="myDocumentFile">
+              <input id="myDocumentFile" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
+            </FormField>
+            <div className={styles.formActions}>
+              <Button type="submit" disabled={!file}>Upload new version</Button>
+            </div>
+          </form>
+        )}
+
+        {documents.length === 0 && <p className={styles.emptyText}>No documents uploaded yet.</p>}
+        <ul className={styles.list}>
+          {documents.map((d) => (
+            <li key={d.id} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{d.document_type_name}</span>
+                <span className={styles.rowMeta}>Version {d.version}</span>
+              </span>
+              <StatusBadge tone={statusTone(d.verification_status)} label={d.verification_status} />
+              <span className={styles.rowActions}>
+                <Button variant="secondary" onClick={() => download(d)}>Download</Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -317,42 +413,63 @@ function LeaveTab() {
 
   return (
     <div>
-      <h3>Apply for leave</h3>
-      <form onSubmit={handleSubmit}>
-        {message && <p role="status">{message}</p>}
-        <FormField label="Leave type" htmlFor="leaveType">
-          <Select id="leaveType" value={leaveTypeId} onChange={(e) => setLeaveTypeId(e.target.value)}>
-            {types.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </Select>
-        </FormField>
-        <FormField label="Start date" htmlFor="startDate">
-          <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        </FormField>
-        <FormField label="End date" htmlFor="endDate">
-          <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-        </FormField>
-        <FormField label="Days" htmlFor="requestedDays">
-          <Input id="requestedDays" type="number" min="0.5" step="0.5" value={requestedDays} onChange={(e) => setRequestedDays(e.target.value)} />
-        </FormField>
-        <FormField label="Reason" htmlFor="reason">
-          <Textarea id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-        </FormField>
-        <Button type="submit">Submit</Button>
-      </form>
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>Apply for leave</h3>
+        {message && <p role="status" className={styles.statusMessage}>{message}</p>}
+        <form onSubmit={handleSubmit}>
+          <div className={styles.grid}>
+            <FormField label="Leave type" htmlFor="leaveType">
+              <Select id="leaveType" value={leaveTypeId} onChange={(e) => setLeaveTypeId(e.target.value)}>
+                {types.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField label="Start date" htmlFor="startDate">
+              <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </FormField>
+            <FormField label="End date" htmlFor="endDate">
+              <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </FormField>
+            <FormField label="Days" htmlFor="requestedDays">
+              <Input id="requestedDays" type="number" min="0.5" step="0.5" value={requestedDays} onChange={(e) => setRequestedDays(e.target.value)} />
+            </FormField>
+            <FormField label="Reason" htmlFor="reason">
+              <Textarea id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+            </FormField>
+          </div>
+          <div className={styles.formActions}>
+            <Button type="submit">Submit</Button>
+          </div>
+        </form>
+      </div>
 
-      <h3>My requests</h3>
-      {requests.map((r) => (
-        <p key={r.id}>
-          {formatDate(r.start_date)} – {formatDate(r.end_date)} ({r.leave_type_name}) — {r.status}
-          {r.status === "SUBMITTED" && hasPermission("leave.self.cancel") && (
-            <Button variant="secondary" onClick={async () => { await api.cancelMyLeave(r.id); load(); }}>Cancel</Button>
-          )}
-        </p>
-      ))}
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>My requests</h3>
+        {requests.length === 0 && <p className={styles.emptyText}>No leave requests yet.</p>}
+        <ul className={styles.list}>
+          {requests.map((r) => (
+            <li key={r.id} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{r.leave_type_name}</span>
+                <span className={styles.rowMeta}>
+                  {formatDate(r.start_date)} – {formatDate(r.end_date)}
+                </span>
+              </span>
+              <StatusBadge tone={statusTone(r.status)} label={r.status} />
+              {r.status === "SUBMITTED" && hasPermission("leave.self.cancel") && (
+                <span className={styles.rowActions}>
+                  <Button variant="danger" onClick={async () => { await api.cancelMyLeave(r.id); load(); }}>
+                    Cancel
+                  </Button>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -361,7 +478,19 @@ function MyCompensationTab() {
   const [current, setCurrent] = useState(undefined);
   useEffect(() => { api.getMyCompensation().then((result) => setCurrent(result.data)).catch(() => setCurrent(null)); }, []);
   if (current === undefined) return <LoadingState />;
-  return <div><h3>My current compensation</h3><p>{current ? `${current.amount} ${current.currency} effective ${formatDate(current.effective_date)}` : "No current compensation record."}</p></div>;
+  return (
+    <div className={styles.section}>
+      <h3 className={styles.sectionTitle}>My current compensation</h3>
+      {current ? (
+        <p className={styles.compensationValue}>
+          {current.amount} {current.currency}
+          <span className={styles.rowMeta}> · effective {formatDate(current.effective_date)}</span>
+        </p>
+      ) : (
+        <p className={styles.emptyText}>No current compensation record.</p>
+      )}
+    </div>
+  );
 }
 
 function RotationTab() {
@@ -375,14 +504,27 @@ function RotationTab() {
 
   return (
     <div>
-      <p>Policy: {status.policy ? `${status.policy.name} (${status.policy.work_days}/${status.policy.off_days})` : "Not assigned"}</p>
-      <p>Off-day balance: {status.balance}</p>
-      <h3>History</h3>
-      {status.ledger.map((entry) => (
-        <p key={entry.id}>
-          {formatDate(entry.effective_date)} — {entry.entry_type} — {entry.days > 0 ? `+${entry.days}` : entry.days}
-        </p>
-      ))}
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>Rotation status</h3>
+        <p className={styles.rowMeta}>Policy: {status.policy ? `${status.policy.name} (${status.policy.work_days}/${status.policy.off_days})` : "Not assigned"}</p>
+        <p className={styles.rowMeta}>Off-day balance: {status.balance}</p>
+      </div>
+
+      <div className={styles.section}>
+        <h3 className={styles.sectionTitle}>History</h3>
+        {status.ledger.length === 0 && <p className={styles.emptyText}>No rotation history yet.</p>}
+        <ul className={styles.list}>
+          {status.ledger.map((entry) => (
+            <li key={entry.id} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{entry.entry_type}</span>
+                <span className={styles.rowMeta}>{formatDate(entry.effective_date)}</span>
+              </span>
+              <span className={styles.rowTitle}>{entry.days > 0 ? `+${entry.days}` : entry.days}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -405,16 +547,25 @@ function ContractsTab() {
   }
 
   return (
-    <div>
-      {contracts.length === 0 && <p>No finalized contracts yet.</p>}
-      {contracts.map((c) => (
-        <p key={c.id}>
-          {c.contract_number} ({c.kind}) — {c.status}{" "}
-          <Button variant="secondary" onClick={() => download(c.id, c.contract_number)}>
-            Download
-          </Button>
-        </p>
-      ))}
+    <div className={styles.section}>
+      <h3 className={styles.sectionTitle}>My contracts</h3>
+      {contracts.length === 0 && <p className={styles.emptyText}>No finalized contracts yet.</p>}
+      <ul className={styles.list}>
+        {contracts.map((c) => (
+          <li key={c.id} className={styles.row}>
+            <span className={styles.rowMain}>
+              <span className={styles.rowTitle}>{c.contract_number}</span>
+              <span className={styles.rowMeta}>{c.kind}</span>
+            </span>
+            <StatusBadge tone={statusTone(c.status)} label={c.status} />
+            <span className={styles.rowActions}>
+              <Button variant="secondary" onClick={() => download(c.id, c.contract_number)}>
+                Download
+              </Button>
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

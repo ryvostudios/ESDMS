@@ -1,0 +1,201 @@
+/* --- Identity header --------------------------------------------- */
+
+.identity {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-4);
+}
+
+.identityTitleRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.identityName {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--color-text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.identityCode {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.identityMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 480px) {
+  .identity {
+    padding: var(--space-4);
+  }
+}
+
+/* --- Tabs: contained horizontal scroller, never page overflow ----- */
+
+.tabScroller {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-1);
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabNav {
+  display: flex;
+  gap: var(--space-2);
+  width: max-content;
+  min-width: 100%;
+}
+
+/* --- Tab content card ---------------------------------------------- */
+
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .panel {
+    padding: var(--space-4);
+  }
+}
+
+/* --- Compact details grid (Overview) -------------------------------- */
+
+.detailsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detailLabel {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.detailValue {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  margin-top: 2px;
+}
+
+/* --- Action groups (Account / Status) ------------------------------- */
+
+.actionGroup {
+  margin-bottom: var(--space-6);
+}
+
+.actionGroup:last-child {
+  margin-bottom: 0;
+}
+
+.actionGroupTitle {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-3);
+}
+
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.inlineForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.actionMessage {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  background: var(--color-primary-bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+/* --- Assignment history ---------------------------------------------- */
+
+.historyList {
+  list-style: none;
+  margin: 0 0 var(--space-6);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.historyRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.historyRow:last-child {
+  border-bottom: none;
+}
+
+.historyDate {
+  font-weight: 600;
+  color: var(--color-text-muted);
+  min-width: 100px;
+}
+
+/* --- Transfer form ---------------------------------------------------- */
+
+.transferForm {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-5);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.formActions {
+  margin-top: var(--space-5);
+}
