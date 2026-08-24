@@ -14,6 +14,9 @@ router.param("id", validateUuidParam("id"));
 // "/me" declared before "/:id" so it is never shadowed by the generic
 // param route (same pattern as gate-pass.routes.js's guard endpoints).
 router.get("/me", controller.myEmployee);
+// REM-02: declared before "/:id" for the same reason as "/me" — a literal
+// path segment must not be shadowed by the generic UUID param route.
+router.get("/status-summary", requirePermission("employees.view"), controller.statusSummary);
 router.get("/sites", requirePermission("employees.create", "employees.transfer"), controller.listSites);
 router.get("/import/template.xlsx", requirePermission("employees.bulk_import"), controller.importTemplate);
 router.post("/import/preview", requirePermission("employees.bulk_import"), employeeImportUpload, controller.previewImport);

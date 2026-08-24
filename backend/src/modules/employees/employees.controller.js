@@ -61,6 +61,13 @@ export const list = asyncHandler(async (req, res) => {
   });
 });
 
+// REM-02: Workforce dashboard's total + status breakdown, from one
+// coherent DB snapshot — see countEmployeesByStatusForActor.
+export const statusSummary = asyncHandler(async (req, res) => {
+  const result = await service.countEmployeesByStatusForActor(req.user);
+  res.status(200).json({ success: true, data: result });
+});
+
 export const detail = asyncHandler(async (req, res) => {
   const employee = await service.getEmployee(req.user, req.params.id);
   res.status(200).json({ success: true, data: toEmployeeDto(employee) });

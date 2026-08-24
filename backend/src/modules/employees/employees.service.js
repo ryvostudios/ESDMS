@@ -15,6 +15,7 @@ import { findPolicyById } from "../rotation/rotation.repository.js";
 import { currentDateInAppTimezone } from "../../shared/time/app-timezone.js";
 import {
   listEmployees as repoListEmployees,
+  countEmployeesByStatus,
   findEmployeeById,
   findEmployeeByUserId,
   employeeCodeExists,
@@ -297,6 +298,27 @@ export async function listEmployeesForActor(actor, filters) {
     limit: filters.pageSize,
     offset,
   });
+}
+
+// REM-02: backs the Workforce dashboard's KPI total + status breakdown
+// from one coherent DB snapshot instead of 5 separate requests. Same
+// site-scope resolution as listEmployeesForActor (CEO/workforce.all_sites
+// see company-wide; anyone else is confined to their own site) — no
+// client-supplied site override, matching the dashboard's own current
+// behavior (it has no site-filter UI).
+export async function countEmployeesByStatusForActor(actor) {
+  const siteId = employeeSiteFilter(actor);
+  const row = await countEmployeesByStatus(siteId);
+
+  return {
+    total: row.total,
+    byStatus: {
+      ACTIVE: row.active,
+      INACTIVE: row.inactive,
+      RESIGNED: row.resigned,
+      TERMINATED: row.terminated,
+    },
+  };
 }
 
 export async function getEmployee(actor, employeeId) {

@@ -1401,3 +1401,72 @@ test("linkExistingUserForEmployee: a concurrent role promotion to UM caught unde
     });
   }
 });
+
+// REM-02: total + per-status Employee counts must come from ONE coherent
+// DB snapshot, not 5 separate requests each with their own SELECT — see
+// countEmployeesByStatus in employees.repository.js (a single query using
+// FILTER()). These tests prove the resulting contract (scoping, the
+// total-equals-sum-of-parts invariant a single-statement snapshot
+// guarantees by construction, zero-default for unused statuses, and
+// authorization) — the "one query, not five" property itself is a
+// property of that implementation (one pool.query call), not something a
+// timing-based test could prove any more conclusively.
+test("status-summary: total always equals the sum of status counts, and creating Employees with different statuses updates both consistently", async () => {
+  const before = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: hrToken });
+  assert.equal(before.status, 200, JSON.stringify(before.body));
+  const sumBefore = Object.values(before.body.data.byStatus).reduce((s, n) => s + n, 0);
+  assert.equal(sumBefore, before.body.data.total, "total must equal the sum of status counts");
+
+  await createTestEmployee();
+  const toInactivate = await createTestEmployee();
+  const statusChange = await apiRequest(server.baseUrl, "POST", `/api/v1/employees/${toInactivate.body.data.id}/status`, {
+    token: hrToken,
+    body: { status: "INACTIVE" },
+  });
+  assert.equal(statusChange.status, 200, JSON.stringify(statusChange.body));
+
+  const after = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: hrToken });
+  assert.equal(after.status, 200, JSON.stringify(after.body));
+  const sumAfter = Object.values(after.body.data.byStatus).reduce((s, n) => s + n, 0);
+  assert.equal(sumAfter, after.body.data.total, "total must still equal the sum of status counts");
+
+  assert.equal(after.body.data.total, before.body.data.total + 2, "both new Employees are counted in the scoped total");
+  assert.equal(after.body.data.byStatus.ACTIVE, before.body.data.byStatus.ACTIVE + 1);
+  assert.equal(after.body.data.byStatus.INACTIVE, before.body.data.byStatus.INACTIVE + 1);
+});
+
+test("status-summary: every known Employee status key is present, defaulting to zero when a status has no rows", async () => {
+  const response = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: hrToken });
+  assert.equal(response.status, 200);
+  for (const key of ["ACTIVE", "INACTIVE", "RESIGNED", "TERMINATED"]) {
+    assert.equal(typeof response.body.data.byStatus[key], "number", `${key} must be a present numeric key, not undefined`);
+  }
+});
+
+test("status-summary: a site-scoped actor's total reflects only their own site, never leaking Employees from another site", async () => {
+  const before = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: hrToken });
+
+  // Plant an Employee directly on the OTHER site — HR (mainSite-scoped)
+  // must never see it.
+  await pool.query(
+    `INSERT INTO employees (employee_code, full_legal_name, primary_site_id, joining_date, created_by_user_id)
+     VALUES ($1, $2, $3, CURRENT_DATE, $4)`,
+    [unique("XS-SUM"), "Other Site Summary Employee", users.otherSite, users.hr],
+  );
+
+  const after = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: hrToken });
+  assert.equal(after.body.data.total, before.body.data.total, "an Employee planted on another site must not affect a site-scoped actor's total");
+});
+
+test("status-summary: an all-site actor's (CEO) total is company-wide — never less than a single site-scoped actor's total", async () => {
+  const scoped = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: hrToken });
+  const companyWide = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: ceoToken });
+  assert.equal(scoped.status, 200);
+  assert.equal(companyWide.status, 200);
+  assert.ok(companyWide.body.data.total >= scoped.body.data.total, "company-wide scope must include at least everything the site-scoped actor sees");
+});
+
+test("status-summary: an actor without employees.view is rejected", async () => {
+  const response = await apiRequest(server.baseUrl, "GET", "/api/v1/employees/status-summary", { token: employeeToken });
+  assert.equal(response.status, 403);
+});

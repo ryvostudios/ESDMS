@@ -19,37 +19,30 @@ export function WorkforceDashboardPage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    // ADV-PRE-02/03: totals must come from server meta.total, never from
-    // data.length of one page — a scope with >pageSize Employees would
-    // otherwise under-report. Only meta.total is needed here, so each
-    // request asks for pageSize:1 (the API's minimum) and its `data` is
-    // discarded; the number of these requests is bounded by the fixed
-    // Employee status enum (one overall total + one per status), not by
-    // how many Employees actually exist.
+    // REM-02: total + per-status counts now come from ONE aggregate
+    // request (backed by a single-statement DB snapshot — see
+    // countEmployeesByStatus in employees.repository.js), replacing the
+    // previous 5 separate Employee-count requests (1 overall + 1 per
+    // status), each its own DB snapshot, which could disagree with each
+    // other if an Employee's status changed between them.
     //
-    // leave/documents are matched by NAME, not array position — the
-    // previous version pushed them into one array only when authorized
-    // and then destructured `[employees, leave, documents]` positionally,
-    // so a document-report-only actor (no leave.approve) had the
-    // documents response land in the `leave` slot and got a false-zero
-    // documents KPI.
+    // leave/documents are matched by NAME, not array position — a prior
+    // version pushed them into one array only when authorized and
+    // destructured `[employees, leave, documents]` positionally, so a
+    // document-report-only actor (no leave.approve) had the documents
+    // response land in the `leave` slot and got a false-zero documents KPI.
     const canViewLeave = hasPermission("leave.approve");
     const canViewExpiringDocuments = hasPermission("employee_documents.view") && hasPermission("workforce.reports.view");
 
-    const totalPromise = api.listEmployees({ pageSize: 1 });
-    const statusPromises = EMPLOYEE_STATUSES.map((status) => api.listEmployees({ pageSize: 1, status }));
+    const summaryPromise = api.getEmployeeStatusSummary();
     const leavePromise = canViewLeave ? api.listPendingLeave() : Promise.resolve(null);
     const documentsPromise = canViewExpiringDocuments ? api.listExpiringDocuments(30) : Promise.resolve(null);
 
-    Promise.all([totalPromise, Promise.all(statusPromises), leavePromise, documentsPromise])
-      .then(([totalRes, statusResults, leaveRes, documentsRes]) => {
-        const statusCounts = EMPLOYEE_STATUSES.reduce((acc, status, index) => {
-          acc[status] = statusResults[index].meta.total;
-          return acc;
-        }, {});
+    Promise.all([summaryPromise, leavePromise, documentsPromise])
+      .then(([summaryRes, leaveRes, documentsRes]) => {
         setData({
-          total: totalRes.meta.total,
-          statusCounts,
+          total: summaryRes.data.total,
+          statusCounts: summaryRes.data.byStatus,
           leave: leaveRes?.data || [],
           documents: documentsRes?.data || [],
         });

@@ -32,6 +32,7 @@ export const listEmployees = (params = {}) => {
   const query = new URLSearchParams(params).toString();
   return apiClient.get(`/employees${query ? `?${query}` : ""}`);
 };
+export const getEmployeeStatusSummary = () => apiClient.get("/employees/status-summary");
 export const checkDuplicateEmployees = (body) => apiClient.post("/employees/check-duplicates", body);
 export const createEmployee = (body) => apiClient.post("/employees", body);
 export const getEmployee = (id) => apiClient.get(`/employees/${id}`);

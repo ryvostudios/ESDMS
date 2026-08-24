@@ -11,13 +11,19 @@
      the ACCESSIBLE TEXT/CONTROL derivatives actually wired to
      --color-primary / --color-focus-ring. */
   --eset-cyan: #00bfef;
-  --eset-cyan-accessible: #0099bf;
+  /* ADV-P2-01 (round 2): #0099bf passed against white (3.33:1) but fell
+     just short against the light-grey page background #eef2f5 (2.96:1) —
+     a real surface this token sits on (KPI cards, Governance rows, the
+     app body). Darkened minimally to clear 3:1 against BOTH. */
+  --eset-cyan-accessible: #008eb2;
   --eset-deep-blue: #008fc7;
   --eset-blue-ink: #0673a0;
   --eset-blue-ink-active: #044568;
   --eset-charcoal: #15191e;
-  --eset-dark: #252b32;
-  --eset-grey: #66707a;
+  /* ADV-P2-01 (round 2): #66707a passed against white (5.04:1) but fell
+     just short against #eef2f5 (4.48:1) — minimally darkened to clear
+     4.5:1 against both. */
+  --eset-grey: #616a74;
   --eset-light: #eef2f5;
 
   /* Surfaces */
@@ -70,9 +76,10 @@
 
   /* Focus — ADV-P2-01: raw --eset-cyan measures only 2.17:1 against white,
      below the 3:1 non-text-contrast minimum for a focus indicator.
-     --eset-cyan-accessible (#0099bf, 3.33:1) is a darkened derivative of
-     the same brand cyan — still reads as cyan, not blue-ink, while
-     clearing the bar with margin. */
+     --eset-cyan-accessible (#008eb2: 3.81:1 vs white, 3.38:1 vs #eef2f5)
+     is a darkened derivative of the same brand cyan — still reads as
+     cyan, not blue-ink — clearing the bar against both surfaces it
+     actually appears on. */
   --color-focus-ring: var(--eset-cyan-accessible);
 
   /* Typography */

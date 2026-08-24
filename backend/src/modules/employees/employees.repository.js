@@ -88,6 +88,31 @@ export async function listEmployees({ siteId, status, departmentId, positionId, 
   return { rows: result.rows, total: Number(countResult.rows[0].total) };
 }
 
+// REM-02: total + per-status counts from a single statement, so the
+// Workforce dashboard's KPI total and status breakdown always reflect one
+// consistent snapshot — previously 5 separate requests (1 overall + 1 per
+// status) each ran their own SELECT, so an Employee status change landing
+// between them could show up in one count but not the other (or double
+// up), even though each individual count was itself correct. FILTER()
+// pivots the 4 known statuses (employees.validation.js's
+// EMPLOYMENT_STATUSES) into one row of one query — same site-scope
+// predicate as listEmployees above, no JOIN/rows needed since only counts
+// are returned.
+export async function countEmployeesByStatus(siteId) {
+  const result = await pool.query(
+    `SELECT
+       count(*)::int AS total,
+       count(*) FILTER (WHERE status = 'ACTIVE')::int AS active,
+       count(*) FILTER (WHERE status = 'INACTIVE')::int AS inactive,
+       count(*) FILTER (WHERE status = 'RESIGNED')::int AS resigned,
+       count(*) FILTER (WHERE status = 'TERMINATED')::int AS terminated
+     FROM employees
+     WHERE ($1::uuid IS NULL OR primary_site_id = $1)`,
+    [siteId],
+  );
+  return result.rows[0];
+}
+
 export async function findEmployeeById(id) {
   const result = await pool.query(`${employeeListQuery("WHERE e.id = $1")}`, [id]);
   return result.rows[0] || null;
