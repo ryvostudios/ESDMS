@@ -210,7 +210,7 @@ export function GatePassDetailPage() {
       )}
 
       <div className={styles.layout}>
-        <div>
+        <div className={styles.mainColumn}>
           <div className={styles.section}>
             <h2 className={styles.sectionTitle}>Details</h2>
             <dl className={styles.detailGrid}>

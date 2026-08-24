@@ -36,6 +36,16 @@
   align-items: start;
 }
 
+/* The direct grid child, not a descendant: a grid item's automatic
+   min-width defaults to its content's min-content size, which the wide
+   .itemsTable below dictates regardless of .tableWrapper's own
+   overflow-x:auto — that only makes the table scroll internally once this
+   item itself is allowed to shrink to the grid track. min-width:0 has to
+   live here, on the item, not one level deeper on .section. */
+.mainColumn {
+  min-width: 0;
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;

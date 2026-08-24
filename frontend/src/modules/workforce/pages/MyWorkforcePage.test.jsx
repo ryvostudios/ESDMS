@@ -1,11 +1,13 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MyWorkforcePage } from "./MyWorkforcePage.jsx";
+import { ApiError } from "../../../core/api/client.js";
 
 const emptyList = vi.hoisted(() => () => Promise.resolve({ data: [] }));
 const getMyLeaveMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ data: [] })));
 const cancelMyLeaveMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ data: null })));
 const submitMyLeaveMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ data: null })));
+const listLeaveTypesMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ data: [{ id: "type-1", name: "Annual" }] })));
 
 vi.mock("../api.js", () => ({
   getMyProfile: () =>
@@ -25,7 +27,7 @@ vi.mock("../api.js", () => ({
   listDocumentTypesSelf: emptyList,
   uploadMyDocument: vi.fn(),
   getMyDocumentBlob: vi.fn(),
-  listLeaveTypes: emptyList,
+  listLeaveTypes: listLeaveTypesMock,
   getMyLeave: getMyLeaveMock,
   submitMyLeave: submitMyLeaveMock,
   cancelMyLeave: cancelMyLeaveMock,
@@ -51,6 +53,7 @@ afterEach(() => {
   getMyLeaveMock.mockReset().mockResolvedValue({ data: [] });
   cancelMyLeaveMock.mockReset().mockResolvedValue({ data: null });
   submitMyLeaveMock.mockReset().mockResolvedValue({ data: null });
+  listLeaveTypesMock.mockReset().mockResolvedValue({ data: [{ id: "type-1", name: "Annual" }] });
 });
 
 async function renderPage() {
@@ -123,53 +126,102 @@ describe("MyWorkforcePage self-service capability decoupling (ESDMS-018)", () =>
   });
 });
 
-describe("MyWorkforcePage Leave tab: submit and cancel are independently permission-gated", () => {
+// ADV-P1-03: leave.self.view / leave.self.create / leave.self.cancel are
+// three independent capabilities. "Apply for leave" only exists for a
+// create-capable user, so — unlike the old helper — this must not assume
+// it's present; "My requests" is the one heading every combination below
+// renders.
+describe("MyWorkforcePage Leave tab: view/create/cancel are independently permission-gated", () => {
   async function openLeaveTab() {
     fireEvent.click(screen.getByRole("button", { name: "Leave" }));
-    await screen.findByText("Apply for leave");
+    await screen.findByText("My requests");
   }
 
-  test("Cancel action is hidden for a SUBMITTED request without leave.self.cancel, even with leave.self.create", async () => {
-    mockPermissions = new Set(["leave.self.view", "leave.self.create"]);
-    getMyLeaveMock.mockResolvedValue({
-      data: [{ id: "req-1", status: "SUBMITTED", start_date: "2026-01-01", end_date: "2026-01-01", leave_type_name: "Annual" }],
-    });
+  // "Annual" is deliberately reserved for the mocked leave-TYPE option (in
+  // the Apply form's Select) — a past REQUEST uses a different name so the
+  // two never collide in a text query when both render together.
+  const oneRequest = (status = "SUBMITTED") => ({
+    data: [{ id: "req-1", status, start_date: "2026-01-01", end_date: "2026-01-01", leave_type_name: "Sick Leave" }],
+  });
+
+  test("1. view only: history loads, no leave-types request, no Apply form, no Submit", async () => {
+    mockPermissions = new Set(["leave.self.view"]);
+    getMyLeaveMock.mockResolvedValue(oneRequest("APPROVED"));
     await renderPage();
     await openLeaveTab();
 
-    await screen.findByText(/Annual/);
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-    // Submit remains available — it is gated by leave.self.create, not leave.self.cancel.
+    await screen.findByText(/Sick Leave/);
+    expect(listLeaveTypesMock).not.toHaveBeenCalled();
+    expect(screen.queryByText("Apply for leave")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+  });
+
+  test("2. view + create: history loads, leave types load, Apply form and Submit are visible", async () => {
+    mockPermissions = new Set(["leave.self.view", "leave.self.create"]);
+    getMyLeaveMock.mockResolvedValue(oneRequest("APPROVED"));
+    await renderPage();
+    await openLeaveTab();
+
+    await screen.findByText(/Sick Leave/);
+    expect(listLeaveTypesMock).toHaveBeenCalled();
+    expect(screen.getByText("Apply for leave")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
   });
 
-  test("Cancel action is shown for a SUBMITTED request when leave.self.cancel is granted", async () => {
+  test("3. view + cancel, without create: history loads, cancellable request shows Cancel, no Submit, no leave-types request", async () => {
     mockPermissions = new Set(["leave.self.view", "leave.self.cancel"]);
-    getMyLeaveMock.mockResolvedValue({
-      data: [{ id: "req-1", status: "SUBMITTED", start_date: "2026-01-01", end_date: "2026-01-01", leave_type_name: "Annual" }],
-    });
+    getMyLeaveMock.mockResolvedValue(oneRequest("SUBMITTED"));
     await renderPage();
     await openLeaveTab();
 
     const cancelButton = await screen.findByRole("button", { name: "Cancel" });
     // Cancel must read as destructive, distinct from Submit's primary styling.
     expect(cancelButton.className).toMatch(/danger/i);
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(listLeaveTypesMock).not.toHaveBeenCalled();
+
     await act(async () => {
       fireEvent.click(cancelButton);
     });
     expect(cancelMyLeaveMock).toHaveBeenCalledWith("req-1");
   });
 
-  test("Submit action is independently controlled by leave.self.create regardless of leave.self.cancel", async () => {
-    mockPermissions = new Set(["leave.self.view", "leave.self.cancel"]);
+  test("4. view + create, without cancel: Submit is visible, Cancel is hidden", async () => {
+    mockPermissions = new Set(["leave.self.view", "leave.self.create"]);
+    getMyLeaveMock.mockResolvedValue(oneRequest("SUBMITTED"));
     await renderPage();
     await openLeaveTab();
 
+    await screen.findByText(/Sick Leave/);
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     const submitButton = screen.getByRole("button", { name: "Submit" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
     expect(submitMyLeaveMock).toHaveBeenCalled();
+  });
+
+  test("5. leave.self.create explicitly denied (effective permission absent): viewing still works, create UI unavailable", async () => {
+    // The frontend only ever sees the resulting effective-permission set —
+    // an explicit DENY override and simply never holding the permission
+    // are indistinguishable here, and must behave identically.
+    mockPermissions = new Set(["leave.self.view"]);
+    getMyLeaveMock.mockResolvedValue(oneRequest("APPROVED"));
+    await renderPage();
+    await openLeaveTab();
+
+    await screen.findByText(/Sick Leave/);
+    expect(screen.queryByText("Apply for leave")).toBeNull();
+    expect(listLeaveTypesMock).not.toHaveBeenCalled();
+  });
+
+  test("6. a genuine backend error loading leave types (despite holding leave.self.create) is surfaced, not silently swallowed", async () => {
+    mockPermissions = new Set(["leave.self.view", "leave.self.create"]);
+    listLeaveTypesMock.mockRejectedValueOnce(new ApiError(500, "INTERNAL", "Leave types unavailable."));
+    await renderPage();
+    await openLeaveTab();
+
+    expect(await screen.findByText("Leave types unavailable.")).toBeTruthy();
   });
 
   test("no requests yet renders a compact empty state, not a blank panel", async () => {

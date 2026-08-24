@@ -8,20 +8,25 @@ import { SearchField } from "../../../shared/components/SearchField.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { LoadingState, ErrorState, EmptyState } from "../../../shared/components/StatePanel.jsx";
+import { Pagination } from "../../../shared/components/Pagination.jsx";
 import { EMPLOYEE_STATUS_TONE } from "../constants.js";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
 import * as api from "../api.js";
 import styles from "./EmployeesListPage.module.css";
 
+const PAGE_SIZE = 25;
+
 export function EmployeesListPage() {
   const { hasPermission } = useAuth();
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
   const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [siteId, setSiteId] = useState("");
+  const [page, setPage] = useState(1);
 
   // Sites list is used only to resolve a human-readable Site column/filter
   // — the same existing endpoint already used by Add Employee/Transfer.
@@ -37,18 +42,20 @@ export function EmployeesListPage() {
     setError(null);
     try {
       const response = await api.listEmployees({
-        pageSize: 100,
+        page,
+        pageSize: PAGE_SIZE,
         ...(search && { search }),
         ...(status && { status }),
         ...(siteId && { siteId }),
       });
       setRows(response.data);
+      setTotal(response.meta.total);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to load employees.");
     } finally {
       setLoading(false);
     }
-  }, [search, status, siteId]);
+  }, [search, status, siteId, page]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -93,13 +100,19 @@ export function EmployeesListPage() {
           ariaLabel="Search employees"
           placeholder="Search name or Employee ID"
           value={search}
-          onChange={setSearch}
+          onChange={(value) => {
+            setSearch(value);
+            setPage(1);
+          }}
         />
         <Select
           className={styles.filterSelect}
           aria-label="Employment status"
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          onChange={(e) => {
+            setStatus(e.target.value);
+            setPage(1);
+          }}
         >
           <option value="">All statuses</option>
           <option>ACTIVE</option>
@@ -112,7 +125,10 @@ export function EmployeesListPage() {
             className={styles.filterSelect}
             aria-label="Site"
             value={siteId}
-            onChange={(e) => setSiteId(e.target.value)}
+            onChange={(e) => {
+              setSiteId(e.target.value);
+              setPage(1);
+            }}
           >
             <option value="">All sites</option>
             {sites.map((s) => (
@@ -198,6 +214,8 @@ export function EmployeesListPage() {
               </li>
             ))}
           </ul>
+
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
         </>
       )}
     </div>

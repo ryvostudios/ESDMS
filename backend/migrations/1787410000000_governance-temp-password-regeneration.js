@@ -58,6 +58,16 @@ export async function down(pgm) {
     check: `action IN (${[...EXISTING_ACTIONS, ...NEW_ACTIONS].map((a) => `'${a}'`).join(", ")})`,
   });
 
+  // ADV-P1-04: this permission is delegable (see users.service.js's
+  // regenerateTemporaryPassword — any actor can be GRANTed it via an
+  // individual override, same as any other permission), so a rollback
+  // after delegation must not leave a user_permission_overrides row
+  // dangling on a permission about to be deleted — its FK would make the
+  // DELETE below fail. Delete overrides referencing ONLY this permission
+  // first, same pattern as 1787411000000_leave-self-cancel-permission.js.
+  pgm.sql(
+    `DELETE FROM user_permission_overrides WHERE permission_id = (SELECT id FROM permissions WHERE code = '${PERMISSION_CODE}');`,
+  );
   pgm.sql(`DELETE FROM role_permissions WHERE permission_id = (SELECT id FROM permissions WHERE code = '${PERMISSION_CODE}');`);
   pgm.sql(`DELETE FROM permissions WHERE code = '${PERMISSION_CODE}';`);
 }

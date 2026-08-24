@@ -378,6 +378,16 @@ function DocumentsTab() {
 
 function LeaveTab() {
   const { hasPermission } = useAuth();
+  // ADV-P1-03: leave.self.view (own history), leave.self.create (fetch
+  // application dependencies + submit), and leave.self.cancel (cancel an
+  // own request) are independent — a view-only user must never trigger
+  // the leave-types request at all (that endpoint requires
+  // create/manage/approve — see leave.routes.js), and a coupled
+  // Promise.all previously meant that 403 broke history loading for
+  // everyone who couldn't create.
+  const canCreate = hasPermission("leave.self.create");
+  const canCancel = hasPermission("leave.self.cancel");
+
   const [types, setTypes] = useState([]);
   const [requests, setRequests] = useState([]);
   const [leaveTypeId, setLeaveTypeId] = useState("");
@@ -386,13 +396,28 @@ function LeaveTab() {
   const [requestedDays, setRequestedDays] = useState(1);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState(null);
+  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    const [typesRes, requestsRes] = await Promise.all([api.listLeaveTypes(), api.getMyLeave()]);
-    setTypes(typesRes.data);
-    setRequests(requestsRes.data);
-    if (typesRes.data[0]) setLeaveTypeId(typesRes.data[0].id);
-  }, []);
+    setError(null);
+
+    try {
+      const requestsRes = await api.getMyLeave();
+      setRequests(requestsRes.data);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to load your leave history.");
+    }
+
+    if (!canCreate) return;
+
+    try {
+      const typesRes = await api.listLeaveTypes();
+      setTypes(typesRes.data);
+      if (typesRes.data[0]) setLeaveTypeId((current) => current || typesRes.data[0].id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to load leave application options.");
+    }
+  }, [canCreate]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -413,38 +438,42 @@ function LeaveTab() {
 
   return (
     <div>
-      <div className={styles.section}>
-        <h3 className={styles.sectionTitle}>Apply for leave</h3>
-        {message && <p role="status" className={styles.statusMessage}>{message}</p>}
-        <form onSubmit={handleSubmit}>
-          <div className={styles.grid}>
-            <FormField label="Leave type" htmlFor="leaveType">
-              <Select id="leaveType" value={leaveTypeId} onChange={(e) => setLeaveTypeId(e.target.value)}>
-                {types.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </Select>
-            </FormField>
-            <FormField label="Start date" htmlFor="startDate">
-              <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-            </FormField>
-            <FormField label="End date" htmlFor="endDate">
-              <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-            </FormField>
-            <FormField label="Days" htmlFor="requestedDays">
-              <Input id="requestedDays" type="number" min="0.5" step="0.5" value={requestedDays} onChange={(e) => setRequestedDays(e.target.value)} />
-            </FormField>
-            <FormField label="Reason" htmlFor="reason">
-              <Textarea id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-            </FormField>
-          </div>
-          <div className={styles.formActions}>
-            <Button type="submit">Submit</Button>
-          </div>
-        </form>
-      </div>
+      {error && <ErrorState message={error} onRetry={load} />}
+
+      {canCreate && (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Apply for leave</h3>
+          {message && <p role="status" className={styles.statusMessage}>{message}</p>}
+          <form onSubmit={handleSubmit}>
+            <div className={styles.grid}>
+              <FormField label="Leave type" htmlFor="leaveType">
+                <Select id="leaveType" value={leaveTypeId} onChange={(e) => setLeaveTypeId(e.target.value)}>
+                  {types.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+              <FormField label="Start date" htmlFor="startDate">
+                <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </FormField>
+              <FormField label="End date" htmlFor="endDate">
+                <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </FormField>
+              <FormField label="Days" htmlFor="requestedDays">
+                <Input id="requestedDays" type="number" min="0.5" step="0.5" value={requestedDays} onChange={(e) => setRequestedDays(e.target.value)} />
+              </FormField>
+              <FormField label="Reason" htmlFor="reason">
+                <Textarea id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+              </FormField>
+            </div>
+            <div className={styles.formActions}>
+              <Button type="submit">Submit</Button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <div className={styles.section}>
         <h3 className={styles.sectionTitle}>My requests</h3>
@@ -459,7 +488,7 @@ function LeaveTab() {
                 </span>
               </span>
               <StatusBadge tone={statusTone(r.status)} label={r.status} />
-              {r.status === "SUBMITTED" && hasPermission("leave.self.cancel") && (
+              {r.status === "SUBMITTED" && canCancel && (
                 <span className={styles.rowActions}>
                   <Button variant="danger" onClick={async () => { await api.cancelMyLeave(r.id); load(); }}>
                     Cancel

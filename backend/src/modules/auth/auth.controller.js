@@ -119,6 +119,18 @@ export const me = asyncHandler(async (req, res) => {
 // the response's own session cookie is cleared to match (see
 // docs/DECISIONS.md, superseding the prior "same session continues"
 // design).
+//
+// ADV-P1-01: the final UPDATE is conditioned on password_hash still being
+// the exact hash we just verified currentPassword against (a
+// compare-and-swap), not just WHERE id = $1. Without this, a Governance
+// temp-password regeneration that commits between our SELECT and our
+// UPDATE — including one that runs while we're mid-request, since it
+// takes a row lock our UPDATE will simply wait behind — would otherwise
+// get silently overwritten by this stale request once it resumes: this
+// request verified an old credential that authoritative state has since
+// replaced, so it must fail, not win. Zero rows matching means exactly
+// that happened, and no partial state (session bump, must_change_password)
+// leaks through — the whole UPDATE simply did not apply.
 export const changePassword = asyncHandler(async (req, res) => {
   const parsed = changePasswordSchema.safeParse(req.body);
   if (!parsed.success) throw new ValidationError("Invalid request.", parsed.error.flatten());
@@ -131,12 +143,16 @@ export const changePassword = asyncHandler(async (req, res) => {
   }
 
   const newHash = await argon2.hash(parsed.data.newPassword);
-  await pool.query(
+  const update = await pool.query(
     `UPDATE users
-     SET password_hash = $2, must_change_password = false, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
-     WHERE id = $1`,
-    [req.user.id, newHash],
+     SET password_hash = $3, must_change_password = false, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1 AND password_hash = $2`,
+    [req.user.id, currentHash, newHash],
   );
+
+  if (update.rowCount === 0) {
+    throw new UnauthorizedError("Current password is incorrect.");
+  }
 
   clearSessionCookie(res);
 

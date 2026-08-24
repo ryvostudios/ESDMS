@@ -1,10 +1,20 @@
 :root {
   /* E-Set brand palette — see docs/DECISIONS.md. White/light surfaces
      dominate; charcoal is reserved for navigation chrome; blue is an
-     accent, not the whole interface. */
+     accent, not the whole interface.
+     ADV-P2-01: --eset-cyan and --eset-deep-blue are BRAND ACCENT colors —
+     kept for decorative/non-text use (e.g. Sidebar's active-nav indicator
+     strip, drawn on the dark charcoal chrome where their contrast is
+     already excellent) — never for white text or as a focus indicator on
+     light backgrounds, where they measure 3.65:1 and 2.17:1 respectively
+     (both fail WCAG). --eset-blue-ink and --eset-cyan-accessible below are
+     the ACCESSIBLE TEXT/CONTROL derivatives actually wired to
+     --color-primary / --color-focus-ring. */
   --eset-cyan: #00bfef;
+  --eset-cyan-accessible: #0099bf;
   --eset-deep-blue: #008fc7;
   --eset-blue-ink: #0673a0;
+  --eset-blue-ink-active: #044568;
   --eset-charcoal: #15191e;
   --eset-dark: #252b32;
   --eset-grey: #66707a;
@@ -21,15 +31,25 @@
   /* Text */
   --color-text: var(--eset-charcoal);
   --color-text-muted: var(--eset-grey);
-  --color-text-subtle: #98a1a8;
+  /* ADV-P2-01: --color-text-subtle measures only 2.63:1 on white — never
+     use it for text that carries information (KPI context, help text,
+     identifiers, etc.); --color-text-muted (5.04:1) already covers that.
+     --color-text-subtle is reserved for non-text/decorative graphics only
+     (e.g. an icon glyph, a chart's "neutral" bar fill) held to the 3:1
+     non-text contrast minimum instead — #7a838b clears that (3.86:1)
+     while staying visibly lighter than --color-text-muted. */
+  --color-text-subtle: #7a838b;
   --color-text-inverse: #ffffff;
   --color-text-inverse-muted: #a7afb6;
 
-  /* Brand / primary — deep blue drives primary actions; cyan is reserved
-     as the sharper accent (focus rings, active nav indicator). */
-  --color-primary: var(--eset-deep-blue);
-  --color-primary-hover: var(--eset-blue-ink);
-  --color-primary-active: #055680;
+  /* Brand / primary — ADV-P2-01: white text on --eset-deep-blue (#008fc7)
+     measures only 3.65:1, below the 4.5:1 AA minimum for normal text, so
+     it no longer drives interactive buttons/links — --eset-blue-ink
+     (5.29:1) does. --eset-deep-blue remains defined above as a brand
+     accent for non-text use. */
+  --color-primary: var(--eset-blue-ink);
+  --color-primary-hover: var(--eset-blue-ink-active);
+  --color-primary-active: #033a56;
   --color-primary-bg: #e4f6fc;
   --color-primary-contrast: #ffffff;
   --color-accent: var(--eset-cyan);
@@ -48,8 +68,12 @@
   --color-info-bg: #f0f9ff;
   --color-info-border: #7dd3fc;
 
-  /* Focus */
-  --color-focus-ring: var(--eset-cyan);
+  /* Focus — ADV-P2-01: raw --eset-cyan measures only 2.17:1 against white,
+     below the 3:1 non-text-contrast minimum for a focus indicator.
+     --eset-cyan-accessible (#0099bf, 3.33:1) is a darkened derivative of
+     the same brand cyan — still reads as cyan, not blue-ink, while
+     clearing the bar with margin. */
+  --color-focus-ring: var(--eset-cyan-accessible);
 
   /* Typography */
   --font-sans:

@@ -114,29 +114,54 @@ async function assertRotationPolicyUsable(policyId) {
   if (!policy || !policy.is_active) throw new ValidationError("Invalid rotation policy.");
 }
 
-// `client` defaults to `pool` so createEmployee's pre-transaction call
-// (employeeId is always null there — a brand-new employee can't already be
-// part of any existing chain, so the cycle branch below never runs for it)
-// doesn't need to change. Any caller that DOES pass a non-null employeeId
-// must pass the transaction client it's about to write the assignment
-// with, so the advisory lock and the cycle check run inside that same
-// transaction — see acquireReportingHierarchyLock.
+// `client` defaults to `pool` only for a caller with no transaction context
+// at all (there are none left as of ADV-PRE-04 — every actual mutation
+// path now passes its transaction client). Every caller that goes on to
+// actually WRITE this manager assignment must pass that transaction
+// client, so the manager's authoritative row is locked (not read from a
+// global-pool snapshot) and the advisory lock + cycle check run inside the
+// very same transaction as the write — see acquireReportingHierarchyLock.
+//
+// ADV-PRE-04: the previous version read the manager via the unlocked
+// global-pool findEmployeeById before acquiring anything, so a concurrent
+// status change (Governance/offboarding making the manager non-ACTIVE)
+// between that read and this transaction's commit could let an assignment
+// commit against a manager who was no longer ACTIVE by the time it
+// mattered. Locking the manager row (FOR UPDATE) inside this transaction
+// closes that: whichever transaction — this one, or the concurrent status
+// change — reaches the row lock first determines the outcome. If this one
+// locks first, it validly commits using that (still-authoritative, not
+// stale) ACTIVE row; the status change simply applies after. If the
+// status change locks first, this transaction blocks until it commits,
+// then reads the now-current (non-ACTIVE) row and rejects. Either way,
+// never a stale ACTIVE snapshot.
 async function assertReportingManagerUsable(actor, employeeId, managerId, client = pool) {
   if (!managerId) return;
-  const manager = await findEmployeeById(managerId);
+
+  if (client === pool) {
+    const manager = await findEmployeeById(managerId);
+    if (!manager || manager.status !== "ACTIVE") throw new ValidationError("Invalid reporting manager.");
+    assertEmployeeViewable(actor, manager);
+    return;
+  }
+
+  // Lock order: the reporting-hierarchy advisory lock FIRST, before any
+  // employee row lock (including the manager's, locked next) — the same
+  // deadlock-safe ordering createTransfer's own comment documents. Taking
+  // this global, transaction-scoped lock before touching any employee row
+  // means only one mutation in this family ever proceeds to lock a row at
+  // all, so two concurrent callers (e.g. reciprocal transfers) can never
+  // deadlock waiting on each other's row lock. Reentrant within the same
+  // transaction — createTransfer already holds it by the time it calls
+  // this function, so re-acquiring here is a no-op, not a self-deadlock.
+  await acquireReportingHierarchyLock(client);
+
+  const manager = await lockEmployeeById(client, managerId);
   if (!manager || manager.status !== "ACTIVE") throw new ValidationError("Invalid reporting manager.");
   assertEmployeeViewable(actor, manager);
-  if (employeeId) {
-    // Serializes cycle validation against the assignment mutation it
-    // guards: two concurrent transfers (A -> B and B -> A) both run this
-    // check, but only one can hold this transaction-scoped lock at a time,
-    // so the second one's cycle check runs AFTER the first's write is
-    // already visible within its own transaction, not against a
-    // pre-mutation snapshot both could otherwise pass.
-    await acquireReportingHierarchyLock(client);
-    if (await wouldCreateReportingCycle(client, employeeId, managerId)) {
-      throw new ValidationError("This reporting-manager assignment would create a cycle.");
-    }
+
+  if (employeeId && (await wouldCreateReportingCycle(client, employeeId, managerId))) {
+    throw new ValidationError("This reporting-manager assignment would create a cycle.");
   }
 }
 
@@ -196,9 +221,16 @@ export async function createEmployee(actor, input) {
   assertPositionDepartmentCoherent(position, input.departmentId || null);
   await assertEmploymentTypeUsable(input.employmentTypeId);
   await assertRotationPolicyUsable(input.rotationPolicyId);
-  await assertReportingManagerUsable(actor, null, input.reportingManagerEmployeeId);
 
   return withTransaction(async (client) => {
+    // ADV-PRE-04: the manager's ACTIVE status must be read from a row
+    // this transaction locks, not a global-pool snapshot taken before the
+    // transaction opened — see assertReportingManagerUsable. employeeId
+    // is null (a brand-new employee can't already be part of a reporting
+    // chain), so this only locks the manager and checks its status; no
+    // cycle check runs.
+    await assertReportingManagerUsable(actor, null, input.reportingManagerEmployeeId, client);
+
     const employee = await insertEmployee(client, {
       employeeCode: input.employeeCode,
       fullLegalName: input.fullLegalName,
@@ -582,6 +614,20 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
     umPermission: { code: UM_MANAGE_PERMISSION },
   });
 
+  // ADV-P1-05: a violation caught under the target User row lock below
+  // must not write its PRIVILEGE_ESCALATION_ATTEMPT audit through this
+  // same transaction — that write needs a second pool connection whose FK
+  // check can block on the very row this transaction holds FOR UPDATE
+  // (the same deadlock pattern documented on regenerateTemporaryPassword
+  // in users.service.js). But writing it over a second connection while
+  // still holding that lock is exactly that deadlock. So: capture what to
+  // audit, let the ForbiddenError below roll the transaction back (which
+  // releases the lock and discards the mutation, same as before), and
+  // write the ONE denial row after rollback, in the catch below — by then
+  // recordGovernanceAudit(pool, ...) is exactly as safe as the pre-lock
+  // guard's own audit write above.
+  let deferredDenialAudit = null;
+
   try {
     return await withTransaction(async (client) => {
       // ESDMS-004: reload/lock the Employee itself under the transaction —
@@ -603,18 +649,26 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
         throw new ConflictError("This Employee already has a linked login account.");
       }
 
-      const targetResult = await client.query(
-        `SELECT u.id, u.email, u.full_name, u.is_active, u.department_id,
-                u.site_id, u.created_at, r.name AS role
-         FROM users u
-         JOIN roles r ON r.id = u.role_id
-         WHERE u.id = $1
-         FOR UPDATE OF u`,
+      // Two queries, not one FOR UPDATE ... JOIN: discovered while proving
+      // ADV-P1-05's real concurrency test — after this lock blocks behind a
+      // concurrent role change and then resumes, Postgres's EvalPlanQual
+      // recheck re-fetches the locked `users` row but does not reliably
+      // re-resolve the JOINed `roles` row against it in the same query,
+      // producing a false "0 rows" result even though both the just-locked
+      // user and its (new) role genuinely exist — same failure mode
+      // lockLinkedUserRoleAndActive above already works around for the
+      // identical reason. Lock `users` alone first, then resolve the role
+      // name in a separate, ordinary read against the just-locked row.
+      const lockedTarget = await client.query(
+        `SELECT id, email, full_name, is_active, department_id, site_id, created_at, role_id
+         FROM users WHERE id = $1 FOR UPDATE`,
         [input.userId],
       );
+      const targetRow = lockedTarget.rows[0];
+      if (!targetRow) throw new NotFoundError("User not found.");
 
-      const targetUser = targetResult.rows[0];
-      if (!targetUser) throw new NotFoundError("User not found.");
+      const roleResult = await client.query("SELECT name FROM roles WHERE id = $1", [targetRow.role_id]);
+      const targetUser = { ...targetRow, role: roleResult.rows[0]?.name || null };
 
       // Re-check the governance invariants under the User row lock in case
       // the account changed between the initial guard and this transaction.
@@ -629,7 +683,7 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
       }
 
       if (violations.length > 0) {
-        await recordGovernanceAudit(client, {
+        deferredDenialAudit = {
           actorUserId: actor.id,
           targetUserId: targetUser.id,
           action: "PRIVILEGE_ESCALATION_ATTEMPT",
@@ -637,7 +691,7 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
             attemptedAction: "EMPLOYEE_EXISTING_USER_LINK",
             violations,
           },
-        });
+        };
 
         if (violations.includes("target_is_ceo")) {
           throw new ForbiddenError("CEO accounts cannot be modified through this API.");
@@ -703,6 +757,13 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
       };
     });
   } catch (error) {
+    // The transaction has already rolled back by this point (withTransaction
+    // ran ROLLBACK before rethrowing) — the target User's row lock is
+    // released, so this write can't deadlock the way it would have from
+    // inside that transaction. Exactly one audit row for exactly one denial.
+    if (deferredDenialAudit) {
+      await recordGovernanceAudit(pool, deferredDenialAudit);
+    }
     if (error?.code === "23505") {
       throw new ConflictError("This User account is already linked to another Employee.");
     }

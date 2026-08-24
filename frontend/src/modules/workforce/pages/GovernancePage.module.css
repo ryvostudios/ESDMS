@@ -74,6 +74,24 @@
   background: var(--color-primary-bg);
 }
 
+.userSelectButton {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.userSelectButton:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
 .userIdentity {
   display: flex;
   flex-direction: column;

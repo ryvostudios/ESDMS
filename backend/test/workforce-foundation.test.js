@@ -497,6 +497,55 @@ test("concurrent A -> manager B and B -> manager A: at most one reciprocal assig
   );
 });
 
+// ADV-PRE-04: assertReportingManagerUsable must read the manager's ACTIVE
+// status from a row THIS transaction locks, never a global-pool snapshot
+// taken before the transaction opened — a concurrent status change that
+// commits while the transfer is blocked on that lock must be honored, not
+// raced past with a stale ACTIVE read. Real separate connections, exactly
+// like the cross-site-transfer/role-promotion race test below.
+test("createTransfer's reporting-manager check locks the manager row: a concurrent status change committing while blocked is honored, not raced past", async () => {
+  const manager = await createTestEmployee();
+  const managerId = manager.body.data.id;
+  const subject = await createTestEmployee();
+  const subjectId = subject.body.data.id;
+
+  const lockHolder = await pool.connect();
+  try {
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("SELECT id FROM employees WHERE id = $1 FOR UPDATE", [managerId]);
+
+    const transferPromise = apiRequest(server.baseUrl, "POST", `/api/v1/employees/${subjectId}/transfer`, {
+      token: hrToken,
+      body: { reportingManagerEmployeeId: managerId, effectiveDate: "2026-08-01" },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Simulates the manager being made non-ACTIVE (e.g. offboarding)
+    // concurrently, while the transfer above is still blocked waiting on
+    // this same row's lock.
+    await lockHolder.query("UPDATE employees SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [
+      managerId,
+    ]);
+    await lockHolder.query("COMMIT");
+
+    const transfer = await transferPromise;
+    assert.equal(
+      transfer.status,
+      400,
+      "the manager's status change that committed while this request was blocked on the lock must be honored, not raced past",
+    );
+
+    const assignment = await pool.query(
+      "SELECT 1 FROM employment_assignments WHERE employee_id = $1 AND reporting_manager_employee_id = $2",
+      [subjectId, managerId],
+    );
+    assert.equal(assignment.rowCount, 0, "no assignment committed against the now-non-ACTIVE manager");
+  } finally {
+    lockHolder.release();
+  }
+});
+
 // --- createTransfer: locked/current state, not a pre-transaction snapshot --
 
 test("TOCTOU: createTransfer re-authorizes against the locked, current site", async (t) => {
@@ -1278,5 +1327,77 @@ test("Upper Management linking additionally requires users.manage_um", async () 
       `/api/v1/users/${users.hr}/permissions/users.manage_um`,
       { token: ceoToken },
     );
+  }
+});
+
+// ADV-P1-05: a protected-target violation caught under the target User's
+// row lock must still produce exactly one PRIVILEGE_ESCALATION_ATTEMPT
+// audit row even though the transaction that detected it rolls back —
+// real separate connections, same lockHolder technique as the cross-site
+// transfer/role-promotion race above.
+test("linkExistingUserForEmployee: a concurrent role promotion to UM caught under lock is rejected, and its denial audit survives the rolled-back transaction exactly once", async () => {
+  const created = await createTestEmployee();
+  const employeeId = created.body.data.id;
+
+  await apiRequest(server.baseUrl, "PUT", `/api/v1/users/${users.hr}/permissions/employees.account.link_existing`, {
+    token: ceoToken,
+    body: { effect: "GRANT" },
+  });
+
+  const email = `${unique("link-race")}@test.eset.local`;
+  const targetUser = await apiRequest(server.baseUrl, "POST", "/api/v1/users", {
+    token: ceoToken,
+    body: { email, fullName: "Link Race Target", role: "EMPLOYEE" },
+  });
+  assert.equal(targetUser.status, 201, JSON.stringify(targetUser.body));
+  const targetUserId = targetUser.body.data.id;
+
+  const lockHolder = await pool.connect();
+  try {
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [targetUserId]);
+
+    const linkPromise = apiRequest(server.baseUrl, "POST", `/api/v1/employees/${employeeId}/login/link-existing`, {
+      token: hrToken,
+      body: { userId: targetUserId },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Simulates the target being promoted to Upper Management concurrently
+    // — HR (the actor) holds no UM authority — while the link-existing
+    // request above is still blocked waiting on this same row's lock.
+    const umRole = await lockHolder.query("SELECT id FROM roles WHERE name = 'UPPER_MANAGEMENT'");
+    await lockHolder.query("UPDATE users SET role_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [
+      targetUserId,
+      umRole.rows[0].id,
+    ]);
+    await lockHolder.query("COMMIT");
+
+    const link = await linkPromise;
+    assert.equal(
+      link.status,
+      403,
+      "the promotion that committed while this request was blocked on the lock must be honored, not raced past",
+    );
+
+    const employeeState = await pool.query("SELECT user_id FROM employees WHERE id = $1", [employeeId]);
+    assert.equal(employeeState.rows[0].user_id, null, "the Employee link never applied — no business mutation survives");
+
+    const userState = await pool.query("SELECT id FROM employees WHERE user_id = $1", [targetUserId]);
+    assert.equal(userState.rowCount, 0, "the User remains unlinked");
+
+    const auditRows = await pool.query(
+      "SELECT actor_user_id, metadata FROM governance_audit_log WHERE action = 'PRIVILEGE_ESCALATION_ATTEMPT' AND target_user_id = $1",
+      [targetUserId],
+    );
+    assert.equal(auditRows.rowCount, 1, "exactly one denial audit row persists despite the transaction rolling back");
+    assert.equal(auditRows.rows[0].actor_user_id, users.hr);
+    assert.deepEqual(auditRows.rows[0].metadata.violations, ["missing_um_authority"]);
+  } finally {
+    lockHolder.release();
+    await apiRequest(server.baseUrl, "DELETE", `/api/v1/users/${users.hr}/permissions/employees.account.link_existing`, {
+      token: ceoToken,
+    });
   }
 });

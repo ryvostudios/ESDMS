@@ -76,5 +76,8 @@
 
 .context {
   font-size: var(--text-xs);
-  color: var(--color-text-subtle);
+  /* ADV-P2-01: this is informational KPI context, not decoration — needs
+     the readable muted token (5.04:1), not --color-text-subtle (reserved
+     for non-text/decorative use only). */
+  color: var(--color-text-muted);
 }

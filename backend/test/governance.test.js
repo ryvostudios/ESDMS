@@ -739,3 +739,149 @@ test("a concurrent first login (flipping must_change_password to false) that com
     lockHolder.release();
   }
 });
+
+// ADV-P1-01: a first-login changePassword that read/verified the OLD
+// temporary credential must never be allowed to overwrite a Governance
+// regeneration that commits while it's still in flight. Both endpoints are
+// driven for real over HTTP — no synthetic row update stands in for
+// changePassword. lockHolder forces a deterministic ordering the same way
+// the "concurrent first login" test above does: regeneration queues for
+// the row lock first, changePassword's conditional UPDATE queues behind
+// it, and releasing the lock lets regeneration commit before the stale
+// UPDATE is even evaluated.
+test("changePassword loses a real concurrency race against Governance regeneration: the regenerated credential remains authoritative, the stale request fails, and nothing leaks", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const target = await createFirstLoginUser(ceoToken, "credential-race");
+
+  // A real login with the (about-to-be-orphaned) old temporary password —
+  // this is the credential the stale changePassword request will verify.
+  const targetToken = await authHeader(server.baseUrl, target.email, target.temporaryPassword);
+
+  const before = await pool.query("SELECT session_version FROM users WHERE id = $1", [target.id]);
+
+  const lockHolder = await pool.connect();
+  try {
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [target.id]);
+
+    // Regeneration queues for the lock first.
+    const regenPromise = apiRequest(server.baseUrl, "POST", `/api/v1/users/${target.id}/regenerate-temp-password`, {
+      token: ceoToken,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The stale request begins now: its SELECT and argon2 verification of
+    // the OLD hash both succeed unblocked (a plain read never contends
+    // with the row lock) — only its final conditional UPDATE queues,
+    // behind regeneration.
+    const stalePromise = apiRequest(server.baseUrl, "POST", "/api/v1/auth/change-password", {
+      token: targetToken,
+      body: { currentPassword: target.temporaryPassword, newPassword: "Stale-Losing-Pw-123!" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    await lockHolder.query("COMMIT");
+
+    const [regen, stale] = await Promise.all([regenPromise, stalePromise]);
+
+    assert.equal(regen.status, 200, JSON.stringify(regen.body));
+    const newTemporaryPassword = regen.body.data.temporaryPassword;
+    assert.ok(newTemporaryPassword);
+
+    assert.equal(stale.status, 401, "the stale changePassword request must fail once the credential it verified no longer exists");
+    assert.equal(stale.body.error.message, "Current password is incorrect.");
+    assert.ok(
+      !JSON.stringify(stale.body).includes(newTemporaryPassword),
+      "the regenerated credential must never leak through the losing request's response",
+    );
+
+    const row = await pool.query(
+      "SELECT must_change_password, session_version FROM users WHERE id = $1",
+      [target.id],
+    );
+    assert.equal(row.rows[0].must_change_password, true, "still must_change_password — the stale change never applied");
+    assert.equal(
+      row.rows[0].session_version,
+      before.rows[0].session_version + 1,
+      "exactly one bump, from regeneration alone — the stale UPDATE matched zero rows",
+    );
+
+    const loginNew = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+      body: { email: target.email, password: newTemporaryPassword },
+    });
+    assert.equal(loginNew.status, 200, "the regenerated credential is authoritative and authenticates");
+
+    const loginStaleNew = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+      body: { email: target.email, password: "Stale-Losing-Pw-123!" },
+    });
+    assert.equal(loginStaleNew.status, 401, "the losing request's attempted new password never took effect");
+
+    const loginOld = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+      body: { email: target.email, password: target.temporaryPassword },
+    });
+    assert.equal(loginOld.status, 401, "the original temporary password is gone too");
+  } finally {
+    lockHolder.release();
+  }
+});
+
+// ADV-P1-02: getUser() authorizes actor-site-scope against a
+// pre-transaction snapshot; a delegated site-scoped actor must not be able
+// to regenerate a credential for a User who has since moved out of their
+// scope. The locked recheck must use the freshly-locked row, not the
+// snapshot read before the transaction began.
+test("temporary password regeneration re-checks actor site-scope against the LOCKED row: a concurrent site transfer out of scope is honored, not raced past, and makes zero changes", async () => {
+  const ceoToken = await authHeader(server.baseUrl, "ceo@test.eset.local");
+  const target = await createFirstLoginUser(ceoToken, "site-scope-race"); // created on CEO's (main) site
+
+  const grant = await apiRequest(
+    server.baseUrl,
+    "PUT",
+    `/api/v1/users/${users.admin}/permissions/users.regenerate_temp_password`,
+    { token: ceoToken, body: { effect: "GRANT", reason: "test: delegate to a site-scoped actor" } },
+  );
+  assert.equal(grant.status, 200, JSON.stringify(grant.body));
+
+  // admin@test.eset.local is a mainSite-scoped, non-CEO actor (see setup.js).
+  const adminToken = await authHeader(server.baseUrl, "admin@test.eset.local");
+
+  const before = await pool.query(
+    "SELECT session_version, must_change_password, password_hash FROM users WHERE id = $1",
+    [target.id],
+  );
+
+  const lockHolder = await pool.connect();
+  try {
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [target.id]);
+
+    const regenPromise = apiRequest(server.baseUrl, "POST", `/api/v1/users/${target.id}/regenerate-temp-password`, {
+      token: adminToken,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Simulates the target being transferred to a different site after the
+    // actor's pre-transaction site check already passed, but before the
+    // locked recheck runs.
+    await lockHolder.query("UPDATE users SET site_id = $1 WHERE id = $2", [users.otherSite, target.id]);
+    await lockHolder.query("COMMIT");
+
+    const regen = await regenPromise;
+    assert.equal(regen.status, 404, JSON.stringify(regen.body));
+
+    const after = await pool.query(
+      "SELECT session_version, must_change_password, password_hash FROM users WHERE id = $1",
+      [target.id],
+    );
+    assert.equal(after.rows[0].session_version, before.rows[0].session_version, "zero session changes from the rejected regeneration");
+    assert.equal(after.rows[0].must_change_password, before.rows[0].must_change_password);
+    assert.equal(after.rows[0].password_hash, before.rows[0].password_hash, "zero credential changes from the rejected regeneration");
+
+    const loginOriginal = await apiRequest(server.baseUrl, "POST", "/api/v1/auth/login", {
+      body: { email: target.email, password: target.temporaryPassword },
+    });
+    assert.equal(loginOriginal.status, 200, "the original temporary credential is untouched by the rejected attempt");
+  } finally {
+    lockHolder.release();
+  }
+});

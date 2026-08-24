@@ -125,13 +125,26 @@ export function GovernancePage() {
                 <tr
                   key={user.id}
                   className={[styles.userRow, selected?.id === user.id ? styles.userRowSelected : ""].filter(Boolean).join(" ")}
-                  onClick={() => selectUser(user)}
                 >
                   <td>
-                    <span className={styles.userIdentity}>
-                      <span className={styles.userName}>{user.fullName}</span>
-                      <span className={styles.userEmail}>{user.email}</span>
-                    </span>
+                    {/* A native <button> — not the <tr> — is the selection
+                        control: focusable by keyboard, activates on
+                        Enter/Space, and gets a real accessible name. Only
+                        the identity cell is part of the control; Role and
+                        Status stay plain cell content, never nested
+                        interactive elements inside a button. */}
+                    <button
+                      type="button"
+                      className={styles.userSelectButton}
+                      onClick={() => selectUser(user)}
+                      aria-pressed={selected?.id === user.id}
+                      aria-label={`Manage ${user.fullName}`}
+                    >
+                      <span className={styles.userIdentity}>
+                        <span className={styles.userName}>{user.fullName}</span>
+                        <span className={styles.userEmail}>{user.email}</span>
+                      </span>
+                    </button>
                   </td>
                   <td>{user.role}</td>
                   <td>

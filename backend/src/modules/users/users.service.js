@@ -211,6 +211,20 @@ export async function regenerateTemporaryPassword(actor, targetUserId) {
     const locked = await lockUserById(client, targetUserId);
     if (!locked) throw new NotFoundError("User not found.");
 
+    // Re-run site-scope authorization against the freshly locked row, not
+    // the pre-transaction snapshot from getUser() above: a delegated,
+    // site-scoped actor's authority over this target can change (a site
+    // transfer) between that initial read and this lock. Same
+    // data-minimization posture as getUser's own site check — a target
+    // that has moved out of scope looks identical to one that doesn't
+    // exist, and nothing is audited here (this is an ordinary 404, not a
+    // caught escalation attempt) — which also avoids the deadlock risk
+    // described above of writing an audit row over a second pool
+    // connection while this row's lock is held.
+    if (actor.role !== CEO_ROLE && locked.site_id !== actor.siteId) {
+      throw new NotFoundError("User not found.");
+    }
+
     if (
       locked.role === CEO_ROLE ||
       locked.id === actor.id ||

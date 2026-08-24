@@ -341,3 +341,77 @@ test("gate_pass_files rejects a duplicate (gate_pass_id, file_type, version)", a
   await insertPdf();
   await assert.rejects(insertPdf(), /violates unique constraint|gate_pass_files_gate_pass_id_type_version_key/);
 });
+
+// ADV-P1-04: the governance-temp-password-regeneration migration's down()
+// must delete a delegated user_permission_overrides row (in the same
+// pattern as 1787411000000_leave-self-cancel-permission.js) before
+// deleting role_permissions/permissions for users.regenerate_temp_password
+// — proven by exercising that exact down() SQL, in order, inside a
+// BEGIN...ROLLBACK transaction so the shared eset_test schema is restored
+// exactly regardless of outcome (this migration has not been externally
+// deployed, so editing it directly is safe — see docs/DECISIONS.md-style
+// reasoning in the migration file itself).
+test("governance-temp-password-regeneration migration down() safely removes a delegated override, its role mapping, and the permission itself — without touching an unrelated override", async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const permission = await client.query(
+      "SELECT id FROM permissions WHERE code = 'users.regenerate_temp_password'",
+    );
+    assert.equal(permission.rowCount, 1, "the permission must already exist (migration already applied)");
+    const permissionId = permission.rows[0].id;
+
+    const otherPermission = await client.query(
+      "SELECT id FROM permissions WHERE code != 'users.regenerate_temp_password' LIMIT 1",
+    );
+    const otherPermissionId = otherPermission.rows[0].id;
+
+    // Delegate users.regenerate_temp_password to a real user via an
+    // override — the exact scenario the migration must roll back safely
+    // from — plus one unrelated override that must survive untouched.
+    await client.query(
+      `INSERT INTO user_permission_overrides (user_id, permission_id, effect, granted_by_user_id)
+       VALUES ($1, $2, 'GRANT', $1)
+       ON CONFLICT (user_id, permission_id) DO UPDATE SET effect = EXCLUDED.effect`,
+      [users.hr, permissionId],
+    );
+    await client.query(
+      `INSERT INTO user_permission_overrides (user_id, permission_id, effect, granted_by_user_id)
+       VALUES ($1, $2, 'GRANT', $1)
+       ON CONFLICT (user_id, permission_id) DO UPDATE SET effect = EXCLUDED.effect`,
+      [users.hr, otherPermissionId],
+    );
+
+    // Exercise the migration's down() SQL, in the corrected order.
+    await client.query(
+      "DELETE FROM user_permission_overrides WHERE permission_id = (SELECT id FROM permissions WHERE code = 'users.regenerate_temp_password')",
+    );
+    await client.query(
+      "DELETE FROM role_permissions WHERE permission_id = (SELECT id FROM permissions WHERE code = 'users.regenerate_temp_password')",
+    );
+    await client.query("DELETE FROM permissions WHERE code = 'users.regenerate_temp_password'");
+
+    const overrideGone = await client.query(
+      "SELECT 1 FROM user_permission_overrides WHERE permission_id = $1",
+      [permissionId],
+    );
+    assert.equal(overrideGone.rowCount, 0, "the delegated override is removed");
+
+    const roleMappingGone = await client.query("SELECT 1 FROM role_permissions WHERE permission_id = $1", [permissionId]);
+    assert.equal(roleMappingGone.rowCount, 0, "the CEO role mapping is removed");
+
+    const permissionGone = await client.query("SELECT 1 FROM permissions WHERE id = $1", [permissionId]);
+    assert.equal(permissionGone.rowCount, 0, "the permission is removed");
+
+    const unrelatedSurvives = await client.query(
+      "SELECT 1 FROM user_permission_overrides WHERE user_id = $1 AND permission_id = $2",
+      [users.hr, otherPermissionId],
+    );
+    assert.equal(unrelatedSurvives.rowCount, 1, "an unrelated override on a different permission is untouched");
+  } finally {
+    // Restore the shared schema exactly, regardless of assertion outcome.
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
