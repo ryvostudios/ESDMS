@@ -7,7 +7,10 @@
   position: relative;
   z-index: 1;
   flex: 1;
-  background: var(--color-surface-alt);
+  /* Same dark-graphite family as the app shell's sidebar (see
+     --eset-sidebar-gradient) — the login panel now reads as the same
+     material as the sidebar the user lands on after signing in. */
+  background: var(--eset-sidebar-gradient);
   color: var(--color-text-inverse);
   display: flex;
   flex-direction: column;
@@ -25,13 +28,14 @@
   width: 44px;
   height: 44px;
   border-radius: var(--radius-md);
-  background: var(--color-primary);
+  background: linear-gradient(155deg, var(--eset-cyan-accessible), var(--eset-blue-ink));
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
   font-weight: 700;
   font-size: var(--text-lg);
+  box-shadow: 0 4px 14px rgba(0, 143, 199, 0.28);
 }
 
 .brandCopy {

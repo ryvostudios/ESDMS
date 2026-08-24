@@ -12,7 +12,7 @@
   left: 0;
   bottom: 0;
   width: min(280px, 84vw);
-  background: var(--color-surface-alt);
+  background: var(--eset-sidebar-gradient);
   color: var(--color-text-inverse);
   z-index: 21;
   display: flex;
@@ -53,7 +53,7 @@
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm);
-  background: var(--color-primary);
+  background: linear-gradient(155deg, var(--eset-cyan-accessible), var(--eset-blue-ink));
   display: flex;
   align-items: center;
   justify-content: center;

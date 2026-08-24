@@ -23,18 +23,19 @@
 }
 
 .primary {
-  background: var(--color-primary);
+  background: linear-gradient(155deg, var(--color-primary), var(--color-primary-hover));
   color: var(--color-primary-contrast);
 }
 
 .primary:not(:disabled):hover {
-  background: var(--color-primary-hover);
+  background: linear-gradient(155deg, var(--color-primary-hover), var(--color-primary-active));
   transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 
 .primary:not(:disabled):active {
   background: var(--color-primary-active);
-  transform: translateY(0);
+  transform: translateY(0) scale(0.98);
 }
 
 .secondary {

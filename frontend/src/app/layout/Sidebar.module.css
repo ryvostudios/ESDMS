@@ -1,13 +1,15 @@
 .sidebar {
+  position: relative;
   width: var(--shell-sidebar-width);
   flex-shrink: 0;
-  background: var(--color-surface-alt);
+  background: var(--eset-sidebar-gradient);
   color: var(--color-text-inverse);
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
   padding: calc(var(--space-5) + env(safe-area-inset-top)) var(--space-3) var(--space-5)
     calc(var(--space-3) + env(safe-area-inset-left));
+  overflow: hidden;
 }
 
 @media (max-width: 960px) {
@@ -16,18 +18,34 @@
   }
 }
 
+/* Fills the sidebar behind brand/nav; SidebarKineticBackground sizes
+   itself to this element via ResizeObserver. Kept out of the flex flow
+   (position: absolute) so it never affects nav layout/click targets. */
+.grid {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
 .brand {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: 0 var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-4);
+  margin: 0 calc(var(--space-3) * -1);
+  padding-left: calc(var(--space-3) + var(--space-2));
+  padding-right: calc(var(--space-3) + var(--space-2));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .brandMark {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: var(--radius-sm);
-  background: var(--color-primary);
+  background: linear-gradient(155deg, var(--eset-cyan-accessible), var(--eset-blue-ink));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -35,6 +53,7 @@
   font-weight: 700;
   font-size: var(--text-sm);
   flex-shrink: 0;
+  box-shadow: 0 4px 14px rgba(0, 143, 199, 0.28);
 }
 
 .brandText {
@@ -46,6 +65,7 @@
 .brandName {
   font-weight: 700;
   font-size: var(--text-sm);
+  letter-spacing: 0.01em;
 }
 
 .brandSub {
@@ -54,6 +74,8 @@
 }
 
 .nav {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -66,22 +88,51 @@
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
+  border: 1px solid transparent;
   color: var(--color-text-inverse-muted);
   font-size: var(--text-sm);
   font-weight: 500;
+  text-decoration: none;
+  min-height: 40px;
   transition:
     background-color var(--transition-fast),
-    color var(--transition-fast);
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.navLink svg {
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
 }
 
 .navLink:hover {
-  background: var(--color-surface-alt-hover);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
   color: var(--color-text-inverse);
+  transform: translateX(1px);
 }
 
-.navLinkActive {
-  background: var(--color-surface-alt-hover);
+.navLink:hover svg {
+  transform: translateX(1px);
+}
+
+.navLink:active {
+  transform: translateX(1px) scale(0.98);
+}
+
+.navLink:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.navLinkActive,
+.navLinkActive:hover {
+  background: linear-gradient(155deg, rgba(0, 191, 239, 0.16), rgba(0, 143, 199, 0.08));
+  border-color: rgba(0, 191, 239, 0.24);
   color: var(--color-text-inverse);
+  font-weight: 600;
+  transform: none;
 }
 
 /* A cyan accent bar, not just a background shade, so the active item is
@@ -95,4 +146,11 @@
   width: 3px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navLink,
+  .navLink svg {
+    transition: none;
+  }
 }

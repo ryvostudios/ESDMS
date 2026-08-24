@@ -2,8 +2,27 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// ESDMS_DEV_API_TARGET (optional, dev-only): points the Vite dev server's
+// /api proxy at a remote backend (e.g. a deployed test environment) instead
+// of the browser calling it directly cross-origin. Keeps every request
+// same-origin from the browser's perspective, so it rides the existing
+// HttpOnly session cookie without touching backend CORS/cookie config.
+// Unset by default — normal local dev is unaffected.
+const devApiTarget = process.env.ESDMS_DEV_API_TARGET;
+
 // https://vite.dev/config/
 export default defineConfig({
+  server: devApiTarget
+    ? {
+        proxy: {
+          "/api": {
+            target: devApiTarget,
+            changeOrigin: true,
+            secure: true,
+          },
+        },
+      }
+    : undefined,
   plugins: [
     react(),
     VitePWA({

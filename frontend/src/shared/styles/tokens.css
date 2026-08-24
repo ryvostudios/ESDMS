@@ -20,6 +20,23 @@
   --eset-blue-ink: #0673a0;
   --eset-blue-ink-active: #044568;
   --eset-charcoal: #15191e;
+  /* Sidebar gradient family — dark graphite, distinct from the flat
+     --eset-charcoal fill it replaces on the sidebar/mobile drawer. */
+  --eset-sidebar-1: #12161b;
+  --eset-sidebar-2: #171c22;
+  --eset-sidebar-3: #1d242b;
+  --eset-sidebar-4: #202a32;
+  --eset-sidebar-gradient: linear-gradient(
+    165deg,
+    var(--eset-sidebar-1) 0%,
+    var(--eset-sidebar-2) 40%,
+    var(--eset-sidebar-3) 75%,
+    var(--eset-sidebar-4) 100%
+  );
+  /* Was referenced by --color-surface-alt-hover below but never defined,
+     so sidebar nav hover/active resolved to an invalid custom property
+     (no visible background at all). */
+  --eset-dark: var(--eset-sidebar-3);
   /* ADV-P2-01 (round 2): #66707a passed against white (5.04:1) but fell
      just short against #eef2f5 (4.48:1) — minimally darkened to clear
      4.5:1 against both. */
