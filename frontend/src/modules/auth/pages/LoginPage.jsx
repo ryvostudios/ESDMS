@@ -6,6 +6,7 @@ import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input } from "../../../shared/components/FormField.jsx";
 import { LoginMeshBackground } from "./LoginMeshBackground.jsx";
 import { LoginKineticBackground } from "./LoginKineticBackground.jsx";
+import { MobileKineticBackground } from "../../../shared/components/MobileKineticBackground.jsx";
 import styles from "./LoginPage.module.css";
 
 // Wraps Input so FormField's aria-describedby cloning (it clones its
@@ -37,6 +38,10 @@ export function LoginPage() {
   // (mark/copy/footer live inside it), so pointer tracking listens there
   // instead; see LoginKineticBackground's interactionRef prop.
   const brandPanelRef = useRef(null);
+  // Same rationale as brandPanelRef — the mobile brand strip's own grid
+  // container is pointer-events:none, so pointer tracking listens on the
+  // strip itself instead; see MobileKineticBackground's interactionRef prop.
+  const mobileBrandRef = useRef(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -100,7 +105,10 @@ export function LoginPage() {
 
       <div className={styles.formPanel}>
         <div className={styles.formCard}>
-          <div className={styles.mobileBrand}>
+          <div className={styles.mobileBrand} ref={mobileBrandRef}>
+            <div className={styles.mobileBrandGrid}>
+              <MobileKineticBackground interactionRef={mobileBrandRef} />
+            </div>
             <span className={styles.mobileBrandMark} aria-hidden="true">
               ES
             </span>

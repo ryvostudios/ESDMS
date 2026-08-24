@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { NavList } from "./NavList.jsx";
 import { CloseIcon } from "../../shared/icons.jsx";
+import { MobileKineticBackground } from "../../shared/components/MobileKineticBackground.jsx";
 import styles from "./MobileNav.module.css";
 
 const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -63,6 +64,14 @@ export function MobileNav({ open, onClose, triggerRef }) {
         aria-label="Navigation menu"
         ref={drawerRef}
       >
+        {/* The drawer only ever exists in the DOM while `open` is true (see
+            the early `return null` above) — mounting the grid here means it
+            fully unmounts, cleaning up its RAF loop/listeners, the instant
+            the drawer closes. No "hidden but still running" state is
+            possible for this one, unlike the always-mounted desktop sidebar. */}
+        <div className={styles.grid}>
+          <MobileKineticBackground interactionRef={drawerRef} />
+        </div>
         <div className={styles.header}>
           <div className={styles.brand}>
             <span className={styles.brandMark} aria-hidden="true">

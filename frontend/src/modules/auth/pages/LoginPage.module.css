@@ -112,11 +112,22 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* A compact stand-in for the desktop brand panel — small dark strip bled
+   to the card's own edges/corners (negative margins matching .formCard's
+   padding) rather than a full decorative panel, so the mobile form loses
+   no vertical space and the page-level scroll/centering layout in
+   .formPanel is completely untouched. overflow: hidden clips the grid
+   canvas to these same rounded corners. */
 .mobileBrand {
   display: none;
+  position: relative;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-6);
+  margin: calc(var(--space-8) * -1) calc(var(--space-8) * -1) var(--space-6);
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--eset-sidebar-gradient);
+  overflow: hidden;
 }
 
 @media (max-width: 860px) {
@@ -125,21 +136,36 @@
   }
 }
 
+.mobileBrandGrid {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.mobileBrandMark,
+.mobileBrandName {
+  position: relative;
+  z-index: 1;
+}
+
 .mobileBrandMark {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  background: var(--color-primary);
+  background: linear-gradient(155deg, var(--eset-cyan-accessible), var(--eset-blue-ink));
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
   font-weight: 700;
   font-size: var(--text-sm);
+  flex-shrink: 0;
 }
 
 .mobileBrandName {
   font-weight: 700;
+  color: var(--color-text-inverse);
 }
 
 .heading {

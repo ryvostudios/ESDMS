@@ -36,7 +36,20 @@
   }
 }
 
+/* Fills the drawer behind header/nav; MobileKineticBackground sizes
+   itself to this element via ResizeObserver. Kept out of the flex flow
+   (position: absolute) so it never affects drawer layout, and
+   pointer-events: none so it never intercepts taps/scroll. */
+.grid {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
 .header {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;

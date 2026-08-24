@@ -6,14 +6,18 @@ import { ApiError } from "../../../core/api/client.js";
 
 // The mesh/grid backgrounds are decorative canvases with their own
 // dedicated test files (LoginMeshBackground.test.jsx,
-// LoginKineticBackground.test.jsx) — stubbed here so these tests focus on
-// the form, and so jsdom's lack of a real canvas/matchMedia implementation
-// doesn't leak into unrelated assertions.
+// LoginKineticBackground.test.jsx, MobileKineticBackground.test.jsx) —
+// stubbed here so these tests focus on the form, and so jsdom's lack of a
+// real canvas/matchMedia implementation doesn't leak into unrelated
+// assertions.
 vi.mock("./LoginMeshBackground.jsx", () => ({
   LoginMeshBackground: () => null,
 }));
 vi.mock("./LoginKineticBackground.jsx", () => ({
   LoginKineticBackground: () => null,
+}));
+vi.mock("../../../shared/components/MobileKineticBackground.jsx", () => ({
+  MobileKineticBackground: () => null,
 }));
 
 const mockLogin = vi.fn();
