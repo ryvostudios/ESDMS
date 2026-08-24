@@ -4,12 +4,16 @@ import { MemoryRouter } from "react-router-dom";
 import { LoginPage } from "./LoginPage.jsx";
 import { ApiError } from "../../../core/api/client.js";
 
-// The mesh background is a decorative canvas with its own dedicated test
-// file (LoginMeshBackground.test.jsx) — stubbed here so these tests focus
-// on the form, and so jsdom's lack of a real canvas/matchMedia
-// implementation doesn't leak into unrelated assertions.
+// The mesh/grid backgrounds are decorative canvases with their own
+// dedicated test files (LoginMeshBackground.test.jsx,
+// LoginKineticBackground.test.jsx) — stubbed here so these tests focus on
+// the form, and so jsdom's lack of a real canvas/matchMedia implementation
+// doesn't leak into unrelated assertions.
 vi.mock("./LoginMeshBackground.jsx", () => ({
   LoginMeshBackground: () => null,
+}));
+vi.mock("./LoginKineticBackground.jsx", () => ({
+  LoginKineticBackground: () => null,
 }));
 
 const mockLogin = vi.fn();

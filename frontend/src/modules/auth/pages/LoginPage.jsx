@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { ApiError } from "../../../core/api/client.js";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input } from "../../../shared/components/FormField.jsx";
 import { LoginMeshBackground } from "./LoginMeshBackground.jsx";
+import { LoginKineticBackground } from "./LoginKineticBackground.jsx";
 import styles from "./LoginPage.module.css";
 
 // Wraps Input so FormField's aria-describedby cloning (it clones its
@@ -31,6 +32,11 @@ function PasswordInput({ visible, onToggleVisible, ...inputProps }) {
 export function LoginPage() {
   const { status, login } = useAuth();
   const location = useLocation();
+  // The grid's own container is pointer-events:none, so it never receives
+  // pointer events itself — the brand panel IS the real hit-testable owner
+  // (mark/copy/footer live inside it), so pointer tracking listens there
+  // instead; see LoginKineticBackground's interactionRef prop.
+  const brandPanelRef = useRef(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -78,7 +84,10 @@ export function LoginPage() {
   return (
     <div className={styles.screen}>
       <LoginMeshBackground />
-      <div className={styles.brandPanel}>
+      <div className={styles.brandPanel} ref={brandPanelRef}>
+        <div className={styles.brandGrid}>
+          <LoginKineticBackground interactionRef={brandPanelRef} />
+        </div>
         <span className={styles.brandMark} aria-hidden="true">
           ES
         </span>

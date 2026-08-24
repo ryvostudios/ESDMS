@@ -24,6 +24,28 @@
   }
 }
 
+/* Fills the brand panel behind mark/copy/footer; LoginKineticBackground
+   sizes itself to this element via ResizeObserver. Kept out of the flex
+   flow (position: absolute) so it never affects panel layout, and
+   pointer-events: none so it never intercepts anything. */
+.brandGrid {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Explicit stacking (matches SidebarKineticBackground's .grid vs .brand/.nav
+   pattern) — a position:absolute z-index:0 sibling would otherwise paint
+   above these non-positioned children regardless of DOM order, since
+   positioned content always paints after non-positioned in-flow content. */
+.brandMark,
+.brandCopy,
+.brandFooter {
+  position: relative;
+  z-index: 1;
+}
+
 .brandMark {
   width: 44px;
   height: 44px;
