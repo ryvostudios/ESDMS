@@ -42,6 +42,19 @@ export const updateDraftSchema = z
   })
   .refine(noDuplicateLines, DUPLICATE_LINE_ISSUE);
 
+// Reason is required to reject (no strong existing-convention override for
+// this case — matches Gate Pass's reject/cancel, which also require one),
+// optional on approval.
+export const decisionSchema = z
+  .object({
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    reason: z.string().trim().max(1000).optional().nullable(),
+  })
+  .refine((data) => data.decision !== "REJECTED" || Boolean(data.reason?.trim()), {
+    message: "A reason is required to reject.",
+    path: ["reason"],
+  });
+
 export const listQuerySchema = z.object({
   departmentId: uuid.optional(),
   status: z.enum(STATUSES).optional(),

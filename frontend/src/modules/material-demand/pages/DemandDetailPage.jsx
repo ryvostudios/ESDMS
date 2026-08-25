@@ -2,17 +2,24 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDemand } from "../hooks/useDemand.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
-import { submitDemand } from "../api.js";
+import { submitDemand, recordManagementReview, recordFormalApproval } from "../api.js";
 import { DemandStatusBadge } from "../components/DemandStatusBadge.jsx";
 import { AuditTimeline } from "../components/AuditTimeline.jsx";
+import { ApprovalPanel } from "../components/ApprovalPanel.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
+import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import styles from "./DemandDetailPage.module.css";
 
 const EDITABLE_STATUSES = ["DRAFT"];
 const SUBMITTABLE_STATUSES = ["DRAFT"];
+const PENDING_NOTICE = {
+  PENDING_INITIAL_REVIEW: "This Demand has been submitted and is pending initial review. It can no longer be edited.",
+  REJECTED: "This Demand was rejected during initial review.",
+  READY_FOR_PRICING: "This Demand has completed initial approval and is ready for Procurement pricing.",
+};
 
 function DetailField({ label, value }) {
   return (
@@ -28,7 +35,7 @@ export function DemandDetailPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const { result, status, error, reload } = useDemand(id);
-  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
+  const [activeDialog, setActiveDialog] = useState(null);
 
   if (status === "loading") {
     return <LoadingState message="Loading Demand…" />;
@@ -38,12 +45,29 @@ export function DemandDetailPage() {
     return <ErrorState message={error} onRetry={reload} />;
   }
 
-  const { demand, lines, auditLog } = result;
+  const { demand, lines, auditLog, approvals } = result;
   const canEdit = EDITABLE_STATUSES.includes(demand.status) && hasPermission("demand.edit");
   const canSubmit = SUBMITTABLE_STATUSES.includes(demand.status) && hasPermission("demand.submit");
 
+  const isPendingReview = demand.status === "PENDING_INITIAL_REVIEW";
+  const hasManagementReview = approvals.some((a) => a.approval_type === "MANAGEMENT_REVIEW");
+  const hasFormalApproval = approvals.some((a) => a.approval_type === "FORMAL_APPROVAL");
+  const canReview = isPendingReview && !hasManagementReview && hasPermission("demand.review");
+  const canApprove = isPendingReview && !hasFormalApproval && hasPermission("demand.approve");
+  const showApprovalPanel = demand.status !== "DRAFT";
+
   async function handleSubmit() {
     await submitDemand(id);
+    await reload();
+  }
+
+  async function handleReviewDecision(decision, reason) {
+    await recordManagementReview(id, { decision, reason });
+    await reload();
+  }
+
+  async function handleApprovalDecision(decision, reason) {
+    await recordFormalApproval(id, { decision, reason });
     await reload();
   }
 
@@ -63,15 +87,11 @@ export function DemandDetailPage() {
               Edit
             </Button>
           )}
-          {canSubmit && <Button onClick={() => setConfirmSubmitOpen(true)}>Submit for Review</Button>}
+          {canSubmit && <Button onClick={() => setActiveDialog("submit")}>Submit for Review</Button>}
         </div>
       </div>
 
-      {demand.status === "PENDING_INITIAL_REVIEW" && (
-        <p className={styles.pendingNotice}>
-          This Demand has been submitted and is pending management review. It can no longer be edited.
-        </p>
-      )}
+      {PENDING_NOTICE[demand.status] && <p className={styles.pendingNotice}>{PENDING_NOTICE[demand.status]}</p>}
 
       <div className={styles.layout}>
         <div>
@@ -109,6 +129,22 @@ export function DemandDetailPage() {
               </table>
             </div>
           </div>
+
+          {showApprovalPanel && (
+            <div className={styles.section}>
+              <ApprovalPanel
+                approvals={approvals}
+                canReview={canReview}
+                canApprove={canApprove}
+                onReviewDecision={(decision) =>
+                  decision === "APPROVED" ? setActiveDialog("review-approve") : setActiveDialog("review-reject")
+                }
+                onApprovalDecision={(decision) =>
+                  decision === "APPROVED" ? setActiveDialog("approval-approve") : setActiveDialog("approval-reject")
+                }
+              />
+            </div>
+          )}
         </div>
 
         <div className={styles.section}>
@@ -118,12 +154,44 @@ export function DemandDetailPage() {
       </div>
 
       <ConfirmActionDialog
-        open={confirmSubmitOpen}
-        onClose={() => setConfirmSubmitOpen(false)}
+        open={activeDialog === "submit"}
+        onClose={() => setActiveDialog(null)}
         title="Submit for review?"
-        message="This Demand will move to pending management review and can no longer be edited."
+        message="This Demand will move to pending initial review and can no longer be edited."
         confirmLabel="Submit"
         onConfirm={handleSubmit}
+      />
+      <ConfirmActionDialog
+        open={activeDialog === "review-approve"}
+        onClose={() => setActiveDialog(null)}
+        title="Approve Management Review?"
+        message="This records your approval for the Management Review stage."
+        confirmLabel="Approve"
+        onConfirm={() => handleReviewDecision("APPROVED")}
+      />
+      <ReasonActionDialog
+        open={activeDialog === "review-reject"}
+        onClose={() => setActiveDialog(null)}
+        title="Reject this Demand?"
+        message="Provide a reason for the requester."
+        confirmLabel="Reject"
+        onConfirm={(reason) => handleReviewDecision("REJECTED", reason)}
+      />
+      <ConfirmActionDialog
+        open={activeDialog === "approval-approve"}
+        onClose={() => setActiveDialog(null)}
+        title="Record Formal Approval?"
+        message="This records the formal/financial approval for this stage."
+        confirmLabel="Approve"
+        onConfirm={() => handleApprovalDecision("APPROVED")}
+      />
+      <ReasonActionDialog
+        open={activeDialog === "approval-reject"}
+        onClose={() => setActiveDialog(null)}
+        title="Reject this Demand?"
+        message="Provide a reason for the requester."
+        confirmLabel="Reject"
+        onConfirm={(reason) => handleApprovalDecision("REJECTED", reason)}
       />
     </div>
   );

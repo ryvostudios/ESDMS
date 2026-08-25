@@ -71,6 +71,10 @@ const MATERIAL_DEMAND_TABLES = [
   "material_demand_audit_log",
 ];
 
+// Material Demand initial approval gate (Checkpoint 3) — see
+// 1787414000000_material-demand-initial-approval.js.
+const MATERIAL_DEMAND_APPROVAL_TABLES = ["material_demand_approvals"];
+
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
   "user_permission_overrides",
@@ -78,6 +82,7 @@ const RUNTIME_APPLICATION_TABLES = [
   ...WORKFORCE_TABLES,
   ...MATERIAL_CATALOG_TABLES,
   ...MATERIAL_DEMAND_TABLES,
+  ...MATERIAL_DEMAND_APPROVAL_TABLES,
 ];
 const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];

@@ -14,5 +14,7 @@ router.post("/", requirePermission("demand.create"), controller.create);
 router.get("/:id", requirePermission("demand.view"), controller.detail);
 router.patch("/:id", requirePermission("demand.edit"), controller.updateDraft);
 router.post("/:id/submit", requirePermission("demand.submit"), controller.submit);
+router.post("/:id/reviews", requirePermission("demand.review"), controller.recordReview);
+router.post("/:id/approvals", requirePermission("demand.approve"), controller.recordApproval);
 
 export default router;

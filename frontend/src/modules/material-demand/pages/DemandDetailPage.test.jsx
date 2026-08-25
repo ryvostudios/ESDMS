@@ -1,9 +1,11 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { DemandDetailPage } from "./DemandDetailPage.jsx";
 
 const mockUseDemand = vi.hoisted(() => vi.fn());
+const mockRecordManagementReview = vi.hoisted(() => vi.fn());
+const mockRecordFormalApproval = vi.hoisted(() => vi.fn());
 
 vi.mock("../hooks/useDemand.js", () => ({
   useDemand: (...args) => mockUseDemand(...args),
@@ -11,6 +13,8 @@ vi.mock("../hooks/useDemand.js", () => ({
 
 vi.mock("../api.js", () => ({
   submitDemand: vi.fn(),
+  recordManagementReview: (...args) => mockRecordManagementReview(...args),
+  recordFormalApproval: (...args) => mockRecordFormalApproval(...args),
 }));
 
 let mockPermissions = new Set();
@@ -20,7 +24,7 @@ vi.mock("../../../core/auth/AuthContext.jsx", () => ({
   }),
 }));
 
-function baseDemand(overrides = {}) {
+function baseDemand(overrides = {}, approvals = []) {
   return {
     demand: {
       id: "demand-1",
@@ -35,13 +39,16 @@ function baseDemand(overrides = {}) {
       ...overrides,
     },
     lines: [{ id: "line-1", item_name_snapshot: "Cement", requested_quantity: "50.00", uom_name_snapshot: "Bags" }],
-    auditLog: [{ id: "audit-1", action: "CREATE", actorName: "Test Team Lead", createdAt: "2026-08-25T00:00:00.000Z" }],
+    auditLog: [{ id: "audit-1", action: "CREATE", actor_name: "Test Team Lead", created_at: "2026-08-25T00:00:00.000Z" }],
+    approvals,
   };
 }
 
 afterEach(() => {
   cleanup();
   mockUseDemand.mockReset();
+  mockRecordManagementReview.mockReset();
+  mockRecordFormalApproval.mockReset();
   mockPermissions = new Set();
 });
 
@@ -66,7 +73,7 @@ describe("DemandDetailPage", () => {
 
     expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Submit for Review" })).toBeTruthy();
-    expect(screen.queryByText(/pending management review/i)).toBeNull();
+    expect(screen.queryByText(/pending initial review/i)).toBeNull();
   });
 
   test("a submitted Demand is read-only and shows the pending-review notice", async () => {
@@ -82,7 +89,7 @@ describe("DemandDetailPage", () => {
 
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Submit for Review" })).toBeNull();
-    expect(screen.getByText(/pending management review/i)).toBeTruthy();
+    expect(screen.getByText(/this demand has been submitted/i)).toBeTruthy();
   });
 
   test("a view-only actor never sees Edit or Submit even on a DRAFT Demand", async () => {
@@ -104,5 +111,147 @@ describe("DemandDetailPage", () => {
     mockUseDemand.mockReturnValue({ result: null, status: "error", error: "Network error", reload: vi.fn() });
     await renderPage();
     expect(screen.getByText("Network error")).toBeTruthy();
+  });
+
+  test("a Draft never shows the Initial Approval panel", async () => {
+    mockUseDemand.mockReturnValue({ result: baseDemand(), status: "ready", error: null, reload: vi.fn() });
+    await renderPage();
+    expect(screen.queryByText("Initial Approval")).toBeNull();
+  });
+
+  test("both slots pending: an eligible reviewer sees Approve/Reject for their own slot only", async () => {
+    mockPermissions = new Set(["demand.review"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_INITIAL_REVIEW" }),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+
+    await renderPage();
+
+    expect(screen.getByText("Initial Approval")).toBeTruthy();
+    expect(screen.getAllByText("Pending")).toHaveLength(2);
+    // Exactly one Approve/Reject pair — for Management Review, not Formal Approval.
+    expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Reject" })).toHaveLength(1);
+  });
+
+  test("a view-only actor sees pending status but no action buttons", async () => {
+    mockPermissions = new Set(); // no demand.review, no demand.approve
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_INITIAL_REVIEW" }),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+
+    await renderPage();
+
+    expect(screen.getAllByText("Pending")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+  });
+
+  test("one completed slot and one pending slot are displayed distinctly — the Demand is never shown as fully approved prematurely", async () => {
+    mockPermissions = new Set(["demand.approve"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand(
+        { status: "PENDING_INITIAL_REVIEW" },
+        [
+          {
+            approval_type: "MANAGEMENT_REVIEW",
+            decision: "APPROVED",
+            actor_name: "Test Site Manager",
+            created_at: "2026-08-25T02:00:00.000Z",
+          },
+        ],
+      ),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+
+    await renderPage();
+
+    expect(screen.getByText("Approved by Test Site Manager")).toBeTruthy();
+    expect(screen.getByText("Pending")).toBeTruthy();
+    // Formal Approval is still open for this actor — one pair of buttons.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
+  });
+
+  test("approving a slot calls the API and refreshes", async () => {
+    mockPermissions = new Set(["demand.review"]);
+    const reload = vi.fn();
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_INITIAL_REVIEW" }),
+      status: "ready",
+      error: null,
+      reload,
+    });
+    mockRecordManagementReview.mockResolvedValue({});
+
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(mockRecordManagementReview).toHaveBeenCalledWith("demand-1", { decision: "APPROVED" }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+  });
+
+  test("rejecting a slot requires a reason and sends it to the API", async () => {
+    mockPermissions = new Set(["demand.review"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_INITIAL_REVIEW" }),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+    mockRecordManagementReview.mockResolvedValue({});
+
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reject" }));
+    expect(await within(dialog).findByText("A reason is required.")).toBeTruthy();
+    expect(mockRecordManagementReview).not.toHaveBeenCalled();
+
+    fireEvent.change(within(dialog).getByLabelText(/reason/i), { target: { value: "Not needed this quarter" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reject" }));
+
+    await waitFor(() =>
+      expect(mockRecordManagementReview).toHaveBeenCalledWith("demand-1", {
+        decision: "REJECTED",
+        reason: "Not needed this quarter",
+      }),
+    );
+  });
+
+  test("READY_FOR_PRICING shows both slots approved and the ready-for-pricing notice, with no action buttons left", async () => {
+    mockPermissions = new Set(["demand.review", "demand.approve"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand(
+        { status: "READY_FOR_PRICING" },
+        [
+          { approval_type: "MANAGEMENT_REVIEW", decision: "APPROVED", actor_name: "Test Site Manager", created_at: "2026-08-25T02:00:00.000Z" },
+          { approval_type: "FORMAL_APPROVAL", decision: "APPROVED", actor_name: "Test CEO", created_at: "2026-08-25T03:00:00.000Z" },
+        ],
+      ),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+
+    await renderPage();
+
+    expect(screen.getByText(/ready for procurement pricing/i)).toBeTruthy();
+    expect(screen.getByText("Approved by Test Site Manager")).toBeTruthy();
+    expect(screen.getByText("Approved by Test CEO")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
   });
 });

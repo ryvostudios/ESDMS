@@ -2274,3 +2274,150 @@ production/PWA build clean. `npm audit`: 0 vulnerabilities, both packages.
 Gate Pass and Workforce regression suites unaffected (no files in either
 module touched). Checkpoints 3-8 (Initial Review through Closure) remain
 unimplemented per `docs/PROCUREMENT_RECEIVING_SPEC.md` §0.
+
+## 2026-08-26 — Checkpoint 3: Initial Management Review + Formal/CFO Approval + Procurement Handoff
+
+### Decision
+
+Implemented Procurement & Material Receiving V1's first approval gate:
+`PENDING_INITIAL_REVIEW` → (Management Review **and** Formal Approval,
+both `APPROVED`) → `READY_FOR_PRICING`, or either `REJECTED` →
+`REJECTED`. No Procurement pricing screen/workflow, no second
+(post-pricing) approval gate, no IPO, no Delivery Challan, no Receiving,
+no stock — those remain later checkpoints.
+
+### Key architectural decisions
+
+- **Two independent capabilities, one gate.** `demand.review`
+  (Management Review) and `demand.approve` (Formal/CFO Approval) are
+  separate capabilities — neither implies the other, and route-level
+  `requirePermission` enforces this before either service function is
+  ever reached. Both are required; the gate does not care which is
+  decided first.
+- **Action capability and record scope remain separate.** Holding
+  `demand.review` or `demand.approve` authorizes that action but does not
+  grant cross-site access. A capable Management Reviewer/Formal Approver
+  is authorized across every department **at their own site**; CEO or a
+  separately effective `demand.all_departments` scope grant reaches every
+  site. This mirrors Gate Pass's existing site-scope shape and is distinct
+  from Checkpoints 1-2's department-only creator model. Implemented as
+  `assertReviewActionAllowed`/`resolveDemandListScope`'s `SITE` tier in
+  `material-demand.authorization.js`, layered onto (not replacing) the
+  existing `OWN`/`ALL` tiers the creator's own view/edit/submit authority
+  still uses.
+- **First writer wins, enforced by the database, not just application
+  logic.** `material_demand_approvals` has `UNIQUE(demand_id, revision,
+  approval_type)` — a second decision attempt for an already-decided slot
+  fails at the database, giving concurrent-approval race safety for free
+  once combined with the existing `lockById` row-lock pattern (verified
+  under an actual concurrent request pair in
+  `material-demand-approval.test.js`, not just asserted).
+- **A single ordinary user cannot fill both slots on one Demand — CEO is a
+  deliberate, documented exception.** Enforced in
+  `recordApprovalDecision`: before inserting a decision, check whether the
+  *same actor* already recorded the *other* slot for this demand+revision;
+  reject unless `actor.role === "CEO"`. This was an explicit requirement
+  (not merely "don't accidentally allow it") — CEO's exceptional,
+  already-established platform authority is the one deliberate carve-out,
+  chosen over inventing a new "override" capability for something CEO
+  already implicitly has the authority to do end-to-end.
+- **Approval history is genuinely immutable, and revision-bound.**
+  `material_demand_approvals` reuses the existing `forbid_update_delete()`
+  trigger (same guarantee as `gate_pass_audit_log`) — no actor, including
+  CEO, can edit or delete a recorded decision. Every row records the
+  Demand's `revision` at decision time; no reopen/new-revision workflow
+  exists yet in this checkpoint, so "stale revision" rejection could not
+  be exercised end-to-end (there is no way yet to advance a Demand's
+  revision past `1`) — the binding itself is implemented and tested
+  (the recorded revision matches the demand's current revision), and
+  Checkpoint 4+'s reopen work will be what exercises the stale-revision
+  rejection path for real.
+- **Capability-driven recipient resolution replaces Checkpoint 2's
+  role+site mechanism entirely, resolving its documented gap.** New
+  `src/shared/notifications/recipient-resolver.js#resolveEligibleRecipients`
+  reuses `getUserProfileById`/`isProfileActive` — the single authoritative
+  effective-permissions computation `authenticate.js` already uses — to
+  answer "which active users are actually eligible right now?" rather than
+  writing a second, hand-rolled reverse-direction SQL query that could
+  diverge from it. One `IN_APP` row per eligible user, deduplicated across
+  capabilities, with a recipient-specific idempotency key. This is a
+  platform-reusable primitive (`shared/notifications/`, not
+  material-demand-specific) — see `docs/SECURITY.md` §11. It resolves the
+  CEO cross-site notification gap Checkpoint 2 explicitly flagged as
+  deferred: CEO eligibility is checked directly (`profile.role === "CEO"`),
+  never via a site-matched recipient row, so it no longer depends on which
+  site happens to match a CEO account's own `site_id`.
+- **`procurement.pricing` introduced now, deliberately minimal.** The
+  Ready-for-Pricing notification needed a real capability to route
+  through rather than a hardcoded role, but Checkpoint 4 (which defines
+  the actual pricing workflow) hasn't happened yet. CEO is the only
+  default holder; actual Procurement staff receive an explicit per-user
+  GRANT. ADMIN is not a default holder because system administration and
+  Procurement are separate responsibilities. No PROCUREMENT role is
+  invented here.
+- **Rejection is immediate and unilateral; positive history is never
+  erased.** Either slot's `REJECTED` moves the Demand straight to
+  `REJECTED` without waiting for or requiring the other slot's decision.
+  An already-recorded `APPROVED` decision on the other slot is preserved
+  as a permanent historical fact (append-only table, nothing to erase) —
+  proven in `material-demand-approval.test.js` by rejecting after a prior
+  approval and asserting the approval row is unchanged.
+
+### Bugs found and fixed during this checkpoint (before any commit)
+
+- **`lockById` never selected `revision`.** Every reference to
+  `demand.revision` in the service (idempotency keys, approval records)
+  was silently `undefined`. Found via a test assertion on a specific
+  recipient's idempotency key failing with count 0 instead of 1 — fixed by
+  adding `revision` to `lockById`'s column list. This affected Checkpoint
+  2's own idempotency keys too (they were already using
+  `demand.revision`, just never noticed because Checkpoint 2's tests only
+  checked aggregate row counts, not exact keys) — a good example of why
+  the "delta/exact-key" test design adopted below matters.
+- **`material_demand_audit_log.action` was `varchar(20)`**, sized for
+  Checkpoint 2's three short action codes. Checkpoint 3's decision-outcome
+  codes (`MANAGEMENT_REVIEW_APPROVED`, 26 characters) don't fit. Found via
+  a live `22001` (string data right truncation) Postgres error surfaced
+  through the full test run, not caught by any static check — fixed by
+  widening the column to `varchar(30)` in the same migration that adds
+  the new action codes to the `CHECK` constraint.
+- **Test design fix, not a product bug:** the original
+  "replayed Submit does not duplicate notifications" test from Checkpoint
+  2 asserted an exact row count of 2, which broke the moment recipient
+  routing became genuinely capability-driven — the real count depends on
+  how many actual users in the (shared, cross-test-file) test database
+  effectively hold `demand.review`/`demand.approve` at that site, which
+  is legitimately larger than the fixed `seedUsers()` set once other test
+  files' accumulated fixtures are included. Rewritten to assert the
+  correct invariant instead: a replay must not change the row count
+  (delta-based), and a specific known-eligible recipient's exact
+  idempotency key must exist exactly once. Every new Checkpoint 3
+  notification test follows this exact-key pattern rather than counting
+  all rows for an entity, precisely to avoid this class of fragility.
+
+### Status
+
+Accepted. Migration `1787414000000_material-demand-initial-approval.js`;
+new shared `src/shared/notifications/recipient-resolver.js`; backend
+module changes in `src/modules/material-demand/` (constants,
+authorization, repository, service, controller, routes); frontend
+`components/ApprovalPanel.jsx` + `DemandDetailPage.jsx` changes. New
+backend test file `backend/test/material-demand-approval.test.js` (34
+tests: capability separation, scope, gate completion in both orders,
+concurrency, replay, same-actor guard, rejection, revision binding,
+approval immutability, and recipient resolver GRANT/DENY/inactive/site/
+dedup behavior for both review and Procurement pricing). Full backend suite:
+440/441 (the one failure is the same pre-existing local-Postgres-host-auth
+artifact noted in every prior entry). Frontend: 223/223, ESLint clean,
+production/PWA build clean. `npm audit`: 0 vulnerabilities, both packages.
+Gate Pass and Workforce regression suites unaffected. Migration `up`
+verified (including a full down/up cycle immediately after authoring it,
+before any data existed under the new schema); a later `down` attempt —
+made only after the full test suite had already populated
+`material_demand_audit_log` rows using the new action codes — correctly
+fails with a `CHECK` constraint violation, the expected and correct
+Postgres behavior for downgrading a schema after data using its new
+capability already exists (not a defect; the same category of
+irreversibility `1787401000000_database-runtime-security-boundary.js` is
+explicit about). Procurement pricing through Closure (checkpoints 4-8)
+remain unimplemented per `docs/PROCUREMENT_RECEIVING_SPEC.md` §0.

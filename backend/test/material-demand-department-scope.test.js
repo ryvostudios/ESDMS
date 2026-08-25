@@ -297,18 +297,37 @@ test("a replayed Submit does not transition twice or duplicate notifications", a
   const first = await apiRequest(server.baseUrl, "POST", `/api/v1/demands/${id}/submit`, { token: teamLeadToken });
   assert.equal(first.status, 200);
 
+  // Recipient count depends on how many real users in this shared test
+  // database effectively hold demand.review/demand.approve at mainSite
+  // (accumulated across every other test file's fixtures) — not a fixed
+  // number this test can assert directly. What must hold regardless: at
+  // least one recipient, no duplicate row per recipient, and a replay
+  // never adds more.
+  const afterFirst = await pool.query(
+    "SELECT recipient_user_id FROM notification_outbox WHERE entity_type = 'MATERIAL_DEMAND' AND entity_id = $1",
+    [id],
+  );
+  assert.ok(afterFirst.rowCount > 0, "expected at least one Demand Submitted notification");
+  const recipientIds = afterFirst.rows.map((row) => row.recipient_user_id);
+  assert.equal(new Set(recipientIds).size, recipientIds.length, "no duplicate recipient rows after the first submit");
+
   const second = await apiRequest(server.baseUrl, "POST", `/api/v1/demands/${id}/submit`, { token: teamLeadToken });
   assert.equal(second.status, 409);
 
-  const notifications = await pool.query(
-    "SELECT recipient_role FROM notification_outbox WHERE entity_type = 'MATERIAL_DEMAND' AND entity_id = $1",
+  const afterReplay = await pool.query(
+    "SELECT recipient_user_id FROM notification_outbox WHERE entity_type = 'MATERIAL_DEMAND' AND entity_id = $1",
     [id],
   );
-  assert.equal(notifications.rowCount, 2);
-  assert.deepEqual(
-    notifications.rows.map((row) => row.recipient_role).sort(),
-    ["CEO", "UPPER_MANAGEMENT"],
+  assert.equal(afterReplay.rowCount, afterFirst.rowCount, "a rejected replay must not add or remove notification rows");
+
+  // The specific idempotency key for a known recipient (the Team Lead's
+  // own department has no reviewer, but CEO always holds demand.review —
+  // seedUsers' CEO is exactly one such guaranteed-eligible recipient).
+  const ceoRow = await pool.query(
+    "SELECT count(*)::int AS n FROM notification_outbox WHERE idempotency_key = $1",
+    [`demand:${id}:rev:1:initial-review:${users.ceo}`],
   );
+  assert.equal(ceoRow.rows[0].n, 1);
 });
 
 // --- Notification routing -------------------------------------------------

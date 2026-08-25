@@ -103,7 +103,7 @@ export async function updateNote(client, demandId, note) {
 
 export async function lockById(client, id) {
   const result = await client.query(
-    `SELECT id, demand_number, status, site_id, department_id, created_by_user_id
+    `SELECT id, demand_number, status, revision, site_id, department_id, created_by_user_id
      FROM material_demands WHERE id = $1 FOR UPDATE`,
     [id],
   );
@@ -156,10 +156,52 @@ export async function markSubmitted(client, id, status) {
   );
 }
 
-export async function listForScope(departmentId, { status, search, page, pageSize }) {
+export async function updateStatus(client, id, status) {
+  await client.query("UPDATE material_demands SET status = $2 WHERE id = $1", [id, status]);
+}
+
+// One row per (demand_id, revision, approval_type) — the unique
+// constraint in the migration makes this the DB-level source of truth for
+// "has this slot already been decided?", not just this lookup.
+export async function findApproval(client, demandId, revision, approvalType) {
+  const result = await client.query(
+    `SELECT id, demand_id, revision, approval_type, decision, actor_user_id, reason, created_at
+     FROM material_demand_approvals
+     WHERE demand_id = $1 AND revision = $2 AND approval_type = $3`,
+    [demandId, revision, approvalType],
+  );
+  return result.rows[0] || null;
+}
+
+export async function findApprovalsByDemandId(demandId) {
+  const result = await pool.query(
+    `SELECT a.id, a.revision, a.approval_type, a.decision, a.reason, a.created_at,
+            a.actor_user_id, u.full_name AS actor_name
+     FROM material_demand_approvals a
+     JOIN users u ON u.id = a.actor_user_id
+     WHERE a.demand_id = $1
+     ORDER BY a.created_at ASC`,
+    [demandId],
+  );
+  return result.rows;
+}
+
+export async function insertApproval(client, { demandId, revision, approvalType, decision, actorUserId, reason }) {
+  const result = await client.query(
+    `INSERT INTO material_demand_approvals (demand_id, revision, approval_type, decision, actor_user_id, reason)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, demand_id, revision, approval_type, decision, actor_user_id, reason, created_at`,
+    [demandId, revision, approvalType, decision, actorUserId, reason || null],
+  );
+  return result.rows[0];
+}
+
+export async function listForScope({ siteId, departmentId }, { status, search, page, pageSize }) {
   const conditions = [];
   const values = [];
 
+  values.push(siteId);
+  conditions.push(`($${values.length}::uuid IS NULL OR md.site_id = $${values.length})`);
   values.push(departmentId);
   conditions.push(`($${values.length}::uuid IS NULL OR md.department_id = $${values.length})`);
 

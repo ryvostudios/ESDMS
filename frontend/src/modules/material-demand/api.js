@@ -32,3 +32,11 @@ export function updateDemandDraft(id, input) {
 export function submitDemand(id) {
   return apiClient.post(`/demands/${id}/submit`, {});
 }
+
+export function recordManagementReview(id, body) {
+  return apiClient.post(`/demands/${id}/reviews`, body);
+}
+
+export function recordFormalApproval(id, body) {
+  return apiClient.post(`/demands/${id}/approvals`, body);
+}

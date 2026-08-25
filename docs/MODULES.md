@@ -194,7 +194,7 @@ see operational quantities is not automatically authorized to see prices.
 
 Current status:
 
-**Checkpoints 1-2 implemented.** Checkpoint 1 (Material Catalog Foundation)
+**Checkpoints 1-3 implemented.** Checkpoint 1 (Material Catalog Foundation)
 — Company Item, Department Material Catalog, and Units of Measure —
 backend module `backend/src/modules/material-catalog/`, frontend module
 `frontend/src/modules/material-catalog/`, migration
@@ -204,8 +204,16 @@ catalog, edit, and the `submit` transition into `PENDING_INITIAL_REVIEW`
 with a first-review notification — backend module
 `backend/src/modules/material-demand/`, frontend module
 `frontend/src/modules/material-demand/`, migration
-`1787413000000_material-demand-foundation.js`. Initial UM/CFO review
-through Closure (checkpoints 3-8) are specified in
+`1787413000000_material-demand-foundation.js`. Checkpoint 3 (Initial
+Management Review + Formal/CFO Approval + Procurement Handoff) — two
+independent, immutable approval records (`demand.review`/`demand.approve`,
+revision-bound), both required to reach `READY_FOR_PRICING`, either
+rejection reaching `REJECTED`, and capability-driven per-recipient
+notification routing (superseding Checkpoint 2's temporary role+site
+mechanism) — migration
+`1787414000000_material-demand-initial-approval.js`, new shared
+`src/shared/notifications/recipient-resolver.js`. Procurement pricing
+through Closure (checkpoints 4-8) are specified in
 `docs/PROCUREMENT_RECEIVING_SPEC.md` but **not implemented**.
 
 ---

@@ -202,36 +202,92 @@ notification fires within the same committed transaction (§10, §29).
 
 ---
 
-## 8. Notification — Demand Submitted (Checkpoint 3)
+## 8. Notification — Demand Submitted — **Implemented (Checkpoint 3)**
 
-Notifies authorized Upper Management reviewers, CFO, and any other
-explicitly configured management participant per current governance
-(§26), deep-linked to the exact Demand record, plus a Pending Actions
-surface if the existing architecture supports it. Built on the existing
-notification/outbox infrastructure (`src/shared/notifications/`) — no
-second notification framework, and no new push provider unless one is
-already integrated and separately authorized.
-
----
-
-## 9. First Management Review (Checkpoint 3)
-
-The need/quantity review before Procurement spends time pricing it.
-Authorized UM/CFO users may review requested materials, modify quantities
-where the approved business rule permits, remove/reject items,
-approve/reject the Demand, and record auditable comments/reasons where
-required. Not every UM account individually approves — the required
-review path is determined by capability (§26), and approvals are recorded
-as real workflow actions with history, not a status change alone. Once the
-required UM-level and CFO approvals are satisfied: `Demand → READY_FOR_PRICING`,
-and Procurement is notified automatically (§10).
+On submit, one `IN_APP` notification row is enqueued per eligible
+recipient — every active user who effectively holds `demand.review` or
+`demand.approve` (role grant or individual GRANT, minus individual DENY)
+and is in scope for this Demand's site (or CEO/`demand.all_departments`) —
+computed by the reusable
+`src/shared/notifications/recipient-resolver.js#resolveEligibleRecipients`
+(§26, §29). A user eligible through both capabilities (e.g. CEO) gets
+exactly one notification, not two. Each row carries `demandNumber` and
+`departmentId` in its payload and a recipient-specific idempotency key
+(`demand:{id}:rev:{revision}:initial-review:{userId}`), enqueued inside
+the same committed transaction as the `SUBMIT` transition — never before
+commit, never duplicated on replay. This supersedes Checkpoint 2's
+temporary role+site mechanism entirely, including its previously
+documented CEO cross-site gap (§29).
 
 ---
 
-## 10. Notification — Ready for Pricing (Checkpoint 3)
+## 9. First Management Review + Formal/CFO Approval — **Implemented (Checkpoint 3)**
 
-Procurement is notified and the Demand appears in Procurement's pending
-work. Only authorized Procurement users see pricing fields (§16).
+The need/quantity review before Procurement spends time pricing it — and
+the first of two approval gates in the full workflow (§6/§13: a **second**
+management/CFO gate exists after Procurement pricing, in a later
+checkpoint; the two are separate and this section only covers the first).
+
+Two independent, required decision slots, each capability-gated
+separately (§26):
+
+- **Management Review** (`demand.review`) — the operational/site-management
+  slot (Site Manager, Upper Management, or CEO by default). ADMIN has no
+  default management-review authority; a specifically authorized ADMIN or
+  other user may receive it through an explicit per-user GRANT.
+- **Formal Approval** (`demand.approve`) — the CFO/financial-authority
+  slot. No CFO role exists in ESDMS; this is CEO-only by default,
+  delegable to a specific Upper Management user via the existing per-user
+  GRANT mechanism (the same pattern as `users.create_um`/`manage_um`) —
+  see the owner decision in `docs/DECISIONS.md`.
+
+Each is recorded as an immutable `material_demand_approvals` row (never a
+bare status change) tied to the Demand's `id` **and current `revision`**,
+carrying the decision (`APPROVED`/`REJECTED`), the deciding actor, and a
+reason (required to reject, optional to approve). A slot can be decided
+exactly once — not every eligible reviewer approves, only one decision per
+slot, first writer wins (a DB `UNIQUE(demand_id, revision, approval_type)`
+constraint backs this, not just application logic). Order does not
+matter: either slot may be decided first.
+
+**A single ordinary user cannot fill both slots on the same Demand** —
+Management Review and Formal Approval are two distinct workflow
+responsibilities. CEO is a deliberate, documented exception (existing
+exceptional platform authority, not an accident of also holding both
+capabilities).
+
+Once **both** slots show `APPROVED`: `PENDING_INITIAL_REVIEW →
+READY_FOR_PRICING`, atomically, in the same transaction as the second
+approval, and Procurement is notified automatically (§10). If **either**
+slot is `REJECTED`: `PENDING_INITIAL_REVIEW → REJECTED` immediately —
+this does not wait for or require the other slot, but any already-recorded
+positive decision on the other slot is preserved, never erased. A decision
+can only be recorded while the Demand is `PENDING_INITIAL_REVIEW`; once it
+has moved to `REJECTED` or `READY_FOR_PRICING`, further attempts fail
+(409).
+
+The Demand creator cannot review or approve their own Demand merely by
+having created it — ownership grants no review/approval authority (§26).
+
+---
+
+## 10. Notification — Ready for Pricing — **Implemented (Checkpoint 3)**
+
+Once both initial approval slots are `APPROVED`, one `IN_APP` notification
+row is enqueued per active user effectively holding `procurement.pricing`
+at the Demand's site (or CEO) — the same
+`resolveEligibleRecipients`-based, capability-driven mechanism as §8, with
+its own recipient-specific idempotency key
+(`demand:{id}:rev:{revision}:ready-for-pricing:{userId}`). `procurement.pricing`
+is a minimal capability introduced now specifically so this notification
+has a real, capability-driven recipient rather than a hardcoded role —
+Checkpoint 4 defines the actual pricing screen/workflow and may
+rename/expand it. CEO is the only default holder; actual Procurement staff
+receive an explicit per-user GRANT. ADMIN is not a default holder (§26,
+`docs/DECISIONS.md`).
+The Demand detail route/UI reference is stable, but the pricing screen
+itself does not exist yet (§11) — this checkpoint deliberately does not
+build it.
 
 ---
 
@@ -476,13 +532,25 @@ cutover — not by retrofitting a computed balance onto V1 receiving data.
 - `material_demand_audit_log` — append-only, one row per create/edit/submit
   (not per-line), mirroring `gate_pass_audit_log`.
 
+### Implemented (Checkpoint 3)
+
+- `material_demand_approvals` — one immutable row per
+  (`demand_id`, `revision`, `approval_type`) — `MANAGEMENT_REVIEW` or
+  `FORMAL_APPROVAL`, each `APPROVED` or `REJECTED`, revision-bound (§9),
+  append-only via the existing `forbid_update_delete()` trigger.
+  `material_demands_status_check` widened to add `REJECTED` and
+  `READY_FOR_PRICING`; `material_demand_audit_log`'s action list widened
+  for the four decision outcomes plus `READY_FOR_PRICING`.
+
 ### Target for later checkpoints — not yet created
 
 - Demand Revision as its own structure (the `revision` column exists and
-  is reserved but unused beyond `1` — see §14).
-- Demand Review/Approval history.
-- Procurement: pricing data/procurement action, final financial approval,
-  IPO, IPO Line, purchasing line/progress.
+  is used — every approval records the revision it applied to (§9,
+  §14) — but no reopen/new-revision workflow exists yet to ever advance
+  it past `1`).
+- Procurement: pricing data/procurement action, final financial approval
+  (the **second** gate, after pricing — distinct from Checkpoint 3's
+  first gate), IPO, IPO Line, purchasing line/progress.
 - Delivery: Delivery Challan, Delivery Challan Line.
 - Receiving: Material Receipt, Receipt Line, department confirmation,
   temporary Admin custody/handover record.
@@ -534,15 +602,53 @@ view only. `EMPLOYEE` — view only ("no Demand creation by default unless
 explicitly granted" — an individual GRANT is the intended mechanism for a
 specifically designated employee Demand creator). `GATE_GUARD` — none.
 
+**Implemented (Checkpoint 3):**
+
+| Capability | Grants | Scope shape |
+|---|---|---|
+| `demand.review` | Record the Management Review decision on a submitted Demand | Site-wide (any department at the actor's own site), not department-locked |
+| `demand.approve` | Record the Formal/CFO Approval decision on a submitted Demand | Site-wide, same shape as `demand.review` |
+| `procurement.pricing` | Be notified of, and eventually act on, Demands ready for Procurement pricing | Site-wide |
+
+Action capability and record scope remain separate. Holding
+`demand.review`, `demand.approve`, or `procurement.pricing` authorizes the
+corresponding workflow action but never inherently grants cross-site
+access. A capable Management Reviewer or Formal Approver is authorized
+across every department at their own site — mirroring Gate Pass's existing
+site-scope shape — while CEO or a separately effective
+`demand.all_departments` scope grant reaches every site. This is a third
+scope tier layered onto the department-only model Checkpoints 1-2
+established, not a replacement for it — `demand.create`/`.edit`/`.submit`
+remain strictly department-owner-scoped (§9's "the creator cannot review
+their own Demand" holds regardless).
+
+Default role grants: `CEO` — `demand.review` + `demand.approve` +
+`procurement.pricing` (plus `demand.all_departments`, unchanged from
+Checkpoint 2). `SITE_MANAGER`, `UPPER_MANAGEMENT` — `demand.review` only.
+`ADMIN` holds none of these three by default. No role holds
+`demand.approve` by default except CEO — no CFO role exists in ESDMS;
+Formal Approval authority is delegated to a specific Upper Management
+user via the existing per-user GRANT mechanism, exactly like
+`users.create_um`/`manage_um`. CEO is also the only default
+`procurement.pricing` holder; actual Procurement staff receive an explicit
+per-user GRANT. System administration does not imply Procurement authority,
+and this checkpoint does not invent a PROCUREMENT global role
+(`docs/DECISIONS.md`).
+
+A single ordinary (non-CEO) user cannot record both the Management Review
+and the Formal Approval decision on the same Demand, even if individually
+granted both capabilities — enforced under the same row lock as the
+decision itself, not just by which capabilities happen to be assigned.
+CEO is a deliberate, documented exception (§9).
+
 **Target for later checkpoints** (capability names indicative, not final
 — define precisely when each checkpoint is designed):
 
-- Demand: review, approve (Checkpoint 3 — distinct from the implemented
-  `demand.edit`/`demand.submit`, which only cover the creator's own draft
-  workflow).
 - Procurement: view assigned approved demands, enter pricing, view prices,
-  submit pricing, record purchasing, view actual prices.
-- Financial approval: a distinct capability from ordinary Procurement
+  submit pricing, record purchasing, view actual prices — refining
+  `procurement.pricing` above into real, separately-gated actions.
+- Financial approval (the **second** gate, after pricing): a distinct
+  capability from `demand.approve` above and from ordinary Procurement
   authority (mirrors the existing `users.create_um`/`users.manage_um`
   pattern — role alone never implies the higher authority).
 - IPO: view, cancel where authorized, configure numbering only through
@@ -574,7 +680,13 @@ authorization model.
 **Implemented:** `backend/test/material-catalog-department-scope.test.js`
 (Checkpoint 1); `backend/test/material-demand-department-scope.test.js`
 (Checkpoint 2 — department isolation, site isolation, capability/DENY-wins
-checks, and Draft-integrity checks together).
+checks, and Draft-integrity checks together);
+`backend/test/material-demand-approval.test.js` (Checkpoint 3 — capability
+separation between `demand.review`/`demand.approve`, site-scoped review
+authority, the same-actor-both-slots guard and its CEO exception, gate
+completion in both orders, concurrent-approval race safety, rejection
+history preservation, revision binding, and the capability-driven
+recipient resolver's GRANT/DENY/inactive/site/dedup behavior).
 
 ---
 
@@ -595,11 +707,12 @@ is never fetched and merely hidden by React.
 Notifications are workflow side effects of successfully **committed**
 transitions — never sent before the corresponding transaction commits
 (mirrors the existing Gate Pass approval → outbox-in-same-transaction
-pattern). **`DEMAND SUBMITTED` is implemented (Checkpoint 2)**; everything
-else below remains target design for checkpoints 3-7:
+pattern). **`DEMAND SUBMITTED` and `INITIAL REQUIRED APPROVALS COMPLETE`
+are implemented (Checkpoints 2-3)**; everything else below remains target
+design for checkpoints 4-7:
 
 ```text
-DEMAND SUBMITTED                       → notify UM + CFO
+DEMAND SUBMITTED                       → notify eligible reviewers + approvers
 INITIAL REQUIRED APPROVALS COMPLETE    → notify Procurement: READY FOR PRICING
 PROCUREMENT PRICING SUBMITTED          → notify UM + CFO: FINAL APPROVAL REQUIRED
 FINAL APPROVAL COMPLETE                → atomically generate IPO
@@ -612,27 +725,27 @@ DISCREPANCY / REJECTION                → notify responsible Department + Procu
                                           + required management authority
 ```
 
-**Implementation note (Checkpoint 2):** `DEMAND SUBMITTED` is routed by
-role + site — the same mechanism every existing ESDMS notification uses
-(Gate Pass's `GATE_PASS_APPROVED` → `recipientRole: "GATE_GUARD"`): one
-`IN_APP` row targeting `UPPER_MANAGEMENT` at the Demand's site, one
-targeting `CEO` at the Demand's site. This is correct for
-`UPPER_MANAGEMENT` (already site-scoped by default, §26). It is a known,
-narrow, deliberately deferred gap for `CEO` specifically: CEO's authority
-spans every site, but a CEO account's own `site_id` only matches a Demand
-submitted at that CEO's home site — in a genuinely multi-site deployment,
-a Demand at a site with no matching CEO `recipient_site_id` would not
-notify CEO in-app (CEO can still find it by browsing; their *view*
-authority is unaffected, only the notification). The correct fix is a
-capability-driven (not role-string-driven) notification routing
-mechanism, deferred to Checkpoint 3 alongside the real
-review/final-approval capabilities — see
-`backend/src/modules/material-demand/material-demand.service.js`'s
-`submitDemand` for the exact code comment, and `docs/DECISIONS.md`.
+**Implementation note (Checkpoint 3 — supersedes Checkpoint 2's
+role+site mechanism).** Both notification events above are routed by
+`src/shared/notifications/recipient-resolver.js#resolveEligibleRecipients`
+(§8, §10, §26, `docs/SECURITY.md` §11) — one `IN_APP` row per real,
+currently-eligible active user (effective capability holder, correct
+site/CEO scope), not one row per role name. **This resolves Checkpoint
+2's previously documented CEO cross-site gap**: CEO is always eligible
+regardless of site (checked directly, not via a site-matched recipient
+row), so a CEO account is notified about every Demand company-wide
+without depending on which site happens to match their own `site_id`.
+Recipient-specific idempotency keys
+(`demand:{id}:rev:{revision}:initial-review:{userId}` and
+`...:ready-for-pricing:{userId}`) prevent a replayed transition from
+duplicating any individual recipient's notification, and deduplicate a
+user eligible through more than one capability to exactly one row.
 
 Idempotency/uniqueness (the existing `notification_outbox` idempotency-key
-pattern) prevents a retried transition from creating a duplicate IPO or a
-duplicate notification.
+pattern, plus `material_demand_approvals`' own `UNIQUE(demand_id, revision,
+approval_type)` constraint for the approval decisions themselves) prevents
+a retried transition from creating a duplicate IPO, a duplicate approval
+record, or a duplicate notification.
 
 ---
 
@@ -643,19 +756,31 @@ field), each following the existing Gate Pass pattern: lock the row,
 validate the transition against an explicit allowed-transition table,
 apply, audit — all in one transaction.
 
-**Demand** (indicative; `DRAFT → PENDING_INITIAL_REVIEW` is implemented,
-everything after it is not):
+**Demand** (indicative; `DRAFT → PENDING_INITIAL_REVIEW → READY_FOR_PRICING`
+and `PENDING_INITIAL_REVIEW → REJECTED` are implemented, everything from
+`PENDING_FINAL_APPROVAL` onward is not):
 ```text
 DRAFT → PENDING_INITIAL_REVIEW → READY_FOR_PRICING → PENDING_FINAL_APPROVAL
       → APPROVED → IPO_GENERATED → IN_PURCHASING → RECEIVING → COMPLETED
 ```
-plus controlled `REJECTED`, `CANCELLED`, and a reopen/revision path (§14).
-The implemented `submit` transition follows the exact
-lock-then-validate-then-transition-then-audit pattern this section
-describes: `backend/src/modules/material-demand/material-demand.service.js`
-locks the row, checks `definition.from.includes(status)`, checks line
-count, updates status + `submitted_at`, writes one audit row, and enqueues
-the notification — all inside one transaction.
+plus controlled `REJECTED` (implemented — reachable from
+`PENDING_INITIAL_REVIEW` only, for now), `CANCELLED`, and a
+reopen/revision path (§14, not yet implemented). The implemented `submit`
+transition follows the exact lock-then-validate-then-transition-then-audit
+pattern this section describes:
+`backend/src/modules/material-demand/material-demand.service.js` locks
+the row, checks `definition.from.includes(status)`, checks line count,
+updates status + `submitted_at`, writes one audit row, and enqueues the
+notification — all inside one transaction. `READY_FOR_PRICING`/`REJECTED`
+are not plain declarative `TRANSITIONS` entries (they depend on *two*
+independent approval records, not a single action) — the same
+service's `recordApprovalDecision` locks the row, validates status +
+scope, enforces the slot-already-filled and same-actor-both-slots guards,
+inserts the immutable approval record, writes its own audit row, and only
+then evaluates whether both slots are `APPROVED` (→ transition + a second
+audit row + Procurement notification, all still in the one transaction) or
+either is `REJECTED` (→ immediate transition, no further evaluation
+needed).
 
 **IPO** (indicative): `GENERATED → ACKNOWLEDGED → PURCHASING →
 PURCHASE_COMPLETE/PARTIAL → COMPLETED`, plus authorized cancellation.
@@ -714,14 +839,27 @@ Draft edit), the department catalog picker
 Checkpoint 1's `AddMaterialDialog` directly for "+ Add Material" rather
 than a second material-creation implementation), and the Demand Detail
 page (`DemandDetailPage.jsx` — read-only once `PENDING_INITIAL_REVIEW`,
-with an explicit "pending management review" notice; Edit/Submit actions
-only while `DRAFT`). Reachable via a capability-gated "Demands" nav item.
+with an explicit status-specific notice; Edit/Submit actions only while
+`DRAFT`). Reachable via a capability-gated "Demands" nav item.
+
+**Implemented (Checkpoint 3):** the Initial Approval panel on
+`DemandDetailPage.jsx` (`components/ApprovalPanel.jsx`) — two independent
+slots (Management Review, Formal Approval), each showing either its
+recorded decision (decider name, timestamp, reason if rejected) or
+"Pending" with Approve/Reject actions for an eligible pending
+reviewer/approver only. Approve reuses `ConfirmActionDialog`; Reject
+reuses `ReasonActionDialog` (both existing shared components, no new
+dialog primitive). Partial progress is always visible — one slot decided
+and one pending is never presented as if the whole Demand were approved.
+No pricing screen, no IPO, no Delivery Challan, no Receiving UI — the
+Demand Detail page's `READY_FOR_PRICING` notice states that pricing is
+next, without linking to a page that doesn't exist yet.
 
 **Target for later checkpoints:** Department — Receiving/Pending
 Confirmation. Procurement — Ready for Pricing, Pricing Detail, Ready for
 Purchase, IPO Detail, Purchase Progress, Delivery Challan. Management —
-Pending Initial Review, Pending Final Approval, Demand Detail/revision
-history. Receiving — Receive DC, Pending Department Handover, Pending TL
+Pending Final Approval (the second gate, after pricing), revision history.
+Receiving — Receive DC, Pending Department Handover, Pending TL
 Confirmation, Completed Receiving. All navigation capability-controlled.
 
 ---

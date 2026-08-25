@@ -6,6 +6,11 @@ const ACTION_LABEL = {
   CREATE: "Created",
   EDIT_DRAFT: "Draft edited",
   SUBMIT: "Submitted for review",
+  MANAGEMENT_REVIEW_APPROVED: "Management Review approved",
+  MANAGEMENT_REVIEW_REJECTED: "Management Review rejected",
+  FORMAL_APPROVAL_APPROVED: "Formal Approval approved",
+  FORMAL_APPROVAL_REJECTED: "Formal Approval rejected",
+  READY_FOR_PRICING: "Ready for pricing",
 };
 
 export function AuditTimeline({ entries }) {
@@ -20,8 +25,9 @@ export function AuditTimeline({ entries }) {
           <div className={styles.content}>
             <p className={styles.action}>{ACTION_LABEL[entry.action] || formatEnumLabel(entry.action)}</p>
             <p className={styles.meta}>
-              {entry.actorName} · {formatDateTime(entry.createdAt)}
+              {entry.actor_name} · {formatDateTime(entry.created_at)}
             </p>
+            {entry.metadata?.reason && <p className={styles.reason}>“{entry.metadata.reason}”</p>}
           </div>
         </li>
       ))}

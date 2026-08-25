@@ -49,3 +49,10 @@
   color: var(--color-text-muted);
   margin-top: var(--space-1);
 }
+
+.reason {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+  font-style: italic;
+}

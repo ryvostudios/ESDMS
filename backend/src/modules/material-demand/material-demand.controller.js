@@ -1,6 +1,6 @@
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
-import { createDemandSchema, updateDraftSchema, listQuerySchema } from "./material-demand.validation.js";
+import { createDemandSchema, updateDraftSchema, listQuerySchema, decisionSchema } from "./material-demand.validation.js";
 import * as service from "./material-demand.service.js";
 
 function parseBody(schema, body) {
@@ -36,6 +36,20 @@ export const updateDraft = asyncHandler(async (req, res) => {
 
 export const submit = asyncHandler(async (req, res) => {
   await service.submitDemand(req.user, req.params.id);
+  const result = await service.getDemandDetail(req.user, req.params.id);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const recordReview = asyncHandler(async (req, res) => {
+  const input = parseBody(decisionSchema, req.body);
+  await service.recordManagementReview(req.user, req.params.id, input);
+  const result = await service.getDemandDetail(req.user, req.params.id);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const recordApproval = asyncHandler(async (req, res) => {
+  const input = parseBody(decisionSchema, req.body);
+  await service.recordFormalApproval(req.user, req.params.id, input);
   const result = await service.getDemandDetail(req.user, req.params.id);
   res.status(200).json({ success: true, data: result });
 });
