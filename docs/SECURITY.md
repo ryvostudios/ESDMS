@@ -330,7 +330,7 @@ The application must never connect to its production database over an unencrypte
 The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
 
 - `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
-- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 36 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
+- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 43 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
 
@@ -349,11 +349,15 @@ The migration `1787405000000_workforce-schema-foundation.js` (Workforce/Employee
 
 `governance_audit_log` (§6.1) was also widened (migrations `1787406000000_workforce-protected-audit.js` and `1787408000000_workforce-release-hardening.js`) with Workforce target columns and action codes including report export, bulk ZIP export, and completed XLSX import. The release-hardening migration adds no table: the boundary remains 36 application tables (37 including owner-only `pgmigrations`).
 
+The migration `1787412000000_material-catalog-foundation.js` (Procurement & Material Receiving V1, Checkpoint 1 — see `docs/DECISIONS.md` and `docs/PROCUREMENT_RECEIVING_SPEC.md`) adds 3 more public tables (`units_of_measure`, `company_items`, `department_material_catalog`), bringing the total to 39 (40 with `pgmigrations`). Every one gets RLS enabled in the same migration and the same runtime grant/policy in `scripts/provision-db-roles.sql`; none carries additional DB-level protection beyond RLS — this checkpoint has no immutable/history table.
+
+The migration `1787413000000_material-demand-foundation.js` (Procurement & Material Receiving V1, Checkpoint 2 — Department Demand List foundation, see `docs/DECISIONS.md` and `docs/PROCUREMENT_RECEIVING_SPEC.md`) adds 4 more public tables (`material_demand_number_counters`, `material_demands`, `material_demand_lines`, `material_demand_audit_log`), bringing the total to 43 (44 with `pgmigrations`). Every one gets RLS enabled in the same migration and the same runtime grant/policy in `scripts/provision-db-roles.sql`. `material_demand_audit_log` reuses the existing `forbid_update_delete()` trigger (same append-only guarantee as `gate_pass_audit_log`); `material_demands` reuses `forbid_delete()` and `set_updated_at()`. No new trigger function was introduced.
+
 The Workforce trigger functions (`employee_contracts_enforce_immutability`, `employee_contracts_forbid_finalized_delete`, `employee_business_history_guard`, and `employee_documents_guard_update`) are ordinary `LANGUAGE plpgsql` functions with no `SECURITY DEFINER` (same as the existing `forbid_update_delete()`/`forbid_delete()`) and an explicit `SET search_path = pg_catalog, public`. They receive no direct `EXECUTE` grant to application/browser roles and are invoked only through their table triggers.
 
 PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.
 
-`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 36-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 43-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
 
 ```sh
 read -rs ESDMS_RUNTIME_PASSWORD
@@ -559,3 +563,57 @@ effective sets, with DENY always winning as described in §6.1.
   This is defense in depth — the real guarantee is structural: custom-field
   values live in their own table with no code path into salary, contract,
   or permission logic at all.
+
+---
+
+## 14. Audit / Log Management Authority — Platform Invariant
+
+This is a platform-wide invariant, binding on every module's audit/history
+infrastructure (existing and future — Gate Pass's `gate_pass_audit_log`,
+Workforce's `governance_audit_log`/business-history removal, and any later
+Procurement/Receiving audit log per `docs/PROCUREMENT_RECEIVING_SPEC.md`
+§37), not specific to any one module:
+
+- **Ordinary users cannot modify or delete historical logs.** Every audit
+  table is append-only at the application layer (no `UPDATE`/`DELETE`
+  route exists for one), and the existing `forbid_update_delete()`
+  DB trigger (reused, not reinvented, by every audit table added so far)
+  makes this a structural guarantee, not merely an application convention.
+- **Holding Upper Management does not automatically grant log-management
+  authority.** This mirrors the same "action authority is separate from
+  scope authority" principle already established for `users.create_um`/
+  `users.manage_um` (§6.1: "holding UPPER_MANAGEMENT itself never implies
+  it") and reaffirmed for `material_catalog.all_departments` (§1 of the
+  Procurement & Material Receiving spec — UM's baseline in every module is
+  the conservative, explicitly-enumerated set established in
+  `docs/DECISIONS.md`'s Workforce entries, never a role-implied broad
+  grant).
+- **CEO holds exceptional log-management authority by default.** The
+  existing precedent is `business_history.remove` — "CEO; delegable
+  per-user" (`1787405000000_workforce-schema-foundation.js`) — CEO-only
+  logical removal, requiring password re-confirmation, itself recorded in
+  `governance_audit_log` as a forensic, protected event (§6.1).
+- **CEO may delegate a specific log-management capability to a specific
+  Upper Management user** through the existing per-user GRANT/DENY
+  override mechanism (`user_permission_overrides`) — never by changing a
+  role's baseline, and never inherited by every UM member. Delegation is
+  **revocable** the same way any other individual grant is (a later DENY,
+  or removing the override).
+- **Exceptional log actions remain traceable.** A CEO (or a delegated UM
+  member) performing a log-management action is itself audited — the
+  action is never invisible, matching the existing "a blocked
+  privilege-escalation attempt is audited before the 403 is returned"
+  posture (§6.1) applied to successful exceptional actions as well as
+  blocked ones.
+- **Prefer correction/reversal/history-preserving patterns over silent
+  destructive rewriting** wherever the domain allows it — logical removal
+  (flag + reason + timestamp, never a real `DELETE`) is the default shape;
+  a genuine hard delete is reserved for cases the domain cannot express any
+  other way, and remains structurally blocked by the audit trigger
+  regardless of actor, including CEO and a direct SQL session (§8.2).
+- **This invariant does not weaken any existing audit immutability or
+  security protection.** It documents the intended authority model for
+  *managing* logs (who may ever touch one, and how); it does not loosen
+  §8.2's DB-level append-only guarantees, and no new log-management UI or
+  endpoint is introduced merely by documenting this invariant — one is
+  built only when a specific module's checkpoint actually requires it.

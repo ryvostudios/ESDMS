@@ -405,6 +405,10 @@ Supabase Storage project/bucket, and a real Meta WhatsApp integration
 (currently a simulated provider only) — see `docs/SECURITY.md` §5.2, §9,
 §11 and `README.md`.
 
-Inventory and all other modules listed in `docs/MODULES.md` remain
-unstarted, per the "Inventory must not begin before Gate Pass MVP
-stabilization" rule above.
+Procurement & Material Receiving V1 (Checkpoint 1: Material Catalog
+Foundation) is implemented — see `docs/PROCUREMENT_RECEIVING_SPEC.md` and
+`docs/DECISIONS.md`'s "V1 Scope Narrowed to Procurement & Material
+Receiving" entry. Full Inventory (stock ledger/balances) and all other
+modules listed in `docs/MODULES.md` remain unstarted, per the "Inventory
+must not begin before Gate Pass MVP stabilization" rule above and the
+further scope split recorded in `docs/DECISIONS.md`.

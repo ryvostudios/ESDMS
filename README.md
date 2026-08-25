@@ -49,8 +49,11 @@ and out of company sites — request/approval workflow, guard exit/return
 verification via QR, PDF generation, and WhatsApp delivery to the driver
 (demo provider; no real WhatsApp credentials configured).
 
-Inventory development must not begin until the Gate Pass MVP has reached a
-stable, reviewed checkpoint.
+Full Inventory development (stock ledger/balances) must not begin until
+the Gate Pass MVP has reached a stable, reviewed checkpoint and
+Procurement & Material Receiving V1 has been adopted — see
+`docs/PROCUREMENT_RECEIVING_SPEC.md` and `docs/DECISIONS.md` for the V1
+scope currently in progress (Checkpoint 1: Material Catalog Foundation).
 
 ## Technology
 
@@ -97,7 +100,8 @@ eset-digital-management-system/
 │   ├── SECURITY.md
 │   ├── MODULES.md
 │   ├── DECISIONS.md
-│   └── GATE_PASS_SPEC.md
+│   ├── GATE_PASS_SPEC.md
+│   └── PROCUREMENT_RECEIVING_SPEC.md
 ├── AGENTS.md
 ├── README.md
 └── .gitignore

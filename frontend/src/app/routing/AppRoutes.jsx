@@ -21,6 +21,10 @@ import { WorkforceDashboardPage } from "../../modules/workforce/pages/WorkforceD
 import { WorkforceReportsPage } from "../../modules/workforce/pages/WorkforceReportsPage.jsx";
 import { WorkforceOperationsPage } from "../../modules/workforce/pages/WorkforceOperationsPage.jsx";
 import { GovernancePage } from "../../modules/workforce/pages/GovernancePage.jsx";
+import { MaterialCatalogPage } from "../../modules/material-catalog/pages/MaterialCatalogPage.jsx";
+import { DemandListPage } from "../../modules/material-demand/pages/DemandListPage.jsx";
+import { DemandFormPage } from "../../modules/material-demand/pages/DemandFormPage.jsx";
+import { DemandDetailPage } from "../../modules/material-demand/pages/DemandDetailPage.jsx";
 
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
@@ -81,6 +85,46 @@ export function AppRoutes() {
         <Route path="/workforce/operations" element={<PermissionRoute permissions={["leave.approve", "employee_documents.view", "rotation.adjust"]}><WorkforceOperationsPage /></PermissionRoute>} />
         <Route path="/workforce/reports" element={<PermissionRoute permissions={["workforce.reports.view", "workforce.export"]} requireAll><WorkforceReportsPage /></PermissionRoute>} />
         <Route path="/governance" element={<PermissionRoute permissions={["users.view"]}><GovernancePage /></PermissionRoute>} />
+        <Route
+          path="/material-catalog"
+          element={
+            <PermissionRoute permissions={["material_catalog.view", "material_catalog.manage"]}>
+              <MaterialCatalogPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/demands"
+          element={
+            <PermissionRoute permissions={["demand.view", "demand.create"]}>
+              <DemandListPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/demands/new"
+          element={
+            <PermissionRoute permissions={["demand.create"]}>
+              <DemandFormPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/demands/:id/edit"
+          element={
+            <PermissionRoute permissions={["demand.edit"]}>
+              <DemandFormPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/demands/:id"
+          element={
+            <PermissionRoute permissions={["demand.view"]}>
+              <DemandDetailPage />
+            </PermissionRoute>
+          }
+        />
 
         <Route
           path="/gate-passes"

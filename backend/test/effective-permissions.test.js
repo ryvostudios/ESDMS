@@ -50,7 +50,18 @@ test("a user with no overrides has exactly their role's permissions", async () =
 
   assert.deepEqual(
     [...permissions].sort(),
-    ["gate_pass.create", "gate_pass.edit_draft", "gate_pass.submit", "gate_pass.view_own"],
+    [
+      "demand.create",
+      "demand.edit",
+      "demand.submit",
+      "demand.view",
+      "gate_pass.create",
+      "gate_pass.edit_draft",
+      "gate_pass.submit",
+      "gate_pass.view_own",
+      "material_catalog.manage",
+      "material_catalog.view",
+    ],
   );
 });
 

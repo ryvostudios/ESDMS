@@ -2006,3 +2006,271 @@ catalog-context findings fixed above). ESDMS-039 (query-string logging) was
 explicitly out of scope for a route rewrite per instruction; the safe
 logger above already ensures request query strings are never logged
 verbatim as part of this pass's redaction work.
+
+## 2026-08-25 — V1 Scope Narrowed to Procurement & Material Receiving (No Inventory Balance Yet)
+
+### Decision
+
+The first Inventory-adjacent module is **not** the full Inventory design
+explored in Phase I (`docs/DECISIONS.md`'s earlier Inventory-must-wait
+entry; see also the standalone Phase I domain/MVP specification produced
+for owner review). Instead, V1 digitizes exactly:
+
+```text
+Department Material Catalog
+        ↓
+Demand List
+        ↓
+UM/CFO review
+        ↓
+Procurement pricing
+        ↓
+final approval
+        ↓
+IPO (auto-generated)
+        ↓
+purchasing
+        ↓
+Delivery Challan
+        ↓
+material receiving
+        ↓
+department confirmation / closure
+```
+
+Explicitly **not** built in this V1: current stock balances, an Available
+Inventory calculation, a stock ledger, FIFO/batch consumption, Material
+Issue, material usage, material return, stock adjustment, stock transfer,
+warehouse/bin management, or any low-stock calculation derived from stock
+transactions. Receiving V1 records **what was received**, never a computed
+current-stock quantity — see `docs/PROCUREMENT_RECEIVING_SPEC.md` §24 ("No
+Inventory Balance in V1"). The full Inventory module (ledger, balances,
+issue/usage/return) remains a distinct, later project phase, introduced
+only after an authoritative physical opening-stock count establishes a
+cutover point.
+
+The authoritative business specification for this scope is
+`docs/PROCUREMENT_RECEIVING_SPEC.md` — it supersedes the placeholder
+language in `docs/MODULES.md` §4-§6 the same way `docs/GATE_PASS_SPEC.md`
+superseded the original Gate Pass placeholder.
+
+### Reason
+
+Owner instruction: get the Demand + Procurement + Receiving workflow
+digitized and adopted by departments first, before building the more
+complex stock-ledger machinery on top of it. This also directly satisfies
+`docs/MODULES.md` §4's fourth Inventory prerequisite ("shared interfaces
+required by Inventory have been identified") without requiring the
+heavier ledger/balance design to be implemented speculatively ahead of
+real operational feedback — see `docs/DECISIONS.md`'s "Inventory Must Not
+Begin Before Gate Pass Stabilization" entry and the Phase I specification's
+own MVP-boundary reasoning (§20 there: "smallest useful end-to-end slice",
+now further narrowed by this explicit owner decision).
+
+### Key structural decisions carried into the schema/authorization design
+
+- **Every department owns its own material workflow.** Demand Lists,
+  department material catalogs, and receiving records are department-
+  scoped; Admin is not a universal approver/receiver. Enforced server-side
+  via `material-catalog.authorization.js`'s `resolveCatalogDepartmentId`/
+  `resolveListDepartmentScope`/`assertCatalogEntryManageable`, mirroring
+  `workforce.authorization.js`'s `employeeSiteFilter` shape but keyed on
+  department instead of site — and, unlike site_id (`NOT NULL` on every
+  user), explicitly handling the case where `department_id` is null (an
+  ADMIN/SITE_MANAGER/GATE_GUARD-style actor with no department must see
+  nothing, never "everything", since a null scope would otherwise be
+  ambiguous with a genuine company-wide grant).
+- **Company Item vs. Department Material Catalog.** A Company Item is the
+  global physical/material identity (so a future Inventory module never
+  has to reconcile "the same physical material" recorded as unrelated
+  objects per department); a Department Material Catalog entry is a
+  department-scoped, reusable reference to one, carrying that
+  department's own default Unit of Measure. Duplicate prevention is a
+  search-then-warn UX, not a hard uniqueness constraint — the same
+  "warns, not hard-blocks" convention Employee duplicate detection
+  already established.
+- **Gate Pass and Delivery Challan remain separate** (existing decision,
+  reaffirmed): receiving does not depend on the Gate Guard, who continues
+  to have zero procurement/inventory access and zero price visibility.
+- **WhatsApp is not replaced in V1.** Delivery Challan/material-photo
+  sharing continues over WhatsApp operationally; ESDMS is the
+  authoritative workflow/history system but does not duplicate that
+  communication channel in this phase.
+
+### Status
+
+Accepted. Checkpoint 1 (Material Catalog Foundation — Company Item,
+Department Material Catalog, Units of Measure, and the `material_catalog.*`
+capability set) is implemented: migration
+`1787412000000_material-catalog-foundation.js`, backend module
+`src/modules/material-catalog/`, frontend module
+`frontend/src/modules/material-catalog/`. Demand List, UM/CFO review,
+Procurement pricing/IPO, Delivery Challan, and Receiving remain later
+checkpoints per `docs/PROCUREMENT_RECEIVING_SPEC.md`'s build sequence —
+none of their schema/routes/UI exist yet. Existing Gate Pass and Workforce
+behavior is unchanged; the full backend and frontend suites pass except
+the same pre-existing local-Postgres-host-auth artifact noted in every
+prior entry.
+
+### Checkpoint 1 Finalization (same day)
+
+Owner review caught one default-grant inconsistency before this migration
+was ever committed: `UPPER_MANAGEMENT` had been given
+`material_catalog.all_departments` by default, contradicting the already-
+established Workforce precedent that UM's baseline is deliberately
+conservative and never includes a broad-scope permission (`workforce.all_sites`
+is likewise absent from UM's default set — see
+`1787405000000_workforce-schema-foundation.js`'s `ROLE_PERMISSIONS`
+comment). Corrected to `UPPER_MANAGEMENT: ["material_catalog.view"]` only,
+in the still-uncommitted migration (no separate fix-up migration needed).
+Two tests added proving the correction: UM cannot create in any
+department, and UM cannot view another department's catalog by requesting
+it explicitly (the same request a genuine all-departments actor — CEO — is
+allowed to make).
+
+A second, independent bug was found while adding a test for the
+"similar names warn, don't block" requirement: the duplicate-warning
+search reused the type-ahead search's one-directional `ILIKE` (existing
+item name contains the query), so a new candidate name like "Cement Grade
+A" never matched the shorter existing "Cement" it should have warned
+about. Fixed with a dedicated `findSimilarCompanyItems` repository
+function using a bidirectional `ILIKE` match, kept separate from the
+type-ahead `searchCompanyItems` function (whose one-directional semantics
+remain correct for that endpoint).
+
+`docs/PROCUREMENT_RECEIVING_SPEC.md` gained three new sections (§35 Formal
+PDF Documents, §36 Excel/Historical Data Export, §37 Audit/Log Management
+Authority — all target design for later checkpoints, nothing implemented
+in Checkpoint 1) and `docs/SECURITY.md` gained a new §14 documenting the
+audit/log-management authority invariant as platform-wide, not
+module-specific — CEO exceptional authority, per-user-delegable to a
+specific UM member via the existing GRANT/DENY mechanism, never inherited
+by UM as a whole, itself audited, and never weakening the existing
+append-only DB-trigger guarantees.
+
+Full backend suite after this correction: 388/389 pass — deduping the
+duplicate `role_permissions` cleanup loop in the migration's `down()` (the
+FK already cascades, per `1787347983007_rbac-foundation.js`) and the
+correction above did not disturb the one pre-existing, unrelated
+local-Postgres-host-auth failure. Frontend unaffected (no frontend files
+touched in this correction pass).
+
+## 2026-08-25 — Checkpoint 2: Department Demand List Foundation
+
+### Decision
+
+Implemented Procurement & Material Receiving V1's Checkpoint 2 per
+`docs/PROCUREMENT_RECEIVING_SPEC.md`: department Demand List creation from
+the department's own Material Catalog, Draft edit, and the `submit`
+transition into `PENDING_INITIAL_REVIEW` with a first-review notification.
+No approval action, no pricing, no IPO, no Delivery Challan, no Receiving,
+no stock — those remain Checkpoint 3+.
+
+### Key architectural decisions
+
+- **Historical snapshot strategy** (required by the checkpoint's
+  historical-design question: a future item rename or catalog archive must
+  not corrupt an old Demand's meaning). A Demand line stores
+  `item_name_snapshot`, `uom_code_snapshot`, `uom_name_snapshot` captured
+  at creation time, alongside a live `catalog_entry_id` FK. Display always
+  prefers the snapshot. Only name + UOM are duplicated — not description or
+  any other catalog field — matching the instruction not to blindly
+  duplicate everything. Line-to-catalog-entry ownership (a line must
+  belong to the exact department its parent Demand belongs to) is pinned
+  by a composite FK against a new `department_material_catalog_id_department_id_key`
+  unique constraint, the same pattern `db-relational-coherence.js`
+  established for `gate_pass_files`.
+- **Demand numbering** mirrors Gate Pass exactly: a year-keyed
+  `material_demand_number_counters` counter table, format
+  `DL-YYYY-NNNNNN`, generated server-side inside the create transaction.
+  No configurable numbering system (that's IPO's later, separate concern
+  per the Phase I specification) — kept deliberately simple for V1.
+- **`shared/authorization/department-scope.js` extracted.** Checkpoint 1's
+  `material-catalog.authorization.js` had a department-scope
+  implementation (the "department_id is nullable, unlike site_id, so null
+  can't mean both 'unrestricted' and 'no department'" fix). Material
+  Demand needed the identical rules, so the logic was extracted into a
+  generic, permission-code-parameterized shared helper; both modules'
+  `*.authorization.js` files are now thin pins over it
+  (`resolveCatalogDepartmentId`/`resolveDemandDepartmentId`, etc.). Refactor
+  verified behavior-preserving by re-running Checkpoint 1's full test suite
+  unchanged before writing any Checkpoint 2 code — all 16 tests still
+  passed with zero modification.
+- **Notification routing: role + site, same mechanism as every existing
+  ESDMS notification** (Gate Pass's `GATE_PASS_APPROVED` →
+  `recipientRole: "GATE_GUARD"`). `DEMAND SUBMITTED` enqueues one `IN_APP`
+  row for `UPPER_MANAGEMENT` and one for `CEO`, both scoped to the
+  Demand's `site_id`, in the same transaction as the status change.
+  Correct for `UPPER_MANAGEMENT` (already site-scoped by default). A
+  **known, narrow, deliberately deferred gap for `CEO`**: CEO's authority
+  spans every site, but this mechanism only notifies a CEO account whose
+  own `site_id` matches the Demand's site — a genuinely multi-site
+  deployment could have a Demand at a site with no matching CEO recipient.
+  CEO's *view* authority is unaffected (still reachable by browsing); only
+  the in-app notification bell would miss it. The real fix is
+  capability-driven (not role-string-driven) notification routing,
+  deferred to Checkpoint 3 alongside the real review/final-approval
+  capabilities that make it necessary. Documented rather than silently
+  built around, per this checkpoint's explicit instruction to defer exact
+  reviewer routing safely rather than build it wrong.
+- **`demand.*` capability defaults mirror Material Catalog's
+  already-corrected pattern exactly**, applying the same lesson before it
+  could be gotten wrong twice: `UPPER_MANAGEMENT` gets `demand.view` only
+  (no `.all_departments`); `ADMIN`/`SITE_MANAGER`/`TEAM_LEAD` get
+  create/edit/submit scoped to their own department only (no
+  `.all_departments`); `EMPLOYEE` gets view only; `GATE_GUARD` gets
+  nothing; only `CEO` gets `demand.all_departments`.
+- **Department is immutable on an existing Demand.** Unlike Gate Pass
+  (which allows changing `issuingDepartmentId` on a Draft), a Demand's
+  department cannot be changed after creation — lines are
+  composite-FK-pinned to a specific department, so changing the parent
+  would require re-validating and re-pinning every existing line. Simpler
+  and safer for V1; revisit only if real usage shows a need to move an
+  entire Draft between departments (unlikely — a Draft with the wrong
+  department is cheap to delete and recreate while nothing else references
+  it yet).
+- **Submit-time validation scope.** Of the checkpoint's required submit
+  checks (line count, quantity > 0, valid catalog relationship, no
+  duplicate lines), only "at least one line" is actually re-checked at
+  submit — the other three are structurally guaranteed at write time
+  (Zod validation + DB `CHECK`/FK/`UNIQUE` constraints), so a persisted
+  line cannot violate them and a redundant re-check at submit would be
+  dead code. Documented here rather than left implicit, since the
+  checkpoint instructions listed all four as things "the server must
+  verify."
+
+### Frontend decisions
+
+- **Department name not shown on a brand-new empty Draft for a
+  department-locked actor** (e.g. "New Demand" rather than the mockup's
+  "New Demand — Civil"). No existing endpoint lets a Demand-only actor
+  (holding no Gate Pass/Workforce permission) cheaply resolve their own
+  department's name — `/auth/me` returns only `departmentId`, and
+  `GET /departments` / `GET /departments/manage` are both gated by
+  Gate-Pass/Workforce permissions a pure Demand creator may not hold.
+  Once a Demand exists (edit/detail), its `department_name` comes for
+  free from the existing list/detail join, so this gap is cosmetic and
+  narrow (one page, one moment) rather than a functional limitation — not
+  worth adding a new "my department" endpoint or widening an unrelated
+  module's permission gate for.
+- **`AuditTimeline` duplicated, not extracted to `shared/`,** despite
+  Gate Pass having an near-identical component. The two modules' action
+  codes only partially overlap (`CREATE`/`EDIT_DRAFT`/`SUBMIT` vs. also
+  `APPROVE`/`REJECT`/`CANCEL`/`EXIT`/`RETURN`), and extracting it mid
+  checkpoint would have meant touching Gate Pass's existing, regression-
+  protected frontend for a purely cosmetic component. Flagged here as a
+  minor, low-risk cleanup opportunity for whenever Gate Pass's frontend is
+  next touched anyway — not done opportunistically now.
+
+### Status
+
+Accepted. Migration `1787413000000_material-demand-foundation.js`; backend
+module `src/modules/material-demand/`; frontend module
+`frontend/src/modules/material-demand/`. New shared helper
+`src/shared/authorization/department-scope.js`. Full backend suite:
+406/407 (the one failure is the same pre-existing local-Postgres-host-auth
+artifact noted in every prior entry). Frontend: 216/216, ESLint clean,
+production/PWA build clean. `npm audit`: 0 vulnerabilities, both packages.
+Gate Pass and Workforce regression suites unaffected (no files in either
+module touched). Checkpoints 3-8 (Initial Review through Closure) remain
+unimplemented per `docs/PROCUREMENT_RECEIVING_SPEC.md` §0.

@@ -132,52 +132,105 @@ review passes changed and why, and §15 below for the summary table.
 
 ## 4. Inventory
 
-Inventory is a future module.
-
-It may eventually manage company stock and material-related workflows according to approved business requirements.
+Full Inventory (stock ledger, current balances, FIFO/batch consumption,
+Material Issue/Usage/Return, adjustment, transfer, warehouse/bin
+management) remains a future module, deliberately deferred behind
+Procurement & Material Receiving V1 — see `docs/DECISIONS.md`'s "V1 Scope
+Narrowed to Procurement & Material Receiving" entry. It will be introduced
+only after an authoritative physical opening-stock count establishes a
+cutover point, once departments have adopted the digital Demand +
+Receiving workflow below.
 
 Inventory must remain separate from Gate Pass.
 
 In particular, Gate Pass must not become responsible for material receiving or stock verification merely because a vehicle carries materials.
 
-Inventory implementation must not begin until:
+Full Inventory implementation must not begin until:
 
 1. Gate Pass MVP is stable,
 2. Gate Pass regression tests exist,
 3. the required Gate Pass/security review has been completed,
 4. shared interfaces required by Inventory have been identified.
 
+All four are satisfied: Gate Pass and Workforce have each completed
+implementation and independent security review (§15 below), and
+`docs/PROCUREMENT_RECEIVING_SPEC.md` — built for Procurement & Material
+Receiving V1 — identifies the shared Company Item / Department Material
+Catalog interfaces a future Inventory module would build on.
+
 Current status:
 
-**Planned — not implemented**
+**Planned — not implemented.** (The Company Item / Department Material
+Catalog foundation it will eventually build on is implemented as part of
+Procurement & Material Receiving V1 — see §5.)
 
 ---
 
-## 5. Procurement
+## 5. Procurement & Material Receiving (V1)
 
-Procurement is a future module.
+Procurement and Material Receiving are being digitized together as one
+scoped V1, per explicit owner instruction — see
+`docs/PROCUREMENT_RECEIVING_SPEC.md` for the full authoritative
+specification and `docs/DECISIONS.md` for why the scope was narrowed from
+the broader Inventory design explored in Phase I.
 
-Gate Pass and Procurement may interact through defined interfaces where required, but they remain separate business concerns.
+V1 covers: Department Material Catalog → Demand List → UM/CFO review →
+Procurement pricing → final approval → an auto-generated IPO → purchasing
+→ Delivery Challan → material receiving → department confirmation/closure.
+It explicitly does **not** include a stock balance, stock ledger, or any
+of the other Inventory concerns listed in §4.
 
-Procurement pricing and sensitive procurement information must not become visible to Guard users through Gate Pass.
+Gate Pass and Procurement/Receiving may interact through defined
+interfaces where required (e.g. a future optional reference from a
+Receiving record to the Gate Pass that physically carried the material),
+but they remain separate business concerns and separate records — Gate
+Pass and Delivery Challan stay separate (see `docs/DECISIONS.md`).
+
+Procurement pricing and other sensitive procurement/financial information
+must not become visible to Guard users through Gate Pass, and financial
+visibility within Procurement/Receiving itself is capability-controlled
+(see `docs/PROCUREMENT_RECEIVING_SPEC.md` §16/§28) — a user authorized to
+see operational quantities is not automatically authorized to see prices.
 
 Current status:
 
-**Planned — not implemented**
+**Checkpoints 1-2 implemented.** Checkpoint 1 (Material Catalog Foundation)
+— Company Item, Department Material Catalog, and Units of Measure —
+backend module `backend/src/modules/material-catalog/`, frontend module
+`frontend/src/modules/material-catalog/`, migration
+`1787412000000_material-catalog-foundation.js`. Checkpoint 2 (Department
+Demand List Foundation) — Draft creation from the department's own
+catalog, edit, and the `submit` transition into `PENDING_INITIAL_REVIEW`
+with a first-review notification — backend module
+`backend/src/modules/material-demand/`, frontend module
+`frontend/src/modules/material-demand/`, migration
+`1787413000000_material-demand-foundation.js`. Initial UM/CFO review
+through Closure (checkpoints 3-8) are specified in
+`docs/PROCUREMENT_RECEIVING_SPEC.md` but **not implemented**.
 
 ---
 
 ## 6. Material Receiving
 
-Material receiving is separate from Gate Pass verification.
+Material receiving is part of the Procurement & Material Receiving V1
+scope above (§5) — see `docs/PROCUREMENT_RECEIVING_SPEC.md` §19-§24 for
+the full authoritative specification (department-member receiving, the
+Admin fallback-custodian path, and the explicit "no Inventory balance in
+V1" rule).
 
-Material/item verification is not a Guard responsibility.
+Material receiving is separate from Gate Pass verification. Material/item
+verification is not a Guard responsibility, and receiving does not depend
+on the Gate Guard.
 
-Receiving workflows may involve authorized roles such as Admin, Site Manager and/or Team Lead according to the eventual approved Inventory/receiving specification.
+Receiving involves the relevant department's own staff first, with Admin
+as a temporary fallback custodian only when nobody from the relevant
+department is available on site — not Admin, Site Manager, or Team Lead
+as universal receivers.
 
 Current status:
 
-**Planned — not implemented**
+**Planned — not implemented** (part of Procurement & Material Receiving
+V1's checkpoint 7; see §5's status).
 
 ---
 
@@ -393,14 +446,18 @@ Security / Regression Review
         ↓
 Workforce / Employee Management
         ↓
-Inventory
+Procurement & Material Receiving V1
+        ↓
+Full Inventory
         ↓
 Additional Modules
 ```
 
 This sequence may change only through an explicit documented project
-decision. Workforce was inserted ahead of Inventory on 2026-08-23 — see
-`docs/DECISIONS.md`.
+decision. Workforce was inserted ahead of Inventory on 2026-08-23; the
+full Inventory module was further split into "Procurement & Material
+Receiving V1" (in progress) followed by full Inventory (stock ledger and
+everything that depends on it) on 2026-08-25 — see `docs/DECISIONS.md`.
 
 ---
 
@@ -415,8 +472,8 @@ decision. Workforce was inserted ahead of Inventory on 2026-08-23 — see
 | Authentication | Implemented — HttpOnly cookie session (browser) + Bearer (non-browser clients), with `session_version`-based revocation |
 | Authorization | Implemented — RBAC, department/site scope |
 | Gate Pass | Implemented, security-hardened; not yet deployed |
-| Inventory | Not started (per §14 sequencing) |
-| Procurement | Not started |
+| Procurement & Material Receiving V1 | Checkpoint 1 (Material Catalog Foundation) implemented; checkpoints 2-8 (Demand → Closure) not started — see `docs/PROCUREMENT_RECEIVING_SPEC.md` |
+| Inventory (full — stock ledger/balances) | Not started; deferred behind Procurement & Material Receiving V1 adoption (per §14 sequencing) |
 | Fleet | Not started |
 | Maintenance | Not started |
 | HSE | Not started |

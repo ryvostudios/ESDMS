@@ -1,4 +1,4 @@
-import { HomeIcon, TruckIcon, ClipboardCheckIcon, ScanIcon } from "../../shared/icons.jsx";
+import { HomeIcon, TruckIcon, ClipboardCheckIcon, ScanIcon, BoxIcon } from "../../shared/icons.jsx";
 
 const OFFICE_PERMISSIONS = ["gate_pass.view_own", "gate_pass.view_site"];
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
@@ -23,6 +23,18 @@ export const NAV_ITEMS = [
   { label: "Workforce Ops", to: "/workforce/operations", icon: ClipboardCheckIcon, permission: ["leave.approve", "employee_documents.view", "rotation.adjust"] },
   { label: "Reports", to: "/workforce/reports", icon: ClipboardCheckIcon, allPermissions: ["workforce.reports.view", "workforce.export"] },
   { label: "Governance", to: "/governance", icon: ClipboardCheckIcon, permission: ["users.view"] },
+  {
+    label: "Material Catalog",
+    to: "/material-catalog",
+    icon: BoxIcon,
+    permission: ["material_catalog.view", "material_catalog.manage"],
+  },
+  {
+    label: "Demands",
+    to: "/demands",
+    icon: ClipboardCheckIcon,
+    permission: ["demand.view", "demand.create"],
+  },
   {
     label: "Workforce Config",
     to: "/workforce/config",

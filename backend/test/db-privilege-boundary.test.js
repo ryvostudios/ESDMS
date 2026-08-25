@@ -57,11 +57,27 @@ const WORKFORCE_TABLES = [
   "employee_business_history",
 ];
 
+// Material Catalog (Procurement & Material Receiving V1, Checkpoint 1) —
+// see 1787412000000_material-catalog-foundation.js and
+// docs/PROCUREMENT_RECEIVING_SPEC.md.
+const MATERIAL_CATALOG_TABLES = ["units_of_measure", "company_items", "department_material_catalog"];
+
+// Material Demand (Procurement & Material Receiving V1, Checkpoint 2) —
+// see 1787413000000_material-demand-foundation.js.
+const MATERIAL_DEMAND_TABLES = [
+  "material_demand_number_counters",
+  "material_demands",
+  "material_demand_lines",
+  "material_demand_audit_log",
+];
+
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
   "user_permission_overrides",
   "governance_audit_log",
   ...WORKFORCE_TABLES,
+  ...MATERIAL_CATALOG_TABLES,
+  ...MATERIAL_DEMAND_TABLES,
 ];
 const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];

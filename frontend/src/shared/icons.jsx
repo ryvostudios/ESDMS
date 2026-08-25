@@ -124,6 +124,16 @@ export function BellIcon(props) {
   );
 }
 
+export function BoxIcon(props) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M3 6.5 10 3l7 3.5-7 3.5-7-3.5Z" />
+      <path d="M3 6.5V14l7 3.5V10" />
+      <path d="M17 6.5V14l-7 3.5" />
+    </svg>
+  );
+}
+
 export function UsersIcon(props) {
   return (
     <svg {...base} {...props} aria-hidden="true">
