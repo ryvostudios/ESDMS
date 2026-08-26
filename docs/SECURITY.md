@@ -330,7 +330,7 @@ The application must never connect to its production database over an unencrypte
 The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
 
 - `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
-- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 44 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
+- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 46 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
 
@@ -355,11 +355,22 @@ The migration `1787413000000_material-demand-foundation.js` (Procurement & Mater
 
 The migration `1787414000000_material-demand-initial-approval.js` (Procurement & Material Receiving V1, Checkpoint 3 — the first approval gate, see `docs/DECISIONS.md` and `docs/PROCUREMENT_RECEIVING_SPEC.md`) adds 1 more public table, `material_demand_approvals` (append-only via the existing `forbid_update_delete()` trigger — an approval decision is never editable, by anyone, including CEO), bringing the total to 44 (45 with `pgmigrations`). It also widens `material_demands_status_check` (adds `REJECTED`, `READY_FOR_PRICING`) and `material_demand_audit_log_action_check` (adds the four decision-outcome action codes plus `READY_FOR_PRICING`), and widens `material_demand_audit_log.action` from `varchar(20)` to `varchar(30)` to fit them. No new trigger function was introduced.
 
+The migration `1787415000000_material-demand-procurement-pricing.js`
+(Checkpoint 4) adds the financially isolated tables
+`material_demand_pricing` and `material_demand_pricing_lines`, bringing the
+total to 46 application tables (47 with owner-only `pgmigrations`). Both
+have RLS enabled and explicit runtime allowlist/policy entries. Composite
+foreign keys prevent a pricing line from referencing a Demand line outside
+its header's Demand. Two `SECURITY INVOKER` trigger functions with pinned
+`search_path` and no public/runtime direct execute grant protect submitted
+headers and lines; the line guard locks its header so a direct write cannot
+race finalization. Ordinary Demand queries do not join either table.
+
 The Workforce trigger functions (`employee_contracts_enforce_immutability`, `employee_contracts_forbid_finalized_delete`, `employee_business_history_guard`, and `employee_documents_guard_update`) are ordinary `LANGUAGE plpgsql` functions with no `SECURITY DEFINER` (same as the existing `forbid_update_delete()`/`forbid_delete()`) and an explicit `SET search_path = pg_catalog, public`. They receive no direct `EXECUTE` grant to application/browser roles and are invoked only through their table triggers.
 
 PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.
 
-`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 44-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 46-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
 
 ```sh
 read -rs ESDMS_RUNTIME_PASSWORD

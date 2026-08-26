@@ -1,0 +1,81 @@
+.historyNote,
+.hint,
+.submitted {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+.error {
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  font-size: var(--text-sm);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.table th {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.table td:first-child {
+  min-width: 240px;
+}
+
+.table textarea {
+  min-height: 54px;
+  margin-top: var(--space-2);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.footer > div:first-child {
+  display: flex;
+  flex-direction: column;
+}
+
+.footer span {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.footer strong {
+  font-size: var(--text-lg);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.hint,
+.submitted {
+  margin-top: var(--space-3);
+}

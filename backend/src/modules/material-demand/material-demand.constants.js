@@ -3,6 +3,7 @@ export const MATERIAL_DEMAND_STATUS = {
   PENDING_INITIAL_REVIEW: "PENDING_INITIAL_REVIEW",
   REJECTED: "REJECTED",
   READY_FOR_PRICING: "READY_FOR_PRICING",
+  PENDING_FINAL_APPROVAL: "PENDING_FINAL_APPROVAL",
 };
 
 export const APPROVAL_TYPE = {
@@ -25,8 +26,8 @@ export const DECISION = {
 // approval decision does not always change status by itself (only
 // rejection, or the second of two approvals, does) — that gate-completion
 // logic lives in material-demand.service.js#recordApprovalDecision, not
-// here. Checkpoints 4+ (pricing, IPO, purchasing, DC, receiving) remain
-// unimplemented — see docs/PROCUREMENT_RECEIVING_SPEC.md §30.
+// here. Procurement owns the Checkpoint 4 pricing transition; final
+// approval actions and later supply-chain states remain unimplemented.
 export const TRANSITIONS = {
   submit: {
     from: [MATERIAL_DEMAND_STATUS.DRAFT],

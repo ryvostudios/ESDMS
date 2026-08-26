@@ -36,6 +36,12 @@ export const NAV_ITEMS = [
     permission: ["demand.view", "demand.create"],
   },
   {
+    label: "Procurement",
+    to: "/procurement/pricing",
+    icon: BoxIcon,
+    permission: ["procurement.pricing"],
+  },
+  {
     label: "Workforce Config",
     to: "/workforce/config",
     icon: ClipboardCheckIcon,

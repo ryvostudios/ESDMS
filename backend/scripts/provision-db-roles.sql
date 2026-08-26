@@ -99,7 +99,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 
 -- The current schema uses UUIDs and an ordinary counter table, so the API
--- needs no sequence privileges. Exactly these 44 application tables receive
+-- needs no sequence privileges. Exactly these 46 application tables receive
 -- DML access; public.pgmigrations is deliberately excluded.
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.company_items,
@@ -133,6 +133,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.material_demand_approvals,
   public.material_demand_audit_log,
   public.material_demand_lines,
+  public.material_demand_pricing,
+  public.material_demand_pricing_lines,
   public.material_demand_number_counters,
   public.material_demands,
   public.notification_outbox,
@@ -234,6 +236,8 @@ ALTER TABLE public.leave_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_approvals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.material_demand_pricing ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.material_demand_pricing_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_number_counters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notification_outbox ENABLE ROW LEVEL SECURITY;
@@ -288,6 +292,8 @@ BEGIN
     'material_demand_approvals',
     'material_demand_audit_log',
     'material_demand_lines',
+    'material_demand_pricing',
+    'material_demand_pricing_lines',
     'material_demand_number_counters',
     'material_demands',
     'notification_outbox',
@@ -389,6 +395,8 @@ expected_tables(table_name) AS (
     ('material_demand_approvals'),
     ('material_demand_audit_log'),
     ('material_demand_lines'),
+    ('material_demand_pricing'),
+    ('material_demand_pricing_lines'),
     ('material_demand_number_counters'),
     ('material_demands'),
     ('notification_outbox'),
@@ -448,7 +456,7 @@ FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REF
   AS privileges(privilege_type)
 ORDER BY privilege_type;
 
--- 5. RLS enabled on all 45 expected tables.
+-- 5. RLS enabled on all 47 expected tables.
 SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -461,14 +469,14 @@ WHERE n.nspname = 'public'
     'employee_rotation_ledger', 'employees', 'employment_assignments', 'employment_types',
     'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items', 'gate_pass_number_counters',
     'gate_passes', 'governance_audit_log', 'leave_requests', 'leave_types',
-    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_lines', 'material_demand_number_counters', 'material_demands',
+    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines', 'material_demand_number_counters', 'material_demands',
     'notification_outbox', 'permissions', 'pgmigrations', 'positions',
     'role_permissions', 'roles', 'rotation_policies', 'sites',
     'temporary_assignments', 'units_of_measure', 'user_permission_overrides', 'users'
   )
 ORDER BY c.relname;
 
-SELECT count(*) = 45 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
+SELECT count(*) = 47 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
@@ -480,7 +488,7 @@ WHERE n.nspname = 'public'
     'employee_rotation_ledger', 'employees', 'employment_assignments', 'employment_types',
     'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items', 'gate_pass_number_counters',
     'gate_passes', 'governance_audit_log', 'leave_requests', 'leave_types',
-    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_lines', 'material_demand_number_counters', 'material_demands',
+    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines', 'material_demand_number_counters', 'material_demands',
     'notification_outbox', 'permissions', 'pgmigrations', 'positions',
     'role_permissions', 'roles', 'rotation_policies', 'sites',
     'temporary_assignments', 'units_of_measure', 'user_permission_overrides', 'users'
@@ -488,7 +496,7 @@ WHERE n.nspname = 'public'
 \gset
 \if :all_expected_rls_enabled
 \else
-  \warn 'ERROR: RLS is not enabled on all 45 expected public tables.'
+  \warn 'ERROR: RLS is not enabled on all 47 expected public tables.'
   DO $abort$ BEGIN RAISE EXCEPTION 'RLS verification failed'; END $abort$;
 \endif
 
@@ -532,6 +540,8 @@ WITH expected_tables(table_name) AS (
     ('material_demand_approvals'),
     ('material_demand_audit_log'),
     ('material_demand_lines'),
+    ('material_demand_pricing'),
+    ('material_demand_pricing_lines'),
     ('material_demand_number_counters'),
     ('material_demands'),
     ('notification_outbox'),
@@ -548,7 +558,7 @@ WITH expected_tables(table_name) AS (
 )
 SELECT
   (SELECT count(*) FROM pg_policies
-   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 44
+   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 46
   AND NOT EXISTS (
     SELECT 1
     FROM expected_tables e

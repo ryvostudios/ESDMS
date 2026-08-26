@@ -11,6 +11,8 @@ import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
+import { usePricing } from "../../procurement/hooks/usePricing.js";
+import { PricingSummary } from "../../procurement/components/PricingSummary.jsx";
 import styles from "./DemandDetailPage.module.css";
 
 const EDITABLE_STATUSES = ["DRAFT"];
@@ -19,7 +21,16 @@ const PENDING_NOTICE = {
   PENDING_INITIAL_REVIEW: "This Demand has been submitted and is pending initial review. It can no longer be edited.",
   REJECTED: "This Demand was rejected during initial review.",
   READY_FOR_PRICING: "This Demand has completed initial approval and is ready for Procurement pricing.",
+  PENDING_FINAL_APPROVAL: "Pricing is complete and this Demand is pending final management review and formal approval.",
 };
+
+function DemandPricingSection({ demandId }) {
+  const { result, status, error, reload } = usePricing(demandId);
+
+  if (status === "loading") return <LoadingState message="Loading protected pricing…" />;
+  if (status === "error") return <ErrorState message={error} onRetry={() => reload().catch(() => {})} />;
+  return <PricingSummary detail={result} />;
+}
 
 function DetailField({ label, value }) {
   return (
@@ -48,6 +59,10 @@ export function DemandDetailPage() {
   const { demand, lines, auditLog, approvals } = result;
   const canEdit = EDITABLE_STATUSES.includes(demand.status) && hasPermission("demand.edit");
   const canSubmit = SUBMITTABLE_STATUSES.includes(demand.status) && hasPermission("demand.submit");
+  const canPrice = demand.status === "READY_FOR_PRICING" && hasPermission("procurement.pricing");
+  const canViewSubmittedPrices =
+    demand.status === "PENDING_FINAL_APPROVAL" &&
+    hasPermission("procurement.view_prices", "procurement.pricing");
 
   const isPendingReview = demand.status === "PENDING_INITIAL_REVIEW";
   const hasManagementReview = approvals.some((a) => a.approval_type === "MANAGEMENT_REVIEW");
@@ -88,6 +103,7 @@ export function DemandDetailPage() {
             </Button>
           )}
           {canSubmit && <Button onClick={() => setActiveDialog("submit")}>Submit for Review</Button>}
+          {canPrice && <Button onClick={() => navigate(`/procurement/pricing/${id}`)}>Enter Pricing</Button>}
         </div>
       </div>
 
@@ -143,6 +159,12 @@ export function DemandDetailPage() {
                   decision === "APPROVED" ? setActiveDialog("approval-approve") : setActiveDialog("approval-reject")
                 }
               />
+            </div>
+          )}
+
+          {canViewSubmittedPrices && (
+            <div className={styles.section}>
+              <DemandPricingSection demandId={id} />
             </div>
           )}
         </div>

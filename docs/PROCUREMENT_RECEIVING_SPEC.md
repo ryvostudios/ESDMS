@@ -281,17 +281,16 @@ its own recipient-specific idempotency key
 (`demand:{id}:rev:{revision}:ready-for-pricing:{userId}`). `procurement.pricing`
 is a minimal capability introduced now specifically so this notification
 has a real, capability-driven recipient rather than a hardcoded role —
-Checkpoint 4 defines the actual pricing screen/workflow and may
-rename/expand it. CEO is the only default holder; actual Procurement staff
+Checkpoint 4 below now defines the actual pricing screen/workflow around
+that same capability. CEO is the only default holder; actual Procurement staff
 receive an explicit per-user GRANT. ADMIN is not a default holder (§26,
 `docs/DECISIONS.md`).
-The Demand detail route/UI reference is stable, but the pricing screen
-itself does not exist yet (§11) — this checkpoint deliberately does not
-build it.
+The Demand detail route/UI reference now links eligible Procurement users
+to the protected pricing screen (§11).
 
 ---
 
-## 11. Procurement Pricing (Checkpoint 4)
+## 11. Procurement Pricing — **Implemented (Checkpoint 4)**
 
 Procurement enters, for every active Demand line: exact estimated market
 price per unit, and sourcing/purchasing notes where required. Previous
@@ -300,17 +299,41 @@ later actual purchase price are preserved separately — never silently
 overwritten by one another. Frontend-calculated totals are never trusted;
 monetary totals are recomputed server-side using safe decimal/numeric
 handling. A Demand is not ready for final approval until all required
-pricing is complete. Submitting pricing sets `PRICING_COMPLETE` /
-`PENDING_FINAL_APPROVAL` and notifies UM + CFO again (§12).
+pricing is complete. Submitting pricing changes the pricing header from
+`DRAFT` to `SUBMITTED` and the Demand from `READY_FOR_PRICING` to
+`PENDING_FINAL_APPROVAL`, then notifies eligible second-gate authorities
+(§12), atomically.
+
+Pricing is a separate protected Procurement resource; ordinary
+`GET /demands/:id` never retrieves or returns it. V1 currency is explicitly
+`PKR`. Exact unit prices use PostgreSQL `numeric(14,2)`, must be greater
+than zero, and authoritative line/grand totals are recomputed in PostgreSQL
+from the revision-bound Demand quantity × unit price. Client totals are not
+accepted. Drafts may be partial; submission requires exactly one valid
+price for every Demand line. Submitted headers and lines are immutable at
+both service and trigger layers. There is no repricing/reopen workflow yet.
+
+Previous Purchase Price remains absent until derived from actual purchase
+history or a separately designed legacy-data import. It is never inferred
+from Estimated Market Price. Actual Purchase Price remains a later
+purchasing concern.
 
 ---
 
-## 12. Notification — Pricing Complete (Checkpoint 4)
+## 12. Notification — Pricing Complete — **Implemented (Checkpoint 4)**
 
 UM and CFO see requested/approved quantities, estimated prices, prior-price
 information where available, calculated totals, Procurement information,
 and audit/revision information — gated by financial-visibility capability
 (§16), never merely because someone can view a department Demand.
+
+Submission reuses the shared effective-capability recipient resolver for
+`demand.review` and `demand.approve`, including GRANT/DENY, active state,
+site scope and CEO authority, and deduplicates dual-capability users.
+Recipient-specific keys are
+`demand:{id}:rev:{revision}:final-review:{userId}`. Notification text has
+no price data. Checkpoint 5 adds the second approval actions; Checkpoint 4
+adds no final-approval buttons or decisions.
 
 ---
 
@@ -542,15 +565,28 @@ cutover — not by retrofitting a computed balance onto V1 receiving data.
   `READY_FOR_PRICING`; `material_demand_audit_log`'s action list widened
   for the four decision outcomes plus `READY_FOR_PRICING`.
 
+### Implemented (Checkpoint 4)
+
+- `material_demand_pricing` — one `DRAFT`/`SUBMITTED`, PKR-denominated
+  header per (`demand_id`, `demand_revision`), with creator/submission
+  attribution and timestamps.
+- `material_demand_pricing_lines` — exact estimated unit prices and
+  optional Procurement notes, relationally pinned to both their header and
+  a Demand line from the same Demand. Item/UOM snapshots are not duplicated.
+- Submitted header/lines are trigger-protected from update/delete.
+  `material_demands` now admits `PENDING_FINAL_APPROVAL`; Demand audit
+  actions record draft creation/save, pricing submission, and the status
+  transition without placing commercial values in the operational audit.
+
 ### Target for later checkpoints — not yet created
 
 - Demand Revision as its own structure (the `revision` column exists and
   is used — every approval records the revision it applied to (§9,
   §14) — but no reopen/new-revision workflow exists yet to ever advance
   it past `1`).
-- Procurement: pricing data/procurement action, final financial approval
-  (the **second** gate, after pricing — distinct from Checkpoint 3's
-  first gate), IPO, IPO Line, purchasing line/progress.
+- Procurement: final financial approval actions (the **second** gate,
+  after pricing — distinct from Checkpoint 3's first gate), IPO, IPO Line,
+  purchasing line/progress.
 - Delivery: Delivery Challan, Delivery Challan Line.
 - Receiving: Material Receipt, Receipt Line, department confirmation,
   temporary Admin custody/handover record.
@@ -641,12 +677,27 @@ granted both capabilities — enforced under the same row lock as the
 decision itself, not just by which capabilities happen to be assigned.
 CEO is a deliberate, documented exception (§9).
 
+**Implemented (Checkpoint 4):**
+
+| Capability | Grants | Scope shape |
+|---|---|---|
+| `procurement.pricing` | List READY_FOR_PRICING work; create/edit/submit estimated pricing; view pricing being worked | Site-wide |
+| `procurement.view_prices` | View submitted estimated pricing without edit authority | Site-wide |
+
+`procurement.pricing` remains CEO-only by default; actual Procurement staff
+receive an explicit per-user GRANT. `procurement.view_prices` defaults to
+CEO, `UPPER_MANAGEMENT`, and `SITE_MANAGER`. A pricing holder can see the
+pricing they are responsible for without a redundant view grant. ADMIN,
+TEAM_LEAD, EMPLOYEE, HR, and GATE_GUARD receive neither financial
+capability by default. An individual DENY wins. Capabilities remain
+separate from scope: same-site access is cross-department; only CEO or a
+separately effective `demand.all_departments` grant reaches other sites.
+
 **Target for later checkpoints** (capability names indicative, not final
 — define precisely when each checkpoint is designed):
 
-- Procurement: view assigned approved demands, enter pricing, view prices,
-  submit pricing, record purchasing, view actual prices — refining
-  `procurement.pricing` above into real, separately-gated actions.
+- Procurement: record purchasing and view actual prices. Estimated pricing
+  and its separate read capability are implemented above.
 - Financial approval (the **second** gate, after pricing): a distinct
   capability from `demand.approve` above and from ordinary Procurement
   authority (mirrors the existing `users.create_um`/`users.manage_um`
@@ -686,7 +737,10 @@ separation between `demand.review`/`demand.approve`, site-scoped review
 authority, the same-actor-both-slots guard and its CEO exception, gate
 completion in both orders, concurrent-approval race safety, rejection
 history preservation, revision binding, and the capability-driven
-recipient resolver's GRANT/DENY/inactive/site/dedup behavior).
+recipient resolver's GRANT/DENY/inactive/site/dedup behavior);
+`backend/test/procurement-pricing.test.js` (Checkpoint 4 — financial
+confidentiality, capability/scope, exact totals, line/revision validation,
+replay/concurrency, notification eligibility, and direct-DB immutability).
 
 ---
 
@@ -707,9 +761,9 @@ is never fetched and merely hidden by React.
 Notifications are workflow side effects of successfully **committed**
 transitions — never sent before the corresponding transaction commits
 (mirrors the existing Gate Pass approval → outbox-in-same-transaction
-pattern). **`DEMAND SUBMITTED` and `INITIAL REQUIRED APPROVALS COMPLETE`
-are implemented (Checkpoints 2-3)**; everything else below remains target
-design for checkpoints 4-7:
+pattern). **`DEMAND SUBMITTED`, `INITIAL REQUIRED APPROVALS COMPLETE`, and
+`PROCUREMENT PRICING SUBMITTED` are implemented (Checkpoints 2-4)**;
+everything else below remains target design for checkpoints 5-7:
 
 ```text
 DEMAND SUBMITTED                       → notify eligible reviewers + approvers
@@ -741,6 +795,11 @@ Recipient-specific idempotency keys
 duplicating any individual recipient's notification, and deduplicate a
 user eligible through more than one capability to exactly one row.
 
+Checkpoint 4 uses the same resolver for `demand.review` and
+`demand.approve` final-gate recipients with the distinct
+`...:final-review:{userId}` key. A replayed pricing submission is a
+successful no-op after the first transaction commits.
+
 Idempotency/uniqueness (the existing `notification_outbox` idempotency-key
 pattern, plus `material_demand_approvals`' own `UNIQUE(demand_id, revision,
 approval_type)` constraint for the approval decisions themselves) prevents
@@ -756,9 +815,9 @@ field), each following the existing Gate Pass pattern: lock the row,
 validate the transition against an explicit allowed-transition table,
 apply, audit — all in one transaction.
 
-**Demand** (indicative; `DRAFT → PENDING_INITIAL_REVIEW → READY_FOR_PRICING`
-and `PENDING_INITIAL_REVIEW → REJECTED` are implemented, everything from
-`PENDING_FINAL_APPROVAL` onward is not):
+**Demand** (indicative; transitions through `PENDING_FINAL_APPROVAL` and
+`PENDING_INITIAL_REVIEW → REJECTED` are implemented; everything after
+`PENDING_FINAL_APPROVAL` is not):
 ```text
 DRAFT → PENDING_INITIAL_REVIEW → READY_FOR_PRICING → PENDING_FINAL_APPROVAL
       → APPROVED → IPO_GENERATED → IN_PURCHASING → RECEIVING → COMPLETED
@@ -851,13 +910,22 @@ reviewer/approver only. Approve reuses `ConfirmActionDialog`; Reject
 reuses `ReasonActionDialog` (both existing shared components, no new
 dialog primitive). Partial progress is always visible — one slot decided
 and one pending is never presented as if the whole Demand were approved.
-No pricing screen, no IPO, no Delivery Challan, no Receiving UI — the
-Demand Detail page's `READY_FOR_PRICING` notice states that pricing is
-next, without linking to a page that doesn't exist yet.
+Checkpoint 3 itself added no pricing, IPO, Delivery Challan, or Receiving
+UI; its `READY_FOR_PRICING` notice was the handoff point later completed
+by Checkpoint 4 below.
+
+**Implemented (Checkpoint 4):** capability-gated Procurement navigation,
+the server-paginated Ready for Pricing queue, and a Procurement Pricing
+page with exact Demand lines, read-only quantity/UOM, draft save, optional
+notes, display-only totals, completeness gating, submit, and submitted
+read-only state. Authorized management sees submitted pricing through a
+reusable protected summary on Demand Detail. Users without financial
+authority do not mount the pricing request or receive pricing data. No
+final approval actions are shown.
 
 **Target for later checkpoints:** Department — Receiving/Pending
-Confirmation. Procurement — Ready for Pricing, Pricing Detail, Ready for
-Purchase, IPO Detail, Purchase Progress, Delivery Challan. Management —
+Confirmation. Procurement — Ready for Purchase, IPO Detail, Purchase
+Progress, Delivery Challan. Management —
 Pending Final Approval (the second gate, after pricing), revision history.
 Receiving — Receive DC, Pending Department Handover, Pending TL
 Confirmation, Completed Receiving. All navigation capability-controlled.

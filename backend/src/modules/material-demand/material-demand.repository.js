@@ -103,7 +103,8 @@ export async function updateNote(client, demandId, note) {
 
 export async function lockById(client, id) {
   const result = await client.query(
-    `SELECT id, demand_number, status, revision, site_id, department_id, created_by_user_id
+    `SELECT id, demand_number, status, revision, site_id, department_id, created_by_user_id,
+            (SELECT name FROM departments WHERE id = material_demands.department_id) AS department_name
      FROM material_demands WHERE id = $1 FOR UPDATE`,
     [id],
   );

@@ -2421,3 +2421,60 @@ capability already exists (not a defect; the same category of
 irreversibility `1787401000000_database-runtime-security-boundary.js` is
 explicit about). Procurement pricing through Closure (checkpoints 4-8)
 remain unimplemented per `docs/PROCUREMENT_RECEIVING_SPEC.md` §0.
+
+## 2026-08-26 — Checkpoint 4: Procurement Estimated Pricing + Second-Gate Notification Foundation
+
+### Decision
+
+Implemented only `READY_FOR_PRICING → PENDING_FINAL_APPROVAL`: authorized
+Procurement saves exact PKR estimated market unit prices against every line
+of the current Demand revision, then explicitly submits them. Final
+management/formal approval actions, IPO, purchasing, actual price/quantity,
+Delivery Challan, receiving, stock, exports, PDFs, and WhatsApp remain out
+of scope.
+
+### Durable design choices
+
+- **Pricing is a separate sensitive domain.** New backend/frontend
+  `modules/procurement/` owns protected queue/detail/save/submit behavior;
+  `material_demand_pricing` and `material_demand_pricing_lines` are never
+  joined into ordinary Demand GETs. React visibility is not the security
+  boundary.
+- **Estimated, previous, and actual prices are distinct.** Checkpoint 4
+  stores Estimated Market Price only. Previous Purchase Price will be
+  derived from future actual purchasing history or a deliberate legacy
+  import; it is not an editable placeholder and is never inferred from an
+  estimate. Actual Purchase Price remains unimplemented.
+- **Exact money and server totals.** Currency is explicit `PKR`; prices are
+  positive `numeric(14,2)`. The API accepts plain decimal strings and no
+  claimed totals. PostgreSQL recomputes quantity × unit price and the grand
+  total with exact numeric arithmetic.
+- **Revision binding and relational ownership.** One pricing header exists
+  per (`demand_id`, `demand_revision`). Composite foreign keys require
+  every pricing line and referenced Demand line to belong to the same
+  Demand; no item/UOM snapshots are duplicated.
+- **Capability and scope stay separate.** `procurement.pricing` remains
+  CEO-only by default and is explicitly granted to actual Procurement
+  staff. New `procurement.view_prices` defaults to CEO,
+  UPPER_MANAGEMENT, and SITE_MANAGER. ADMIN has neither by default. A
+  capable non-broad actor works across departments at their own site only;
+  CEO or an explicit `demand.all_departments` scope grant reaches all
+  sites. Effective DENY wins.
+- **Drafts are mutable; submitted pricing is not.** Service checks and
+  database triggers reject update/delete after submission. The line trigger
+  locks the parent header, while save and submit both lock Demand then
+  pricing in the same order, preventing an edit from landing after the
+  values become the final-review basis.
+- **One atomic, replay-safe submission.** Submission locks and revalidates
+  current status/revision/line coverage, finalizes pricing, transitions the
+  Demand, appends pricing/transition audit rows, and enqueues recipient rows
+  in one transaction. A committed replay is a successful no-op.
+- **Final-gate routing remains capability-driven.** The shared recipient
+  resolver selects active, in-scope effective holders of `demand.review`
+  and `demand.approve`, including per-user GRANT/DENY and CEO authority.
+  One price-free notification per user uses the stage-specific
+  `...:final-review:{userId}` key. Checkpoint 5 will add the actions.
+
+The migration adds two RLS-enabled application tables and two hardened
+trigger functions; the runtime boundary is now 46 application tables (47
+including owner-only `pgmigrations`).

@@ -218,6 +218,15 @@ modules/procurement/
 modules/maintenance/
 ```
 
+Procurement estimated pricing is implemented as its own bounded module
+(`backend/src/modules/procurement/` and
+`frontend/src/modules/procurement/`). Material Demand continues to own the
+operational request, first approvals, lifecycle status, and audit stream;
+Procurement owns the separately protected commercial header/lines and
+orchestrates the atomic pricing-submission transition through the Demand
+repository interface. Ordinary Demand detail queries never join the
+commercial tables.
+
 A module must not directly manipulate another module's internal controller logic, React state or private database implementation.
 
 Cross-module interaction should occur through defined services/interfaces.

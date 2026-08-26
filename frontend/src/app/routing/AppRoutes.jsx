@@ -25,6 +25,8 @@ import { MaterialCatalogPage } from "../../modules/material-catalog/pages/Materi
 import { DemandListPage } from "../../modules/material-demand/pages/DemandListPage.jsx";
 import { DemandFormPage } from "../../modules/material-demand/pages/DemandFormPage.jsx";
 import { DemandDetailPage } from "../../modules/material-demand/pages/DemandDetailPage.jsx";
+import { PricingQueuePage } from "../../modules/procurement/pages/PricingQueuePage.jsx";
+import { PricingPage } from "../../modules/procurement/pages/PricingPage.jsx";
 
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
@@ -122,6 +124,22 @@ export function AppRoutes() {
           element={
             <PermissionRoute permissions={["demand.view"]}>
               <DemandDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/procurement/pricing"
+          element={
+            <PermissionRoute permissions={["procurement.pricing"]}>
+              <PricingQueuePage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/procurement/pricing/:demandId"
+          element={
+            <PermissionRoute permissions={["procurement.pricing"]}>
+              <PricingPage />
             </PermissionRoute>
           }
         />

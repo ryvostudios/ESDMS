@@ -75,6 +75,10 @@ const MATERIAL_DEMAND_TABLES = [
 // 1787414000000_material-demand-initial-approval.js.
 const MATERIAL_DEMAND_APPROVAL_TABLES = ["material_demand_approvals"];
 
+// Procurement estimated pricing (Checkpoint 4) is isolated in two
+// sensitive tables — see 1787415000000_material-demand-procurement-pricing.js.
+const PROCUREMENT_PRICING_TABLES = ["material_demand_pricing", "material_demand_pricing_lines"];
+
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
   "user_permission_overrides",
@@ -83,6 +87,7 @@ const RUNTIME_APPLICATION_TABLES = [
   ...MATERIAL_CATALOG_TABLES,
   ...MATERIAL_DEMAND_TABLES,
   ...MATERIAL_DEMAND_APPROVAL_TABLES,
+  ...PROCUREMENT_PRICING_TABLES,
 ];
 const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];

@@ -52,4 +52,14 @@ describe("permission-driven Workforce navigation", () => {
     rerender(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Reports" })).toBeTruthy();
   });
+
+  test("Procurement navigation requires pricing authority, not ADMIN-like or price-view-only access", () => {
+    authState.permissions = new Set(["users.view", "procurement.view_prices"]);
+    const { rerender } = render(<MemoryRouter><NavList /></MemoryRouter>);
+    expect(screen.queryByRole("link", { name: "Procurement" })).toBeNull();
+
+    authState.permissions.add("procurement.pricing");
+    rerender(<MemoryRouter><NavList /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Procurement" })).toBeTruthy();
+  });
 });

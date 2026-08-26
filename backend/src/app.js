@@ -22,6 +22,7 @@ import { typeRouter as leaveTypeRoutes, requestRouter as leaveRequestRoutes, app
 import businessHistoryRoutes from "./modules/workforce/business-history.routes.js";
 import materialCatalogRoutes from "./modules/material-catalog/material-catalog.routes.js";
 import materialDemandRoutes from "./modules/material-demand/material-demand.routes.js";
+import procurementPricingRoutes from "./modules/procurement/procurement-pricing.routes.js";
 import reportRoutes from "./modules/reports/reports.routes.js";
 import notificationRoutes from "./shared/notifications/notifications.routes.js";
 import { apiUnauthenticatedIpRateLimiter, apiAuthenticatedIpRateLimiter } from "./middleware/rate-limit.js";
@@ -96,6 +97,7 @@ app.use("/api/v1/employees/:id/history", businessHistoryRoutes);
 app.use("/api/v1/me/history", businessHistoryRoutes);
 app.use("/api/v1/material-catalog", materialCatalogRoutes);
 app.use("/api/v1/demands", materialDemandRoutes);
+app.use("/api/v1/procurement/pricing", procurementPricingRoutes);
 app.use("/api/v1/reports/workforce", reportRoutes);
 app.use("/api/v1/workforce-config", workforceConfigRoutes);
 app.use("/api/v1/notifications", notificationRoutes);

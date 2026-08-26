@@ -6,6 +6,7 @@ import { DemandDetailPage } from "./DemandDetailPage.jsx";
 const mockUseDemand = vi.hoisted(() => vi.fn());
 const mockRecordManagementReview = vi.hoisted(() => vi.fn());
 const mockRecordFormalApproval = vi.hoisted(() => vi.fn());
+const mockUsePricing = vi.hoisted(() => vi.fn());
 
 vi.mock("../hooks/useDemand.js", () => ({
   useDemand: (...args) => mockUseDemand(...args),
@@ -15,6 +16,10 @@ vi.mock("../api.js", () => ({
   submitDemand: vi.fn(),
   recordManagementReview: (...args) => mockRecordManagementReview(...args),
   recordFormalApproval: (...args) => mockRecordFormalApproval(...args),
+}));
+
+vi.mock("../../procurement/hooks/usePricing.js", () => ({
+  usePricing: (...args) => mockUsePricing(...args),
 }));
 
 let mockPermissions = new Set();
@@ -49,6 +54,7 @@ afterEach(() => {
   mockUseDemand.mockReset();
   mockRecordManagementReview.mockReset();
   mockRecordFormalApproval.mockReset();
+  mockUsePricing.mockReset();
   mockPermissions = new Set();
 });
 
@@ -253,5 +259,63 @@ describe("DemandDetailPage", () => {
     expect(screen.getByText("Approved by Test CEO")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+  });
+
+  test("a pricing actor gets the Procurement action on READY_FOR_PRICING", async () => {
+    mockPermissions = new Set(["procurement.pricing"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "READY_FOR_PRICING" }),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+    await renderPage();
+    expect(screen.getByRole("button", { name: "Enter Pricing" })).toBeTruthy();
+    expect(mockUsePricing).not.toHaveBeenCalled();
+  });
+
+  test("authorized management sees submitted pricing through the protected resource", async () => {
+    mockPermissions = new Set(["procurement.view_prices"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_FINAL_APPROVAL" }),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+    mockUsePricing.mockReturnValue({
+      result: {
+        pricing: { status: "SUBMITTED", currency: "PKR" },
+        lines: [{
+          demand_line_id: "line-1",
+          item_name_snapshot: "Cement",
+          requested_quantity: "50.00",
+          uom_name_snapshot: "Bags",
+          estimated_unit_price: "1450.00",
+          line_total: "72500.00",
+          procurement_note: null,
+        }],
+        estimatedTotal: "72500.00",
+      },
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+    await renderPage();
+    expect(screen.getAllByText("Rs 72,500.00")).toHaveLength(2);
+    expect(screen.getByText("Pending Final Management Review / Formal Approval")).toBeTruthy();
+  });
+
+  test("Team Lead and ADMIN-like viewers without financial capability render no pricing component or hidden values", async () => {
+    mockPermissions = new Set(["demand.view"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_FINAL_APPROVAL" }),
+      status: "ready",
+      error: null,
+      reload: vi.fn(),
+    });
+    await renderPage();
+    expect(mockUsePricing).not.toHaveBeenCalled();
+    expect(screen.queryByText("Pricing")).toBeNull();
+    expect(screen.queryByText(/Rs 72,500/)).toBeNull();
   });
 });

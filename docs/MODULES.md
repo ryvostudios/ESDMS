@@ -194,7 +194,7 @@ see operational quantities is not automatically authorized to see prices.
 
 Current status:
 
-**Checkpoints 1-3 implemented.** Checkpoint 1 (Material Catalog Foundation)
+**Checkpoints 1-4 implemented.** Checkpoint 1 (Material Catalog Foundation)
 — Company Item, Department Material Catalog, and Units of Measure —
 backend module `backend/src/modules/material-catalog/`, frontend module
 `frontend/src/modules/material-catalog/`, migration
@@ -212,8 +212,14 @@ rejection reaching `REJECTED`, and capability-driven per-recipient
 notification routing (superseding Checkpoint 2's temporary role+site
 mechanism) — migration
 `1787414000000_material-demand-initial-approval.js`, new shared
-`src/shared/notifications/recipient-resolver.js`. Procurement pricing
-through Closure (checkpoints 4-8) are specified in
+`src/shared/notifications/recipient-resolver.js`. Checkpoint 4
+(Procurement Pricing + second-gate notification foundation) — isolated,
+revision-bound estimated pricing, protected queue/detail/save/submit APIs,
+`READY_FOR_PRICING → PENDING_FINAL_APPROVAL`, immutable submitted prices,
+and capability-driven final-review notifications — backend/frontend module
+`src/modules/procurement/`, migration
+`1787415000000_material-demand-procurement-pricing.js`. Final approval
+actions through Closure (checkpoints 5-8) are specified in
 `docs/PROCUREMENT_RECEIVING_SPEC.md` but **not implemented**.
 
 ---
