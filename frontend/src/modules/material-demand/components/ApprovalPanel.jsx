@@ -40,13 +40,22 @@ function Slot({ type, approval, canAct, onApprove, onReject }) {
 // Two independent slots — Management Review and Formal Approval — never a
 // single combined "approved" flag, so partial progress is always visible
 // (see docs/PROCUREMENT_RECEIVING_SPEC.md §15).
-export function ApprovalPanel({ approvals, canReview, canApprove, onReviewDecision, onApprovalDecision }) {
-  const managementReview = approvals.find((a) => a.approval_type === "MANAGEMENT_REVIEW");
-  const formalApproval = approvals.find((a) => a.approval_type === "FORMAL_APPROVAL");
+export function ApprovalPanel({
+  approvals,
+  stage = "INITIAL",
+  title = "Initial Approval",
+  canReview,
+  canApprove,
+  onReviewDecision,
+  onApprovalDecision,
+}) {
+  const stageApprovals = approvals.filter((approval) => (approval.approval_stage || "INITIAL") === stage);
+  const managementReview = stageApprovals.find((a) => a.approval_type === "MANAGEMENT_REVIEW");
+  const formalApproval = stageApprovals.find((a) => a.approval_type === "FORMAL_APPROVAL");
 
   return (
     <div className={styles.panel}>
-      <h2 className={styles.title}>Initial Approval</h2>
+      <h2 className={styles.title}>{title}</h2>
       <Slot
         type="MANAGEMENT_REVIEW"
         approval={managementReview}

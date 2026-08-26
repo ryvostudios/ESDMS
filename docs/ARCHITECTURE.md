@@ -227,6 +227,16 @@ orchestrates the atomic pricing-submission transition through the Demand
 repository interface. Ordinary Demand detail queries never join the
 commercial tables.
 
+Checkpoint 5 keeps that boundary while coordinating the final gate through
+defined repository/service interfaces. Material Demand owns staged immutable
+approval decisions and lifecycle outcomes; Procurement owns server-sequenced
+Pricing versions and protected commercial reads. Both flows acquire locks in
+the consistent order Demand → current Pricing. FINAL decisions reference the
+exact Pricing header through a composite database constraint. Rejection may
+create a later Procurement DRAFT only through the explicit repricing action;
+submitted versions are never reopened. `READY_FOR_IPO` is currently an
+integration boundary, not an IPO entity.
+
 A module must not directly manipulate another module's internal controller logic, React state or private database implementation.
 
 Cross-module interaction should occur through defined services/interfaces.

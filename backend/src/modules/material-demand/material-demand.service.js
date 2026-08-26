@@ -10,7 +10,16 @@ import {
   assertDemandViewable,
   assertReviewActionAllowed,
 } from "./material-demand.authorization.js";
-import { TRANSITIONS, MATERIAL_DEMAND_STATUS, APPROVAL_TYPE, APPROVAL_PERMISSION, DECISION } from "./material-demand.constants.js";
+import {
+  TRANSITIONS,
+  MATERIAL_DEMAND_STATUS,
+  APPROVAL_STAGE,
+  APPROVAL_TYPE,
+  APPROVAL_PERMISSION,
+  DECISION,
+} from "./material-demand.constants.js";
+import { PRICE_VIEW_PERMISSION } from "../procurement/procurement-pricing.constants.js";
+import * as pricingRepo from "../procurement/procurement-pricing.repository.js";
 import * as repo from "./material-demand.repository.js";
 
 const ALL_DEPARTMENTS_PERMISSION = "demand.all_departments";
@@ -121,11 +130,19 @@ export async function getDemandDetail(actor, id) {
 
   assertDemandViewable(actor, demand);
 
-  const [lines, auditLog, approvals] = await Promise.all([
+  const [lines, auditLog, storedApprovals] = await Promise.all([
     repo.findLinesByDemandId(id),
     repo.findAuditLogByDemandId(id),
     repo.findApprovalsByDemandId(id),
   ]);
+
+  const canSeeFinancialReasons =
+    actor.permissions.has(PRICE_VIEW_PERMISSION) || actor.permissions.has("procurement.pricing");
+  const approvals = storedApprovals.map((approval) =>
+    approval.approval_stage === APPROVAL_STAGE.FINAL && !canSeeFinancialReasons
+      ? { ...approval, reason: null }
+      : approval,
+  );
 
   return { demand, lines, auditLog, approvals };
 }
@@ -351,3 +368,155 @@ export const recordManagementReview = (actor, id, decision) =>
 
 export const recordFormalApproval = (actor, id, decision) =>
   recordApprovalDecision(actor, id, APPROVAL_TYPE.FORMAL_APPROVAL, decision);
+
+function finalAuditAction(approvalType, decision) {
+  return approvalType === APPROVAL_TYPE.MANAGEMENT_REVIEW
+    ? `FINAL_MANAGEMENT_${decision}`
+    : `FINAL_FORMAL_${decision}`;
+}
+
+async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId, decision, reason }) {
+  const permission = APPROVAL_PERMISSION[approvalType];
+  if (!actor.permissions.has(permission) || !actor.permissions.has(PRICE_VIEW_PERMISSION)) {
+    throw new ForbiddenError();
+  }
+
+  await withTransaction(async (client) => {
+    // Consistent lock order shared with Procurement save/submit/repricing:
+    // Demand first, then the current Pricing header.
+    const demand = await repo.lockById(client, id);
+    if (!demand) throw new NotFoundError("Demand not found.");
+    assertReviewActionAllowed(actor, demand);
+
+    if (demand.status !== MATERIAL_DEMAND_STATUS.PENDING_FINAL_APPROVAL) {
+      throw new ConflictError(`Cannot record a final decision for a Demand currently in ${demand.status} state.`);
+    }
+
+    const pricing = await pricingRepo.findPricing(client, id, demand.revision, { forUpdate: true });
+    if (!pricing || pricing.id !== pricingId || pricing.status !== "SUBMITTED") {
+      throw new ConflictError("The submitted Pricing version changed. Reload before deciding.");
+    }
+
+    const stageOptions = { approvalStage: APPROVAL_STAGE.FINAL, pricingId: pricing.id };
+    const existingSame = await repo.findApproval(
+      client,
+      id,
+      demand.revision,
+      approvalType,
+      stageOptions,
+    );
+    if (existingSame) {
+      throw new ConflictError(
+        `${approvalType === APPROVAL_TYPE.MANAGEMENT_REVIEW ? "Final Management Review" : "Final Formal Approval"} has already been decided for Pricing Version ${pricing.version}.`,
+      );
+    }
+
+    if (actor.role !== "CEO") {
+      const otherType = OTHER_APPROVAL_TYPE[approvalType];
+      const existingOther = await repo.findApproval(
+        client,
+        id,
+        demand.revision,
+        otherType,
+        stageOptions,
+      );
+      if (existingOther?.actor_user_id === actor.id) {
+        throw new ConflictError(
+          "The same user cannot record both final responsibilities for one Pricing version.",
+        );
+      }
+    }
+
+    await repo.insertApproval(client, {
+      demandId: id,
+      revision: demand.revision,
+      approvalStage: APPROVAL_STAGE.FINAL,
+      approvalType,
+      pricingId: pricing.id,
+      decision,
+      actorUserId: actor.id,
+      reason,
+    });
+
+    await repo.insertAuditLog(client, {
+      demandId: id,
+      actorUserId: actor.id,
+      action: finalAuditAction(approvalType, decision),
+      previousStatus: demand.status,
+      newStatus:
+        decision === DECISION.REJECTED
+          ? MATERIAL_DEMAND_STATUS.PRICING_REVISION_REQUIRED
+          : demand.status,
+      metadata: {
+        approvalStage: APPROVAL_STAGE.FINAL,
+        approvalType,
+        pricingId: pricing.id,
+        pricingVersion: pricing.version,
+      },
+    });
+
+    if (decision === DECISION.REJECTED) {
+      await repo.updateStatus(client, id, MATERIAL_DEMAND_STATUS.PRICING_REVISION_REQUIRED);
+      await repo.insertAuditLog(client, {
+        demandId: id,
+        actorUserId: actor.id,
+        action: "PRICING_REVISION_REQUIRED",
+        previousStatus: demand.status,
+        newStatus: MATERIAL_DEMAND_STATUS.PRICING_REVISION_REQUIRED,
+        metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
+      });
+
+      const procurementRecipients = await resolveEligibleRecipients({
+        capabilityCode: "procurement.pricing",
+        siteId: demand.site_id,
+      });
+      if (procurementRecipients.length > 0) {
+        await enqueue(
+          client,
+          procurementRecipients.map((userId) => ({
+            channel: "IN_APP",
+            eventType: "DEMAND_PRICING_REVISION_REQUIRED",
+            entityType: "MATERIAL_DEMAND",
+            entityId: id,
+            recipientUserId: userId,
+            recipientSiteId: demand.site_id,
+            idempotencyKey: `demand:${id}:rev:${demand.revision}:pricing:${pricing.version}:repricing-required:${userId}`,
+            payload: {
+              demandNumber: demand.demand_number,
+              departmentId: demand.department_id,
+              pricingVersion: pricing.version,
+              message: `Pricing for ${demand.department_name} Demand ${demand.demand_number} requires revision.`,
+              deepLink: `/procurement/pricing/${id}`,
+            },
+          })),
+        );
+      }
+      return;
+    }
+
+    const otherApproval = await repo.findApproval(
+      client,
+      id,
+      demand.revision,
+      OTHER_APPROVAL_TYPE[approvalType],
+      stageOptions,
+    );
+    if (!otherApproval || otherApproval.decision !== DECISION.APPROVED) return;
+
+    await repo.updateStatus(client, id, MATERIAL_DEMAND_STATUS.READY_FOR_IPO);
+    await repo.insertAuditLog(client, {
+      demandId: id,
+      actorUserId: actor.id,
+      action: "READY_FOR_IPO",
+      previousStatus: demand.status,
+      newStatus: MATERIAL_DEMAND_STATUS.READY_FOR_IPO,
+      metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
+    });
+  });
+}
+
+export const recordFinalManagementReview = (actor, id, decision) =>
+  recordFinalApprovalDecision(actor, id, APPROVAL_TYPE.MANAGEMENT_REVIEW, decision);
+
+export const recordFinalFormalApproval = (actor, id, decision) =>
+  recordFinalApprovalDecision(actor, id, APPROVAL_TYPE.FORMAL_APPROVAL, decision);

@@ -7,6 +7,8 @@ export const MATERIAL_DEMAND_STATUSES = [
   "REJECTED",
   "READY_FOR_PRICING",
   "PENDING_FINAL_APPROVAL",
+  "PRICING_REVISION_REQUIRED",
+  "READY_FOR_IPO",
 ];
 
 export const STATUS_TONE = {
@@ -15,6 +17,8 @@ export const STATUS_TONE = {
   REJECTED: "danger",
   READY_FOR_PRICING: "success",
   PENDING_FINAL_APPROVAL: "warning",
+  PRICING_REVISION_REQUIRED: "danger",
+  READY_FOR_IPO: "success",
 };
 
 export const APPROVAL_TYPE_LABEL = {

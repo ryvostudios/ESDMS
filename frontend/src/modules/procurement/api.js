@@ -13,8 +13,9 @@ export function listPricingQueue(filters) {
   return apiClient.get(`/procurement/pricing${buildQuery(filters)}`);
 }
 
-export function getPricing(demandId) {
-  return apiClient.get(`/procurement/pricing/${demandId}`);
+export function getPricing(demandId, version) {
+  const query = version ? `?version=${encodeURIComponent(version)}` : "";
+  return apiClient.get(`/procurement/pricing/${demandId}${query}`);
 }
 
 export function savePricing(demandId, input) {
@@ -25,3 +26,6 @@ export function submitPricing(demandId, input) {
   return apiClient.post(`/procurement/pricing/${demandId}/submit`, input);
 }
 
+export function startRepricing(demandId, input) {
+  return apiClient.post(`/procurement/pricing/${demandId}/repricing`, input);
+}

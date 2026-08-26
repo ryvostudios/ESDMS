@@ -366,6 +366,19 @@ its header's Demand. Two `SECURITY INVOKER` trigger functions with pinned
 headers and lines; the line guard locks its header so a direct write cannot
 race finalization. Ordinary Demand queries do not join either table.
 
+The migration `1787416000000_material-demand-final-pricing-approval.js`
+(Checkpoint 5) adds no table or directly callable function, so the runtime
+boundary remains 46 application tables (47 with owner-only `pgmigrations`).
+It adds stage/version-aware partial unique indexes and a composite FINAL
+approval foreign key binding Pricing id + Demand id + Demand revision.
+Existing approval rows are preserved as `INITIAL`; existing Pricing headers
+become Version 1. Submitted Pricing immutability and approval append-only
+triggers remain in force. FINAL actions require both the relevant Demand
+decision capability and `procurement.view_prices`; ordinary Demand responses
+redact protected FINAL rejection reasons and never join price data. A
+populated down migration refuses to destroy FINAL decisions or Version 2+
+history.
+
 The Workforce trigger functions (`employee_contracts_enforce_immutability`, `employee_contracts_forbid_finalized_delete`, `employee_business_history_guard`, and `employee_documents_guard_update`) are ordinary `LANGUAGE plpgsql` functions with no `SECURITY DEFINER` (same as the existing `forbid_update_delete()`/`forbid_delete()`) and an explicit `SET search_path = pg_catalog, public`. They receive no direct `EXECUTE` grant to application/browser roles and are invoked only through their table triggers.
 
 PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.

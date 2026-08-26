@@ -13,6 +13,7 @@ import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialo
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { usePricing } from "../../procurement/hooks/usePricing.js";
 import { PricingSummary } from "../../procurement/components/PricingSummary.jsx";
+import { FinalApprovalPanel } from "../../procurement/components/FinalApprovalPanel.jsx";
 import styles from "./DemandDetailPage.module.css";
 
 const EDITABLE_STATUSES = ["DRAFT"];
@@ -22,14 +23,26 @@ const PENDING_NOTICE = {
   REJECTED: "This Demand was rejected during initial review.",
   READY_FOR_PRICING: "This Demand has completed initial approval and is ready for Procurement pricing.",
   PENDING_FINAL_APPROVAL: "Pricing is complete and this Demand is pending final management review and formal approval.",
+  PRICING_REVISION_REQUIRED: "Submitted pricing was rejected at the final gate and requires a new immutable Pricing version.",
+  READY_FOR_IPO: "Final pricing approval is complete. This Demand is ready for the future official IPO workflow.",
 };
 
-function DemandPricingSection({ demandId }) {
+function DemandPricingSection({ demandId, reloadDemand }) {
   const { result, status, error, reload } = usePricing(demandId);
 
   if (status === "loading") return <LoadingState message="Loading protected pricing…" />;
   if (status === "error") return <ErrorState message={error} onRetry={() => reload().catch(() => {})} />;
-  return <PricingSummary detail={result} />;
+  return (
+    <>
+      <PricingSummary detail={result} />
+      <FinalApprovalPanel
+        detail={result}
+        onChanged={async () => {
+          await Promise.all([reload(), reloadDemand()]);
+        }}
+      />
+    </>
+  );
 }
 
 function DetailField({ label, value }) {
@@ -61,12 +74,13 @@ export function DemandDetailPage() {
   const canSubmit = SUBMITTABLE_STATUSES.includes(demand.status) && hasPermission("demand.submit");
   const canPrice = demand.status === "READY_FOR_PRICING" && hasPermission("procurement.pricing");
   const canViewSubmittedPrices =
-    demand.status === "PENDING_FINAL_APPROVAL" &&
+    ["PENDING_FINAL_APPROVAL", "PRICING_REVISION_REQUIRED", "READY_FOR_IPO"].includes(demand.status) &&
     hasPermission("procurement.view_prices", "procurement.pricing");
 
   const isPendingReview = demand.status === "PENDING_INITIAL_REVIEW";
-  const hasManagementReview = approvals.some((a) => a.approval_type === "MANAGEMENT_REVIEW");
-  const hasFormalApproval = approvals.some((a) => a.approval_type === "FORMAL_APPROVAL");
+  const initialApprovals = approvals.filter((approval) => (approval.approval_stage || "INITIAL") === "INITIAL");
+  const hasManagementReview = initialApprovals.some((a) => a.approval_type === "MANAGEMENT_REVIEW");
+  const hasFormalApproval = initialApprovals.some((a) => a.approval_type === "FORMAL_APPROVAL");
   const canReview = isPendingReview && !hasManagementReview && hasPermission("demand.review");
   const canApprove = isPendingReview && !hasFormalApproval && hasPermission("demand.approve");
   const showApprovalPanel = demand.status !== "DRAFT";
@@ -164,7 +178,7 @@ export function DemandDetailPage() {
 
           {canViewSubmittedPrices && (
             <div className={styles.section}>
-              <DemandPricingSection demandId={id} />
+              <DemandPricingSection demandId={id} reloadDemand={reload} />
             </div>
           )}
         </div>

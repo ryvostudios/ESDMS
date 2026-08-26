@@ -8,4 +8,3 @@ export const PRICING_STATUS = {
 };
 
 export const PRICING_CURRENCY = "PKR";
-

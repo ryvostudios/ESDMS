@@ -84,6 +84,7 @@ async function createDemand({ quantities = [50, 20], ready = true } = {}) {
 function pricingBody(detail, prices = ["100.00", "2.50"]) {
   return {
     revision: detail.demand.revision,
+    pricingVersion: detail.pricing?.version || 1,
     currency: "PKR",
     lines: detail.lines.map((line, index) => ({
       demandLineId: line.id || line.demand_line_id,
@@ -107,7 +108,7 @@ async function savePricing(detail, token = tokens.ceo, prices) {
 async function submitPricing(detail, token = tokens.ceo) {
   return apiRequest(server.baseUrl, "POST", `/api/v1/procurement/pricing/${detail.demand.id}/submit`, {
     token,
-    body: { revision: detail.demand.revision },
+    body: { revision: detail.demand.revision, pricingVersion: detail.pricing?.version || 1 },
   });
 }
 
@@ -273,7 +274,7 @@ test("price validation rejects zero, negative, malformed, numeric, oversized, an
   for (const line of invalidBodies) {
     const response = await apiRequest(server.baseUrl, "PUT", `/api/v1/procurement/pricing/${detail.demand.id}`, {
       token: tokens.ceo,
-      body: { revision: 1, currency: "PKR", lines: [{ demandLineId: lineId, ...line }] },
+      body: { revision: 1, pricingVersion: 1, currency: "PKR", lines: [{ demandLineId: lineId, ...line }] },
     });
     assert.equal(response.status, 400);
   }
@@ -305,6 +306,7 @@ test("unrelated and duplicate Demand lines are rejected", async () => {
     token: tokens.ceo,
     body: {
       revision: 1,
+      pricingVersion: 1,
       currency: "PKR",
       lines: [{ demandLineId: second.lines[0].id, estimatedUnitPrice: "10.00" }],
     },
@@ -314,7 +316,7 @@ test("unrelated and duplicate Demand lines are rejected", async () => {
   const duplicateLine = { demandLineId: first.lines[0].id, estimatedUnitPrice: "10.00" };
   const duplicate = await apiRequest(server.baseUrl, "PUT", `/api/v1/procurement/pricing/${first.demand.id}`, {
     token: tokens.ceo,
-    body: { revision: 1, currency: "PKR", lines: [duplicateLine, duplicateLine] },
+    body: { revision: 1, pricingVersion: 1, currency: "PKR", lines: [duplicateLine, duplicateLine] },
   });
   assert.equal(duplicate.status, 400);
 });
@@ -329,6 +331,7 @@ test("a non-ready Demand cannot be priced and a stale revision is rejected", asy
     token: tokens.ceo,
     body: {
       revision: ready.demand.revision + 1,
+      pricingVersion: 1,
       currency: "PKR",
       lines: [{ demandLineId: ready.lines[0].id, estimatedUnitPrice: "10.00" }],
     },
@@ -396,7 +399,7 @@ test("submission transitions exactly once, notifies final-gate actors once, and 
     const notification = await pool.query(
       `SELECT payload FROM notification_outbox
        WHERE idempotency_key = $1`,
-      [`demand:${detail.demand.id}:rev:1:final-review:${userId}`],
+      [`demand:${detail.demand.id}:rev:1:pricing:1:final-review:${userId}`],
     );
     assert.equal(notification.rowCount, 1);
     assert.equal(JSON.stringify(notification.rows[0].payload).includes("estimated"), false);
@@ -405,6 +408,7 @@ test("submission transitions exactly once, notifies final-gate actors once, and 
 
 test("final-gate notification resolver honors explicit GRANT, DENY, inactivity, and site scope", async () => {
   await setOverride(users.hr, "demand.approve", "GRANT");
+  await setOverride(users.hr, "procurement.view_prices", "GRANT");
   await setOverride(users.upperManagement, "demand.review", "DENY");
   await setOverride(users.otherSiteAdmin, "demand.review", "GRANT");
   try {
@@ -415,7 +419,7 @@ test("final-gate notification resolver honors explicit GRANT, DENY, inactivity, 
     const keys = await pool.query(
       `SELECT recipient_user_id FROM notification_outbox
        WHERE idempotency_key LIKE $1`,
-      [`demand:${detail.demand.id}:rev:1:final-review:%`],
+      [`demand:${detail.demand.id}:rev:1:pricing:1:final-review:%`],
     );
     const recipients = new Set(keys.rows.map((row) => row.recipient_user_id));
     assert.equal(recipients.has(users.hr), true, "explicit Formal Approval GRANT is eligible");
@@ -423,6 +427,7 @@ test("final-gate notification resolver honors explicit GRANT, DENY, inactivity, 
     assert.equal(recipients.has(users.otherSiteAdmin), false, "wrong-site reviewer is excluded");
   } finally {
     await clearOverride(users.hr, "demand.approve");
+    await clearOverride(users.hr, "procurement.view_prices");
     await clearOverride(users.upperManagement, "demand.review");
     await clearOverride(users.otherSiteAdmin, "demand.review");
   }
@@ -514,6 +519,6 @@ test("database uniqueness prevents competing pricing headers for one Demand revi
        VALUES ($1, $2, 'PKR', $3)`,
       [detail.demand.id, detail.demand.revision, users.ceo],
     ),
-    /material_demand_pricing_demand_revision_key/,
+    /material_demand_pricing_demand_revision_version_key/,
   );
 });

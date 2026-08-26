@@ -2478,3 +2478,61 @@ of scope.
 The migration adds two RLS-enabled application tables and two hardened
 trigger functions; the runtime boundary is now 46 application tables (47
 including owner-only `pgmigrations`).
+
+## 2026-08-26 — Checkpoint 5: Final Pricing Approval + Controlled Repricing Foundation
+
+### Decision
+
+Implemented `PENDING_FINAL_APPROVAL → READY_FOR_IPO` through two immutable
+FINAL decisions, plus the rejection path
+`PENDING_FINAL_APPROVAL → PRICING_REVISION_REQUIRED → READY_FOR_PRICING`
+that creates a new immutable Pricing version. `READY_FOR_IPO` is the stop
+boundary. No IPO entity, number, document/PDF, purchasing, actual price or
+quantity, DC, receiving, inventory, or export was introduced; official IPO
+design awaits the owner's real E-Set IPO/Demand/DC documents and numbering
+examples.
+
+### Durable design choices
+
+- **Approval stage and Pricing identity are structural.** Existing approval
+  rows are preserved as `INITIAL`. FINAL rows require a `pricing_id`, and a
+  composite foreign key proves that Pricing belongs to the same Demand and
+  Demand revision. Partial unique indexes provide one INITIAL responsibility
+  per revision and one FINAL responsibility per exact Pricing version.
+- **Responsibilities reuse capabilities.** FINAL Management Review requires
+  `demand.review + procurement.view_prices`; FINAL Formal/CFO Approval
+  requires `demand.approve + procurement.view_prices`. Scope remains a
+  separate same-site/company-wide decision. No CFO role or `demand.final_*`
+  capability was invented; Upper Management still has no default Formal
+  Approval, and a real CFO receives explicit GRANTs.
+- **Same-actor governance is per stage and Pricing version.** An ordinary
+  actor cannot fill both FINAL slots for one Pricing version. CEO retains the
+  documented exception. The same actor may hold their corresponding INITIAL
+  and FINAL responsibility because those are separate gates.
+- **One coherent terminal result under concurrency.** Every final action
+  locks Demand then the current Pricing header, matching save/submit/repricing
+  lock order. Two approvals yield exactly one `READY_FOR_IPO` transition; a
+  committed rejection makes later work on that round stale, so approval can
+  never complete the gate after rejection.
+- **Repricing creates history, never edits it.** `material_demand_pricing`
+  now has a positive server-sequenced `version`; multiple SUBMITTED versions
+  may exist but a partial unique index permits only one DRAFT. Only
+  `PRICING_REVISION_REQUIRED` can create the next version. Lines are copied as
+  an editable starting point, while every prior submitted header/line remains
+  protected by the existing database triggers.
+- **Protected rejection context.** The required FINAL rejection reason lives
+  on the append-only approval row and is returned only through the protected
+  Pricing resource. Ordinary Demand detail exposes workflow state and final
+  progress but redacts the reason; the operational audit and notification
+  payloads contain Pricing identifiers/version, never prices or the reason.
+- **Notifications are version-specific.** Final-gate recipients are the
+  intersection of the relevant action capability and
+  `procurement.view_prices`. Submission keys are
+  `...:pricing:{version}:final-review:{userId}`; rejection keys are
+  `...:pricing:{version}:repricing-required:{userId}`. A prior round cannot
+  suppress notifications for a resubmission.
+- **No new database trust surface.** Migration
+  `1787416000000_material-demand-final-pricing-approval.js` changes existing
+  RLS-enabled tables only, creates no application table/function, and leaves
+  the 46-table runtime allowlist unchanged. Its down migration explicitly
+  refuses to destroy FINAL decisions or Version 2+ pricing history.

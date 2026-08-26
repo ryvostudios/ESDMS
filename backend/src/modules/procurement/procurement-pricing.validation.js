@@ -18,6 +18,7 @@ const pricingLineSchema = z
 export const savePricingSchema = z
   .object({
     revision: z.number().int().positive(),
+    pricingVersion: z.number().int().positive(),
     currency: z.literal(PRICING_CURRENCY),
     lines: z.array(pricingLineSchema).max(200),
   })
@@ -30,6 +31,19 @@ export const savePricingSchema = z
 export const submitPricingSchema = z
   .object({
     revision: z.number().int().positive(),
+    pricingVersion: z.number().int().positive(),
+  })
+  .strict();
+
+export const startRepricingSchema = z
+  .object({
+    revision: z.number().int().positive(),
+  })
+  .strict();
+
+export const pricingDetailQuerySchema = z
+  .object({
+    version: z.coerce.number().int().positive().optional(),
   })
   .strict();
 
@@ -40,4 +54,3 @@ export const pricingQueueQuerySchema = z
     pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
   })
   .strict();
-

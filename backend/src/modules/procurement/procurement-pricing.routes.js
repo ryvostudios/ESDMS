@@ -17,5 +17,6 @@ router.get(
 );
 router.put("/:demandId", requirePermission("procurement.pricing"), controller.save);
 router.post("/:demandId/submit", requirePermission("procurement.pricing"), controller.submit);
+router.post("/:demandId/repricing", requirePermission("procurement.pricing"), controller.startRepricing);
 
 export default router;

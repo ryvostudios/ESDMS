@@ -194,7 +194,7 @@ see operational quantities is not automatically authorized to see prices.
 
 Current status:
 
-**Checkpoints 1-4 implemented.** Checkpoint 1 (Material Catalog Foundation)
+**Checkpoints 1-5 implemented.** Checkpoint 1 (Material Catalog Foundation)
 — Company Item, Department Material Catalog, and Units of Measure —
 backend module `backend/src/modules/material-catalog/`, frontend module
 `frontend/src/modules/material-catalog/`, migration
@@ -218,9 +218,13 @@ revision-bound estimated pricing, protected queue/detail/save/submit APIs,
 `READY_FOR_PRICING → PENDING_FINAL_APPROVAL`, immutable submitted prices,
 and capability-driven final-review notifications — backend/frontend module
 `src/modules/procurement/`, migration
-`1787415000000_material-demand-procurement-pricing.js`. Final approval
-actions through Closure (checkpoints 5-8) are specified in
-`docs/PROCUREMENT_RECEIVING_SPEC.md` but **not implemented**.
+`1787415000000_material-demand-procurement-pricing.js`. Checkpoint 5
+(Final Pricing Approval + Controlled Repricing) — INITIAL/FINAL approval
+identity, exact Pricing-version binding, two final responsibilities,
+rejection to `PRICING_REVISION_REQUIRED`, immutable sequential Pricing
+versions, versioned notifications, and completion at `READY_FOR_IPO` —
+migration `1787416000000_material-demand-final-pricing-approval.js`.
+Official IPO generation/numbering and Closure remain unimplemented.
 
 ---
 

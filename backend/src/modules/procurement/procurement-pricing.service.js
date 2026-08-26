@@ -12,6 +12,7 @@ import {
 } from "./procurement-pricing.authorization.js";
 import {
   ALL_DEMAND_SCOPE_PERMISSION,
+  PRICE_VIEW_PERMISSION,
   PRICING_PERMISSION,
   PRICING_STATUS,
 } from "./procurement-pricing.constants.js";
@@ -68,20 +69,36 @@ export async function listPricingQueue(actor, query) {
   });
 }
 
-export async function getPricing(actor, demandId) {
+export async function getPricing(actor, demandId, { version = null } = {}) {
   assertCanViewPrices(actor);
   const demand = await repo.findDemandById(demandId);
   if (!demand) throw new NotFoundError("Demand not found.");
   assertPricingScope(actor, demand);
 
-  const detail = await repo.getPricingDetail(demandId, demand.revision);
+  const detail = await repo.getPricingDetail(demandId, demand.revision, { version });
   const canEdit = actor.permissions.has(PRICING_PERMISSION);
+
+  if (version !== null && !detail.pricing) {
+    throw new NotFoundError("Pricing version not found.");
+  }
 
   if (!canEdit && detail.pricing?.status !== PRICING_STATUS.SUBMITTED) {
     throw new NotFoundError("Submitted pricing not found.");
   }
 
-  return { ...detail, canEdit: canEdit && detail.pricing?.status !== PRICING_STATUS.SUBMITTED };
+  const latestVersion = detail.versions[0]?.version || 1;
+  return {
+    ...detail,
+    canEdit:
+      canEdit &&
+      detail.pricing?.status !== PRICING_STATUS.SUBMITTED &&
+      detail.pricing?.version === latestVersion &&
+      detail.demand.status === MATERIAL_DEMAND_STATUS.READY_FOR_PRICING,
+    canStartRevision:
+      canEdit &&
+      version === null &&
+      detail.demand.status === MATERIAL_DEMAND_STATUS.PRICING_REVISION_REQUIRED,
+  };
 }
 
 export async function savePricing(actor, demandId, input) {
@@ -101,14 +118,21 @@ export async function savePricing(actor, demandId, input) {
     assertLineOwnership(demandLines, input.lines);
 
     let pricing = await repo.findPricing(client, demandId, input.revision, { forUpdate: true });
+    if (pricing && pricing.version !== input.pricingVersion) {
+      throw new ConflictError("Pricing version changed. Reload before continuing.");
+    }
     if (pricing?.status === PRICING_STATUS.SUBMITTED) {
       throw new ConflictError("Submitted pricing is immutable.");
     }
 
     if (!pricing) {
+      if (input.pricingVersion !== 1) {
+        throw new ConflictError("Pricing version changed. Reload before continuing.");
+      }
       pricing = await repo.createPricing(client, {
         demandId,
         revision: input.revision,
+        version: 1,
         currency: input.currency,
         actorId: actor.id,
       });
@@ -119,6 +143,7 @@ export async function savePricing(actor, demandId, input) {
         action: "PRICING_DRAFT_CREATED",
         previousStatus: demand.status,
         newStatus: demand.status,
+        metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
       });
       return;
     }
@@ -137,6 +162,7 @@ export async function savePricing(actor, demandId, input) {
       action: "PRICING_DRAFT_SAVED",
       previousStatus: demand.status,
       newStatus: demand.status,
+      metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
     });
   });
 
@@ -165,12 +191,17 @@ export async function submitPricing(actor, demandId, input) {
 
     const pricing = await repo.findPricing(client, demandId, input.revision, { forUpdate: true });
 
+    if (pricing && pricing.version !== input.pricingVersion) {
+      throw new ConflictError("Pricing version changed. Reload before continuing.");
+    }
+
     // A replay after a committed submission is a successful no-op. This
     // gives retrying clients an idempotent response while preserving one
     // transition, audit pair, and recipient-specific outbox row.
     if (
       demand.status === MATERIAL_DEMAND_STATUS.PENDING_FINAL_APPROVAL &&
-      pricing?.status === PRICING_STATUS.SUBMITTED
+      pricing?.status === PRICING_STATUS.SUBMITTED &&
+      pricing.version === input.pricingVersion
     ) {
       return;
     }
@@ -194,6 +225,7 @@ export async function submitPricing(actor, demandId, input) {
       action: "PRICING_SUBMITTED",
       previousStatus: demand.status,
       newStatus: demand.status,
+      metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
     });
 
     await demandRepo.updateStatus(client, demandId, MATERIAL_DEMAND_STATUS.PENDING_FINAL_APPROVAL);
@@ -203,9 +235,10 @@ export async function submitPricing(actor, demandId, input) {
       action: "PENDING_FINAL_APPROVAL",
       previousStatus: demand.status,
       newStatus: MATERIAL_DEMAND_STATUS.PENDING_FINAL_APPROVAL,
+      metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
     });
 
-    const [reviewers, approvers] = await Promise.all([
+    const [reviewers, approvers, priceViewers] = await Promise.all([
       resolveEligibleRecipients({
         capabilityCode: "demand.review",
         allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
@@ -216,10 +249,18 @@ export async function submitPricing(actor, demandId, input) {
         allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
         siteId: demand.site_id,
       }),
+      resolveEligibleRecipients({
+        capabilityCode: PRICE_VIEW_PERMISSION,
+        allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
+        siteId: demand.site_id,
+      }),
     ]);
-    const reviewerSet = new Set(reviewers);
-    const approverSet = new Set(approvers);
-    const recipientIds = new Set([...reviewers, ...approvers]);
+    const priceViewerSet = new Set(priceViewers);
+    const eligibleReviewers = reviewers.filter((userId) => priceViewerSet.has(userId));
+    const eligibleApprovers = approvers.filter((userId) => priceViewerSet.has(userId));
+    const reviewerSet = new Set(eligibleReviewers);
+    const approverSet = new Set(eligibleApprovers);
+    const recipientIds = new Set([...eligibleReviewers, ...eligibleApprovers]);
 
     if (recipientIds.size > 0) {
       await enqueue(
@@ -237,10 +278,11 @@ export async function submitPricing(actor, demandId, input) {
             entityId: demandId,
             recipientUserId: userId,
             recipientSiteId: demand.site_id,
-            idempotencyKey: `demand:${demandId}:rev:${demand.revision}:final-review:${userId}`,
+            idempotencyKey: `demand:${demandId}:rev:${demand.revision}:pricing:${pricing.version}:final-review:${userId}`,
             payload: {
               demandNumber: demand.demand_number,
               departmentId: demand.department_id,
+              pricingVersion: pricing.version,
               message: `Pricing for ${demand.department_name} Demand ${demand.demand_number} is ready for ${responsibility}.`,
               deepLink: `/demands/${demandId}`,
             },
@@ -248,6 +290,61 @@ export async function submitPricing(actor, demandId, input) {
         }),
       );
     }
+  });
+
+  return getPricing(actor, demandId);
+}
+
+export async function startRepricing(actor, demandId, input) {
+  assertCanPrice(actor);
+
+  await withTransaction(async (client) => {
+    const demand = await demandRepo.lockById(client, demandId);
+    if (!demand) throw new NotFoundError("Demand not found.");
+    assertPricingScope(actor, demand);
+    assertCurrentRevision(demand, input.revision);
+
+    if (demand.status !== MATERIAL_DEMAND_STATUS.PRICING_REVISION_REQUIRED) {
+      throw new ConflictError(`Cannot start repricing for a Demand currently in ${demand.status} state.`);
+    }
+
+    const previous = await repo.findPricing(client, demandId, input.revision, { forUpdate: true });
+    if (!previous || previous.status !== PRICING_STATUS.SUBMITTED) {
+      throw new ConflictError("A submitted Pricing version is required before repricing can begin.");
+    }
+
+    const nextVersion = previous.version + 1;
+    const pricing = await repo.createPricing(client, {
+      demandId,
+      revision: input.revision,
+      version: nextVersion,
+      currency: previous.currency,
+      actorId: actor.id,
+    });
+    await repo.copyPricingLines(client, previous.id, pricing.id, demandId);
+
+    await demandRepo.insertAuditLog(client, {
+      demandId,
+      actorUserId: actor.id,
+      action: "PRICING_VERSION_CREATED",
+      previousStatus: demand.status,
+      newStatus: demand.status,
+      metadata: {
+        pricingId: pricing.id,
+        pricingVersion: pricing.version,
+        previousPricingId: previous.id,
+        previousPricingVersion: previous.version,
+      },
+    });
+    await demandRepo.updateStatus(client, demandId, MATERIAL_DEMAND_STATUS.READY_FOR_PRICING);
+    await demandRepo.insertAuditLog(client, {
+      demandId,
+      actorUserId: actor.id,
+      action: "READY_FOR_PRICING",
+      previousStatus: demand.status,
+      newStatus: MATERIAL_DEMAND_STATUS.READY_FOR_PRICING,
+      metadata: { pricingId: pricing.id, pricingVersion: pricing.version, repricing: true },
+    });
   });
 
   return getPricing(actor, demandId);

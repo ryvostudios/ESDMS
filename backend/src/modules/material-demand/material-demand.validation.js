@@ -55,6 +55,12 @@ export const decisionSchema = z
     path: ["reason"],
   });
 
+export const finalDecisionSchema = decisionSchema.and(
+  z.object({
+    pricingId: uuid,
+  }),
+);
+
 export const listQuerySchema = z.object({
   departmentId: uuid.optional(),
   status: z.enum(STATUSES).optional(),

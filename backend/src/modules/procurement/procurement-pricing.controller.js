@@ -3,7 +3,9 @@ import { asyncHandler } from "../../shared/http/async-handler.js";
 import * as service from "./procurement-pricing.service.js";
 import {
   pricingQueueQuerySchema,
+  pricingDetailQuerySchema,
   savePricingSchema,
+  startRepricingSchema,
   submitPricingSchema,
 } from "./procurement-pricing.validation.js";
 
@@ -20,7 +22,8 @@ export const list = asyncHandler(async (req, res) => {
 });
 
 export const detail = asyncHandler(async (req, res) => {
-  const result = await service.getPricing(req.user, req.params.demandId);
+  const query = parse(pricingDetailQuerySchema, req.query);
+  const result = await service.getPricing(req.user, req.params.demandId, query);
   res.status(200).json({ success: true, data: result });
 });
 
@@ -36,3 +39,8 @@ export const submit = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: result });
 });
 
+export const startRepricing = asyncHandler(async (req, res) => {
+  const input = parse(startRepricingSchema, req.body);
+  const result = await service.startRepricing(req.user, req.params.demandId, input);
+  res.status(201).json({ success: true, data: result });
+});

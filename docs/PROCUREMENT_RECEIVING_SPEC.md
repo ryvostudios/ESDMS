@@ -26,21 +26,17 @@ Inventory is a distinct, later project phase.
 |---|---|---|
 | 1 | Material Catalog Foundation (Company Item, Department Material Catalog, Units of Measure) | **Implemented** |
 | 2 | Demand List + department item picker + submit | **Implemented** (revisions/reopen deferred — see §7, §14) |
-| 3 | Initial UM/CFO review + notification routing | Not started |
-| 4 | Procurement pricing + financial visibility | Not started |
-| 5 | Final approval + automatic IPO generation + numbering | Not started |
+| 3 | Initial Management/Formal approval + notification routing | **Implemented** |
+| 4 | Procurement pricing + financial visibility | **Implemented** |
+| 5 | Final pricing approval + controlled repricing foundation | **Implemented** (stops at `READY_FOR_IPO`; official IPO awaits owner documents) |
 | 6 | Purchase progress + Delivery Challan | Not started |
 | 7 | Department receiving + Admin fallback custody/handover + Team Lead closure | Not started |
 | 8 | End-to-end regression + reporting/history + beta polish | Not started |
 
-Only §2-§9 (Material Catalog, Demand List, Draft editing, Submission) and
-§25-§27, §29, §31-§32 (data model, authorization, isolation tests,
-notification, security, frontend — the implemented portions) describe
-implemented, working behavior today. Everything from §9's "First
-Management Review" onward describes checkpoints 3-8, not yet built.
-Everything from §6 onward (Demand through Closure) is the **authoritative
-target design** for checkpoints 2-8, not yet built — treat it as binding
-for future implementation, not as a description of current code.
+Sections explicitly marked Implemented through Checkpoint 5 describe
+working behavior. Official IPO generation/numbering and everything after
+`READY_FOR_IPO` remain target design only and must not be implemented
+until the owner supplies authoritative E-Set IPO/Demand/DC examples.
 
 ---
 
@@ -246,8 +242,8 @@ bare status change) tied to the Demand's `id` **and current `revision`**,
 carrying the decision (`APPROVED`/`REJECTED`), the deciding actor, and a
 reason (required to reject, optional to approve). A slot can be decided
 exactly once — not every eligible reviewer approves, only one decision per
-slot, first writer wins (a DB `UNIQUE(demand_id, revision, approval_type)`
-constraint backs this, not just application logic). Order does not
+slot, first writer wins (the `INITIAL` partial unique index on Demand,
+revision, and approval type backs this, not just application logic). Order does not
 matter: either slot may be decided first.
 
 **A single ordinary user cannot fill both slots on the same Demand** —
@@ -311,7 +307,8 @@ than zero, and authoritative line/grand totals are recomputed in PostgreSQL
 from the revision-bound Demand quantity × unit price. Client totals are not
 accepted. Drafts may be partial; submission requires exactly one valid
 price for every Demand line. Submitted headers and lines are immutable at
-both service and trigger layers. There is no repricing/reopen workflow yet.
+both service and trigger layers. Checkpoint 5 adds controlled Pricing-version
+repricing after a FINAL rejection; it does not add Demand reopening.
 
 Previous Purchase Price remains absent until derived from actual purchase
 history or a separately designed legacy-data import. It is never inferred
@@ -331,26 +328,46 @@ Submission reuses the shared effective-capability recipient resolver for
 `demand.review` and `demand.approve`, including GRANT/DENY, active state,
 site scope and CEO authority, and deduplicates dual-capability users.
 Recipient-specific keys are
-`demand:{id}:rev:{revision}:final-review:{userId}`. Notification text has
-no price data. Checkpoint 5 adds the second approval actions; Checkpoint 4
-adds no final-approval buttons or decisions.
+`demand:{id}:rev:{revision}:pricing:{version}:final-review:{userId}`.
+Checkpoint 5 requires the recipient to hold `procurement.view_prices` as
+well as the relevant decision capability. Notification text has no price
+data.
 
 ---
 
-## 13. Final Approval (Checkpoint 5)
+## 13. Final Pricing Approval — **Implemented (Checkpoint 5)**
 
-The final purchasing authorization gate. Required UM/CFO approvals are
-recorded. CFO is the formal financial/final authority per current business
-proposal, expressed as a capability (`procurement.financial_approve` or
-equivalent — see §26), never a scattered `if (role === 'CFO')` check. Once
-all required final approvals succeed: the approved Demand revision is
-locked, approval-relevant editing is prevented, and the **IPO is generated
-automatically** — no separate manual "Generate IPO" step (owner override,
-explicit).
+The final purchasing-authorization gate has two immutable responsibilities:
+`FINAL / MANAGEMENT_REVIEW` and `FINAL / FORMAL_APPROVAL`. They reuse
+`demand.review` and `demand.approve`; both also require
+`procurement.view_prices` and valid site scope. Every FINAL row references
+the exact submitted Pricing header it decided. INITIAL rows remain separate
+historical records. An ordinary user cannot fill both FINAL slots for one
+Pricing version; CEO retains the deliberate exception. The same actor may
+legitimately hold the same responsibility at INITIAL and FINAL stages.
+
+Both approvals for the same submitted Pricing version transition the Demand
+exactly once to `READY_FOR_IPO`. This is only a workflow boundary: no IPO
+record, number, document, PDF, or purchasing operation is created.
+
+Either rejection preserves all decisions and submitted prices, requires an
+internal reason visible only through the protected pricing resource, and
+transitions to `PRICING_REVISION_REQUIRED`. Procurement may then explicitly
+start one new server-sequenced DRAFT Pricing version. The preceding version
+remains immutable; resubmission returns to `PENDING_FINAL_APPROVAL` and sends
+a new version-specific notification set.
 
 ---
 
-## 14. Revisions (Checkpoints 2 &amp; 5)
+## 14. Revisions
+
+**Pricing-version repricing is implemented (Checkpoint 5).** It may change
+only Estimated Market Price and Procurement notes. Demand items, quantities,
+site, department, snapshots, and Demand revision do not change. Only one
+current DRAFT may exist for a Demand revision, and it may be created only
+from `PRICING_REVISION_REQUIRED`.
+
+**Demand reopen/revision remains unimplemented.**
 
 After final approval, the approved Demand revision is immutable for
 approval-relevant content. A required change reopens the Demand,
@@ -361,7 +378,12 @@ silently rewritten.
 
 ---
 
-## 15. IPO — First-Class Business Document (Checkpoint 5)
+## 15. IPO — First-Class Business Document (future checkpoint)
+
+No official IPO model is implemented. Its entity, number, layout, and
+generation rules intentionally await the owner's authoritative E-Set
+IPO/Demand/DC documents and numbering examples. The text below remains
+target design and must not be treated as current behavior.
 
 **IPO is the final approved purchasing document generated from the final
 approved Demand revision.** It is a real first-class domain entity, never
@@ -578,15 +600,32 @@ cutover — not by retrofitting a computed balance onto V1 receiving data.
   actions record draft creation/save, pricing submission, and the status
   transition without placing commercial values in the operational audit.
 
+### Implemented (Checkpoint 5)
+
+- `material_demand_approvals.approval_stage` distinguishes `INITIAL` from
+  `FINAL`; existing rows were preserved/backfilled as `INITIAL`.
+- FINAL approval rows carry `pricing_id`, with a composite foreign key
+  proving the Pricing header belongs to the same Demand revision. Partial
+  unique indexes provide one INITIAL slot per responsibility and one FINAL
+  slot per responsibility per exact Pricing version.
+- `material_demand_pricing.version` is positive and server-sequenced within
+  (`demand_id`, `demand_revision`). Multiple immutable SUBMITTED versions are
+  allowed; a partial unique index permits only one DRAFT for that Demand
+  revision.
+- Demand statuses now include `PRICING_REVISION_REQUIRED` and
+  `READY_FOR_IPO`. The audit stream records exact Pricing id/version metadata
+  for final decisions, repricing, resubmission, and the final transition,
+  without copying price values or protected rejection reasons into the
+  ordinary Demand payload.
+
 ### Target for later checkpoints — not yet created
 
 - Demand Revision as its own structure (the `revision` column exists and
   is used — every approval records the revision it applied to (§9,
   §14) — but no reopen/new-revision workflow exists yet to ever advance
   it past `1`).
-- Procurement: final financial approval actions (the **second** gate,
-  after pricing — distinct from Checkpoint 3's first gate), IPO, IPO Line,
-  purchasing line/progress.
+- Procurement: official IPO, IPO Line, purchasing line/progress. Final
+  pricing approval and controlled pricing versions are implemented above.
 - Delivery: Delivery Challan, Delivery Challan Line.
 - Receiving: Material Receipt, Receipt Line, department confirmation,
   temporary Admin custody/handover record.
@@ -693,15 +732,26 @@ capability by default. An individual DENY wins. Capabilities remain
 separate from scope: same-site access is cross-department; only CEO or a
 separately effective `demand.all_departments` grant reaches other sites.
 
+**Checkpoint 5 reuses existing capabilities:**
+
+| Final responsibility | Required effective capabilities | Scope shape |
+|---|---|---|
+| Final Management Review | `demand.review` + `procurement.view_prices` | Site-wide |
+| Final Formal/CFO Approval | `demand.approve` + `procurement.view_prices` | Site-wide |
+
+No `demand.final_*` capability and no CFO role was introduced. Upper
+Management still does not receive `demand.approve` by role. A real CFO/
+financial approver receives explicit `demand.approve` and
+`procurement.view_prices` GRANTs plus the appropriate scope. ADMIN receives
+none merely from its role. CEO retains the documented scope and same-actor
+exception. Holding an action capability without price-view cannot inspect
+or decide confidential pricing.
+
 **Target for later checkpoints** (capability names indicative, not final
 — define precisely when each checkpoint is designed):
 
 - Procurement: record purchasing and view actual prices. Estimated pricing
   and its separate read capability are implemented above.
-- Financial approval (the **second** gate, after pricing): a distinct
-  capability from `demand.approve` above and from ordinary Procurement
-  authority (mirrors the existing `users.create_um`/`users.manage_um`
-  pattern — role alone never implies the higher authority).
 - IPO: view, cancel where authorized, configure numbering only through
   protected governance authority.
 - DC: create/finalize/view.
@@ -740,7 +790,11 @@ history preservation, revision binding, and the capability-driven
 recipient resolver's GRANT/DENY/inactive/site/dedup behavior);
 `backend/test/procurement-pricing.test.js` (Checkpoint 4 — financial
 confidentiality, capability/scope, exact totals, line/revision validation,
-replay/concurrency, notification eligibility, and direct-DB immutability).
+replay/concurrency, notification eligibility, and direct-DB immutability);
+`backend/test/material-demand-final-approval.test.js` (Checkpoint 5 —
+stage/version binding, capability intersection, same-actor/CEO governance,
+rejection/repricing history, versioned notifications, concurrency/replay,
+reason redaction, and database immutability/binding).
 
 ---
 
@@ -761,16 +815,16 @@ is never fetched and merely hidden by React.
 Notifications are workflow side effects of successfully **committed**
 transitions — never sent before the corresponding transaction commits
 (mirrors the existing Gate Pass approval → outbox-in-same-transaction
-pattern). **`DEMAND SUBMITTED`, `INITIAL REQUIRED APPROVALS COMPLETE`, and
-`PROCUREMENT PRICING SUBMITTED` are implemented (Checkpoints 2-4)**;
-everything else below remains target design for checkpoints 5-7:
+pattern). Demand submission, initial-gate completion, each versioned Pricing
+submission, and final rejection/repricing notification are implemented.
+IPO/purchasing/receiving events below remain target design:
 
 ```text
 DEMAND SUBMITTED                       → notify eligible reviewers + approvers
 INITIAL REQUIRED APPROVALS COMPLETE    → notify Procurement: READY FOR PRICING
 PROCUREMENT PRICING SUBMITTED          → notify UM + CFO: FINAL APPROVAL REQUIRED
-FINAL APPROVAL COMPLETE                → atomically generate IPO
-                                        → notify Procurement: IPO READY FOR PURCHASE
+FINAL APPROVAL COMPLETE                → READY_FOR_IPO (implemented boundary;
+                                          no IPO generation yet)
 PURCHASING / DC FINALIZED              → notify relevant department/TL as appropriate
 DIRECT DEPARTMENT RECEIPT              → notify Team Lead: CONFIRM RECEIPT
 ADMIN TEMPORARY RECEIPT                → notify department/TL: HANDOVER PENDING
@@ -795,36 +849,37 @@ Recipient-specific idempotency keys
 duplicating any individual recipient's notification, and deduplicate a
 user eligible through more than one capability to exactly one row.
 
-Checkpoint 4 uses the same resolver for `demand.review` and
-`demand.approve` final-gate recipients with the distinct
-`...:final-review:{userId}` key. A replayed pricing submission is a
-successful no-op after the first transaction commits.
+Checkpoint 5 intersects the resolver results for `demand.review` or
+`demand.approve` with `procurement.view_prices`. Keys include the exact
+Pricing version: `...:pricing:{version}:final-review:{userId}`. Rejection
+uses `...:pricing:{version}:repricing-required:{userId}` for eligible
+Procurement users. Thus Version 1 cannot suppress Version 2 notifications.
+A replayed pricing submission remains a successful no-op after the first
+transaction commits.
 
 Idempotency/uniqueness (the existing `notification_outbox` idempotency-key
-pattern, plus `material_demand_approvals`' own `UNIQUE(demand_id, revision,
-approval_type)` constraint for the approval decisions themselves) prevents
-a retried transition from creating a duplicate IPO, a duplicate approval
-record, or a duplicate notification.
+pattern, plus stage/version-aware partial unique indexes on
+`material_demand_approvals`) prevents duplicate decisions or notifications.
+There is no IPO to duplicate in Checkpoint 5.
 
 ---
 
-## 30. State Machine Design — target design
+## 30. State Machine Design
 
 Separate bounded state machines per domain (not one cross-domain status
 field), each following the existing Gate Pass pattern: lock the row,
 validate the transition against an explicit allowed-transition table,
 apply, audit — all in one transaction.
 
-**Demand** (indicative; transitions through `PENDING_FINAL_APPROVAL` and
-`PENDING_INITIAL_REVIEW → REJECTED` are implemented; everything after
-`PENDING_FINAL_APPROVAL` is not):
+**Demand** (implemented through `READY_FOR_IPO`):
 ```text
 DRAFT → PENDING_INITIAL_REVIEW → READY_FOR_PRICING → PENDING_FINAL_APPROVAL
-      → APPROVED → IPO_GENERATED → IN_PURCHASING → RECEIVING → COMPLETED
+                                               ├─ both FINAL approved → READY_FOR_IPO
+                                               └─ either rejected → PRICING_REVISION_REQUIRED
+                                                    → READY_FOR_PRICING (new Pricing version)
 ```
-plus controlled `REJECTED` (implemented — reachable from
-`PENDING_INITIAL_REVIEW` only, for now), `CANCELLED`, and a
-reopen/revision path (§14, not yet implemented). The implemented `submit`
+plus initial-stage `REJECTED`. `CANCELLED`, official IPO, and Demand
+reopen/revision remain unimplemented. The implemented `submit`
 transition follows the exact lock-then-validate-then-transition-then-audit
 pattern this section describes:
 `backend/src/modules/material-demand/material-demand.service.js` locks
@@ -841,7 +896,7 @@ audit row + Procurement notification, all still in the one transaction) or
 either is `REJECTED` (→ immediate transition, no further evaluation
 needed).
 
-**IPO** (indicative): `GENERATED → ACKNOWLEDGED → PURCHASING →
+**IPO** (unimplemented indicative target): `GENERATED → ACKNOWLEDGED → PURCHASING →
 PURCHASE_COMPLETE/PARTIAL → COMPLETED`, plus authorized cancellation.
 
 **DC** (indicative): `DRAFT → FINALIZED → IN_TRANSIT/READY → RECEIVED`.
@@ -923,10 +978,18 @@ reusable protected summary on Demand Detail. Users without financial
 authority do not mount the pricing request or receive pricing data. No
 final approval actions are shown.
 
+**Implemented (Checkpoint 5):** a protected Final Pricing Approval panel
+shows the exact Pricing version, quantities/UOM, prices/totals, submission
+context, and independent Management/Formal progress. Only the actor's
+permitted responsibility is actionable; rejection requires an internal
+reason. Procurement sees repricing-required work, explicitly creates the
+next version, edits only the current DRAFT, and can inspect older submitted
+versions read-only. Operational users see status only and do not mount the
+pricing request without financial permission.
+
 **Target for later checkpoints:** Department — Receiving/Pending
 Confirmation. Procurement — Ready for Purchase, IPO Detail, Purchase
-Progress, Delivery Challan. Management —
-Pending Final Approval (the second gate, after pricing), revision history.
+Progress, Delivery Challan. Management — future IPO/purchasing views.
 Receiving — Receive DC, Pending Department Handover, Pending TL
 Confirmation, Completed Receiving. All navigation capability-controlled.
 

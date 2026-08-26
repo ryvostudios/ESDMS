@@ -22,7 +22,7 @@ export function PricingQueuePage() {
 
   return (
     <div>
-      <PageHeader title="Procurement — Ready for Pricing" description="Approved Demands awaiting estimated market pricing." />
+      <PageHeader title="Procurement — Pricing Work" description="Approved Demands awaiting initial pricing or controlled repricing." />
       <div className={styles.search}>
         <SearchField
           value={search}
@@ -51,7 +51,13 @@ export function PricingQueuePage() {
                 </div>
                 <div className={styles.meta}>
                   <span>{demand.line_count} {demand.line_count === 1 ? "item" : "items"}</span>
-                  <span>{demand.pricing_id ? "Draft saved" : "Ready for Pricing"}</span>
+                  <span>
+                    {demand.status === "PRICING_REVISION_REQUIRED"
+                      ? "Repricing Required"
+                      : demand.pricing_status === "DRAFT"
+                        ? `Pricing Version ${demand.pricing_version} draft saved`
+                        : "Ready for Pricing"}
+                  </span>
                 </div>
               </Link>
             ))}
@@ -62,4 +68,3 @@ export function PricingQueuePage() {
     </div>
   );
 }
-

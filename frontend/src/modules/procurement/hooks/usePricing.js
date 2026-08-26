@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getPricing } from "../api.js";
 
-export function usePricing(demandId) {
+export function usePricing(demandId, version = null) {
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState(null);
@@ -9,7 +9,7 @@ export function usePricing(demandId) {
   const load = useCallback(() => {
     setStatus("loading");
     setError(null);
-    return getPricing(demandId)
+    return getPricing(demandId, version)
       .then((response) => {
         setResult(response.data);
         setStatus("ready");
@@ -20,7 +20,7 @@ export function usePricing(demandId) {
         setStatus("error");
         throw requestError;
       });
-  }, [demandId]);
+  }, [demandId, version]);
 
   useEffect(() => {
     // The rejection is reflected in state; avoid an unhandled promise from

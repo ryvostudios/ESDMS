@@ -6,6 +6,8 @@ import { DemandDetailPage } from "./DemandDetailPage.jsx";
 const mockUseDemand = vi.hoisted(() => vi.fn());
 const mockRecordManagementReview = vi.hoisted(() => vi.fn());
 const mockRecordFormalApproval = vi.hoisted(() => vi.fn());
+const mockRecordFinalManagementReview = vi.hoisted(() => vi.fn());
+const mockRecordFinalFormalApproval = vi.hoisted(() => vi.fn());
 const mockUsePricing = vi.hoisted(() => vi.fn());
 
 vi.mock("../hooks/useDemand.js", () => ({
@@ -16,6 +18,8 @@ vi.mock("../api.js", () => ({
   submitDemand: vi.fn(),
   recordManagementReview: (...args) => mockRecordManagementReview(...args),
   recordFormalApproval: (...args) => mockRecordFormalApproval(...args),
+  recordFinalManagementReview: (...args) => mockRecordFinalManagementReview(...args),
+  recordFinalFormalApproval: (...args) => mockRecordFinalFormalApproval(...args),
 }));
 
 vi.mock("../../procurement/hooks/usePricing.js", () => ({
@@ -23,8 +27,10 @@ vi.mock("../../procurement/hooks/usePricing.js", () => ({
 }));
 
 let mockPermissions = new Set();
+let mockUser = { id: "manager-1", role: "SITE_MANAGER" };
 vi.mock("../../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({
+    user: mockUser,
     hasPermission: (...codes) => codes.some((code) => mockPermissions.has(code)),
   }),
 }));
@@ -54,9 +60,30 @@ afterEach(() => {
   mockUseDemand.mockReset();
   mockRecordManagementReview.mockReset();
   mockRecordFormalApproval.mockReset();
+  mockRecordFinalManagementReview.mockReset();
+  mockRecordFinalFormalApproval.mockReset();
   mockUsePricing.mockReset();
   mockPermissions = new Set();
+  mockUser = { id: "manager-1", role: "SITE_MANAGER" };
 });
+
+function submittedPricing(finalApprovals = [], demandStatus = "PENDING_FINAL_APPROVAL") {
+  return {
+    demand: { id: "demand-1", status: demandStatus, revision: 1 },
+    pricing: { id: "pricing-1", status: "SUBMITTED", currency: "PKR", version: 2 },
+    finalApprovals,
+    lines: [{
+      demand_line_id: "line-1",
+      item_name_snapshot: "Cement",
+      requested_quantity: "50.00",
+      uom_name_snapshot: "Bags",
+      estimated_unit_price: "1450.00",
+      line_total: "72500.00",
+      procurement_note: null,
+    }],
+    estimatedTotal: "72500.00",
+  };
+}
 
 async function renderPage() {
   await act(async () => {
@@ -284,7 +311,9 @@ describe("DemandDetailPage", () => {
     });
     mockUsePricing.mockReturnValue({
       result: {
-        pricing: { status: "SUBMITTED", currency: "PKR" },
+        demand: { id: "demand-1", status: "PENDING_FINAL_APPROVAL" },
+        pricing: { id: "pricing-1", status: "SUBMITTED", currency: "PKR", version: 1 },
+        finalApprovals: [],
         lines: [{
           demand_line_id: "line-1",
           item_name_snapshot: "Cement",
@@ -317,5 +346,96 @@ describe("DemandDetailPage", () => {
     expect(mockUsePricing).not.toHaveBeenCalled();
     expect(screen.queryByText("Pricing")).toBeNull();
     expect(screen.queryByText(/Rs 72,500/)).toBeNull();
+  });
+
+  test("a final Management reviewer sees Version-bound actions and approval progress", async () => {
+    mockPermissions = new Set(["demand.review", "procurement.view_prices"]);
+    const reloadDemand = vi.fn().mockResolvedValue({});
+    const reloadPricing = vi.fn().mockResolvedValue({});
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_FINAL_APPROVAL", revision: 1 }),
+      status: "ready",
+      error: null,
+      reload: reloadDemand,
+    });
+    mockUsePricing.mockReturnValue({
+      result: submittedPricing(),
+      status: "ready",
+      error: null,
+      reload: reloadPricing,
+    });
+    mockRecordFinalManagementReview.mockResolvedValue({});
+
+    await renderPage();
+    expect(screen.getByText("Final Pricing Approval · Version 2")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(mockRecordFinalManagementReview).toHaveBeenCalledWith("demand-1", {
+      pricingId: "pricing-1",
+      decision: "APPROVED",
+    }));
+    await waitFor(() => expect(reloadDemand).toHaveBeenCalled());
+    expect(mockRecordFinalFormalApproval).not.toHaveBeenCalled();
+  });
+
+  test("same ordinary actor is not offered the other FINAL responsibility, while CEO retains the exception", async () => {
+    const management = {
+      approval_stage: "FINAL",
+      approval_type: "MANAGEMENT_REVIEW",
+      decision: "APPROVED",
+      actor_user_id: "manager-1",
+      actor_name: "Test Manager",
+      created_at: "2026-08-26T00:00:00.000Z",
+    };
+    mockPermissions = new Set(["demand.review", "demand.approve", "procurement.view_prices"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_FINAL_APPROVAL" }), status: "ready", error: null, reload: vi.fn(),
+    });
+    mockUsePricing.mockReturnValue({
+      result: submittedPricing([management]), status: "ready", error: null, reload: vi.fn(),
+    });
+    await renderPage();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+
+    cleanup();
+    mockUser = { id: "ceo-1", role: "CEO" };
+    mockUsePricing.mockReturnValue({
+      result: submittedPricing([{ ...management, actor_user_id: "ceo-1", actor_name: "CEO" }]),
+      status: "ready", error: null, reload: vi.fn(),
+    });
+    await renderPage();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  test("FINAL rejection requires a reason and repricing/READY_FOR_IPO remain price-redacted without permission", async () => {
+    mockPermissions = new Set(["demand.review", "procurement.view_prices"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "PENDING_FINAL_APPROVAL" }), status: "ready", error: null, reload: vi.fn(),
+    });
+    mockUsePricing.mockReturnValue({
+      result: submittedPricing(), status: "ready", error: null, reload: vi.fn().mockResolvedValue({}),
+    });
+    mockRecordFinalManagementReview.mockResolvedValue({});
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/reason/i), { target: { value: "Reprice this quote" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(mockRecordFinalManagementReview).toHaveBeenCalledWith("demand-1", {
+      pricingId: "pricing-1",
+      decision: "REJECTED",
+      reason: "Reprice this quote",
+    }));
+
+    cleanup();
+    mockPermissions = new Set(["demand.view"]);
+    mockUseDemand.mockReturnValue({
+      result: baseDemand({ status: "READY_FOR_IPO" }), status: "ready", error: null, reload: vi.fn(),
+    });
+    await renderPage();
+    expect(screen.getByText(/ready for the future official IPO workflow/i)).toBeTruthy();
+    expect(mockUsePricing).toHaveBeenCalledTimes(1); // only the earlier authorized render
   });
 });

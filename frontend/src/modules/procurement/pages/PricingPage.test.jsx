@@ -7,6 +7,7 @@ const mockUsePricing = vi.hoisted(() => vi.fn());
 const mockSavePricing = vi.hoisted(() => vi.fn());
 const mockSubmitPricing = vi.hoisted(() => vi.fn());
 const mockGetPricing = vi.hoisted(() => vi.fn());
+const mockStartRepricing = vi.hoisted(() => vi.fn());
 
 vi.mock("../hooks/usePricing.js", () => ({
   usePricing: (...args) => mockUsePricing(...args),
@@ -16,6 +17,7 @@ vi.mock("../api.js", () => ({
   savePricing: (...args) => mockSavePricing(...args),
   submitPricing: (...args) => mockSubmitPricing(...args),
   getPricing: (...args) => mockGetPricing(...args),
+  startRepricing: (...args) => mockStartRepricing(...args),
 }));
 
 function pricingDetail(overrides = {}) {
@@ -51,6 +53,7 @@ function pricingDetail(overrides = {}) {
       },
     ],
     estimatedTotal: "0.00",
+    versions: [],
     canEdit: true,
     ...overrides,
   };
@@ -110,6 +113,7 @@ describe("PricingPage", () => {
     expect(mockSavePricing.mock.calls[0][0]).toBe("demand-1");
     expect(mockSavePricing.mock.calls[0][1]).toEqual({
       revision: 1,
+      pricingVersion: 1,
       currency: "PKR",
       lines: [{ demandLineId: "line-1", estimatedUnitPrice: "100.00", procurementNote: "Supplier quote" }],
     });
@@ -157,7 +161,7 @@ describe("PricingPage", () => {
     fireEvent.change(screen.getByLabelText("Estimated unit price for Binding Wire"), { target: { value: "2.50" } });
     fireEvent.click(screen.getByRole("button", { name: "Submit Pricing" }));
 
-    await waitFor(() => expect(mockSubmitPricing).toHaveBeenCalledWith("demand-1", { revision: 1 }));
+    await waitFor(() => expect(mockSubmitPricing).toHaveBeenCalledWith("demand-1", { revision: 1, pricingVersion: 1 }));
     expect(await screen.findByText("Pending Final Management Review / Formal Approval")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save Draft" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Submit Pricing" })).toBeNull();
@@ -177,5 +181,61 @@ describe("PricingPage", () => {
       render(<MemoryRouter><PricingPage /></MemoryRouter>);
     });
     expect(screen.getByText("Pricing unavailable")).toBeTruthy();
+  });
+
+  test("starts a controlled Version 2 draft from repricing-required state", async () => {
+    const rejected = pricingDetail({
+      demand: { ...pricingDetail().demand, status: "PRICING_REVISION_REQUIRED" },
+      pricing: { id: "pricing-1", version: 1, status: "SUBMITTED", currency: "PKR" },
+      versions: [{ id: "pricing-1", version: 1, status: "SUBMITTED" }],
+      finalApprovals: [
+        {
+          approval_stage: "FINAL",
+          approval_type: "MANAGEMENT_REVIEW",
+          decision: "REJECTED",
+          actor_name: "Site Manager",
+          created_at: "2026-08-26T10:00:00.000Z",
+          reason: "Supplier quote needs refreshing",
+        },
+      ],
+      canEdit: false,
+      canStartRevision: true,
+    });
+    const v2 = pricingDetail({
+      pricing: { id: "pricing-2", version: 2, status: "DRAFT", currency: "PKR" },
+      versions: [
+        { id: "pricing-2", version: 2, status: "DRAFT" },
+        { id: "pricing-1", version: 1, status: "SUBMITTED" },
+      ],
+      lines: pricingDetail().lines.map((line, index) => ({
+        ...line,
+        estimated_unit_price: index === 0 ? "100.00" : "2.50",
+      })),
+    });
+    mockStartRepricing.mockResolvedValue({ data: v2 });
+    await renderPage(rejected);
+    expect(screen.getByText(/supplier quote needs refreshing/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start Pricing Version 2" }));
+    await waitFor(() => expect(mockStartRepricing).toHaveBeenCalledWith("demand-1", { revision: 1 }));
+    expect((await screen.findAllByText(/version 2/i)).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Save Draft" })).toBeTruthy();
+  });
+
+  test("historical rejected version is selectable and remains read-only", async () => {
+    const historical = pricingDetail({
+      demand: { ...pricingDetail().demand, status: "READY_FOR_PRICING" },
+      pricing: { id: "pricing-1", version: 1, status: "SUBMITTED", currency: "PKR" },
+      versions: [
+        { id: "pricing-2", version: 2, status: "DRAFT" },
+        { id: "pricing-1", version: 1, status: "SUBMITTED" },
+      ],
+      lines: pricingDetail().lines.map((line) => ({ ...line, estimated_unit_price: "10.00", line_total: "500.00" })),
+      canEdit: false,
+    });
+    await renderPage(historical);
+    expect(screen.getByText(/historical pricing version 1/i)).toBeTruthy();
+    expect(screen.getByText(/historical submitted pricing version 1/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save Draft" })).toBeNull();
+    expect(screen.getByLabelText("Estimated unit price for Cement").readOnly).toBe(true);
   });
 });

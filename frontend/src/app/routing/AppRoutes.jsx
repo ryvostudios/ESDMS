@@ -122,7 +122,7 @@ export function AppRoutes() {
         <Route
           path="/demands/:id"
           element={
-            <PermissionRoute permissions={["demand.view"]}>
+            <PermissionRoute permissions={["demand.view", "demand.review", "demand.approve"]}>
               <DemandDetailPage />
             </PermissionRoute>
           }

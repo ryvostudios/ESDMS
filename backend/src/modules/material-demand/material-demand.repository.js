@@ -161,22 +161,32 @@ export async function updateStatus(client, id, status) {
   await client.query("UPDATE material_demands SET status = $2 WHERE id = $1", [id, status]);
 }
 
-// One row per (demand_id, revision, approval_type) — the unique
-// constraint in the migration makes this the DB-level source of truth for
-// "has this slot already been decided?", not just this lookup.
-export async function findApproval(client, demandId, revision, approvalType) {
+// INITIAL slots are unique per Demand revision and type. FINAL slots are
+// additionally bound to one exact Pricing id/version. Partial unique indexes
+// make those identities the DB-level source of truth, not just this lookup.
+export async function findApproval(
+  client,
+  demandId,
+  revision,
+  approvalType,
+  { approvalStage = "INITIAL", pricingId = null } = {},
+) {
   const result = await client.query(
-    `SELECT id, demand_id, revision, approval_type, decision, actor_user_id, reason, created_at
+    `SELECT id, demand_id, revision, approval_stage, approval_type, pricing_id,
+            decision, actor_user_id, reason, created_at
      FROM material_demand_approvals
-     WHERE demand_id = $1 AND revision = $2 AND approval_type = $3`,
-    [demandId, revision, approvalType],
+     WHERE demand_id = $1 AND revision = $2 AND approval_type = $3
+       AND approval_stage = $4
+       AND ($5::uuid IS NULL OR pricing_id = $5)`,
+    [demandId, revision, approvalType, approvalStage, pricingId],
   );
   return result.rows[0] || null;
 }
 
 export async function findApprovalsByDemandId(demandId) {
   const result = await pool.query(
-    `SELECT a.id, a.revision, a.approval_type, a.decision, a.reason, a.created_at,
+    `SELECT a.id, a.revision, a.approval_stage, a.approval_type, a.pricing_id,
+            a.decision, a.reason, a.created_at,
             a.actor_user_id, u.full_name AS actor_name
      FROM material_demand_approvals a
      JOIN users u ON u.id = a.actor_user_id
@@ -187,12 +197,27 @@ export async function findApprovalsByDemandId(demandId) {
   return result.rows;
 }
 
-export async function insertApproval(client, { demandId, revision, approvalType, decision, actorUserId, reason }) {
+export async function insertApproval(
+  client,
+  {
+    demandId,
+    revision,
+    approvalStage = "INITIAL",
+    approvalType,
+    pricingId = null,
+    decision,
+    actorUserId,
+    reason,
+  },
+) {
   const result = await client.query(
-    `INSERT INTO material_demand_approvals (demand_id, revision, approval_type, decision, actor_user_id, reason)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, demand_id, revision, approval_type, decision, actor_user_id, reason, created_at`,
-    [demandId, revision, approvalType, decision, actorUserId, reason || null],
+    `INSERT INTO material_demand_approvals
+       (demand_id, revision, approval_stage, approval_type, pricing_id,
+        decision, actor_user_id, reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, demand_id, revision, approval_stage, approval_type,
+               pricing_id, decision, actor_user_id, reason, created_at`,
+    [demandId, revision, approvalStage, approvalType, pricingId, decision, actorUserId, reason || null],
   );
   return result.rows[0];
 }

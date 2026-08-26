@@ -40,3 +40,11 @@ export function recordManagementReview(id, body) {
 export function recordFormalApproval(id, body) {
   return apiClient.post(`/demands/${id}/approvals`, body);
 }
+
+export function recordFinalManagementReview(id, body) {
+  return apiClient.post(`/demands/${id}/final-reviews`, body);
+}
+
+export function recordFinalFormalApproval(id, body) {
+  return apiClient.post(`/demands/${id}/final-approvals`, body);
+}
