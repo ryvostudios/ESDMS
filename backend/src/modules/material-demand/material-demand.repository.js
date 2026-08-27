@@ -74,8 +74,9 @@ export async function insertLines(client, demandId, departmentId, lines, entries
     await client.query(
       `INSERT INTO material_demand_lines
          (demand_id, line_no, department_id, catalog_entry_id, item_name_snapshot,
-          uom_code_snapshot, uom_name_snapshot, requested_quantity, note)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          uom_code_snapshot, uom_name_snapshot, requested_quantity, note,
+          carry_forward_source_type, carry_forward_source_id, carry_forward_quantity)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         demandId,
         lineNo,
@@ -86,6 +87,9 @@ export async function insertLines(client, demandId, departmentId, lines, entries
         entry.uom_name,
         line.quantity,
         line.note || null,
+        line.carryForward?.sourceType || null,
+        line.carryForward?.sourceId || null,
+        line.carryForward?.quantity ?? null,
       ],
     );
     lineNo += 1;
@@ -120,7 +124,8 @@ export async function findById(id) {
 export async function findLinesByDemandId(demandId) {
   const result = await pool.query(
     `SELECT id, line_no, catalog_entry_id, item_name_snapshot, uom_code_snapshot, uom_name_snapshot,
-            requested_quantity, note
+            requested_quantity, note,
+            carry_forward_source_type, carry_forward_source_id, carry_forward_quantity
      FROM material_demand_lines WHERE demand_id = $1 ORDER BY line_no`,
     [demandId],
   );
@@ -169,16 +174,20 @@ export async function findApproval(
   demandId,
   revision,
   approvalType,
-  { approvalStage = "INITIAL", pricingId = null } = {},
+  { approvalStage = "INITIAL", pricingId = null, dispositionFingerprint = null } = {},
 ) {
+  // A FINAL decision is identified by its purchasing-set fingerprint as well
+  // as its Pricing version: once the set changes, an earlier decision is
+  // preserved but no longer occupies the slot for the new set.
   const result = await client.query(
     `SELECT id, demand_id, revision, approval_stage, approval_type, pricing_id,
-            decision, actor_user_id, reason, created_at
+            disposition_fingerprint, decision, actor_user_id, reason, created_at
      FROM material_demand_approvals
      WHERE demand_id = $1 AND revision = $2 AND approval_type = $3
        AND approval_stage = $4
-       AND ($5::uuid IS NULL OR pricing_id = $5)`,
-    [demandId, revision, approvalType, approvalStage, pricingId],
+       AND ($5::uuid IS NULL OR pricing_id = $5)
+       AND ($6::text IS NULL OR disposition_fingerprint = $6)`,
+    [demandId, revision, approvalType, approvalStage, pricingId, dispositionFingerprint],
   );
   return result.rows[0] || null;
 }
@@ -186,7 +195,7 @@ export async function findApproval(
 export async function findApprovalsByDemandId(demandId) {
   const result = await pool.query(
     `SELECT a.id, a.revision, a.approval_stage, a.approval_type, a.pricing_id,
-            a.decision, a.reason, a.created_at,
+            a.disposition_fingerprint, a.decision, a.reason, a.created_at,
             a.actor_user_id, u.full_name AS actor_name
      FROM material_demand_approvals a
      JOIN users u ON u.id = a.actor_user_id
@@ -205,6 +214,7 @@ export async function insertApproval(
     approvalStage = "INITIAL",
     approvalType,
     pricingId = null,
+    dispositionFingerprint = null,
     decision,
     actorUserId,
     reason,
@@ -213,11 +223,21 @@ export async function insertApproval(
   const result = await client.query(
     `INSERT INTO material_demand_approvals
        (demand_id, revision, approval_stage, approval_type, pricing_id,
-        decision, actor_user_id, reason)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        disposition_fingerprint, decision, actor_user_id, reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, demand_id, revision, approval_stage, approval_type,
-               pricing_id, decision, actor_user_id, reason, created_at`,
-    [demandId, revision, approvalStage, approvalType, pricingId, decision, actorUserId, reason || null],
+               pricing_id, disposition_fingerprint, decision, actor_user_id, reason, created_at`,
+    [
+      demandId,
+      revision,
+      approvalStage,
+      approvalType,
+      pricingId,
+      dispositionFingerprint,
+      decision,
+      actorUserId,
+      reason || null,
+    ],
   );
   return result.rows[0];
 }
@@ -256,4 +276,16 @@ export async function listForScope({ siteId, departmentId }, { status, search, p
   ]);
 
   return { rows: rows.rows, total: count.rows[0].total };
+}
+
+// The IPO generated from this Demand, if any. Operational identity only —
+// never the approved value, which stays behind the price gate.
+export async function findIpoSummaryByDemandId(demandId) {
+  const result = await pool.query(
+    `SELECT id, ipo_number, status, generated_at, completed_at, cancelled_at
+     FROM ipos WHERE demand_id = $1
+     ORDER BY demand_revision DESC LIMIT 1`,
+    [demandId],
+  );
+  return result.rows[0] || null;
 }

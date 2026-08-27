@@ -6,7 +6,9 @@ import {
   listQuerySchema,
   decisionSchema,
   finalDecisionSchema,
+  setLineDispositionsSchema,
 } from "./material-demand.validation.js";
+import * as dispositionService from "./material-demand.disposition.service.js";
 import * as service from "./material-demand.service.js";
 
 function parseBody(schema, body) {
@@ -70,6 +72,23 @@ export const recordFinalReview = asyncHandler(async (req, res) => {
 export const recordFinalApproval = asyncHandler(async (req, res) => {
   const input = parseBody(finalDecisionSchema, req.body);
   await service.recordFinalFormalApproval(req.user, req.params.id, input);
+  const result = await service.getDemandDetail(req.user, req.params.id);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const downloadPdf = asyncHandler(async (req, res) => {
+  const { buffer, filename } = await service.generateDemandPdf(req.user, req.params.id);
+  res.set({
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Cache-Control": "private, no-store",
+  });
+  res.status(200).send(buffer);
+});
+
+export const setLineDispositions = asyncHandler(async (req, res) => {
+  const input = parseBody(setLineDispositionsSchema, req.body);
+  await dispositionService.setLineDispositions(req.user, req.params.id, input);
   const result = await service.getDemandDetail(req.user, req.params.id);
   res.status(200).json({ success: true, data: result });
 });

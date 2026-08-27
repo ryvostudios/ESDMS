@@ -8,6 +8,7 @@ import { getPricing, savePricing, startRepricing, submitPricing } from "../api.j
 import { usePricing } from "../hooks/usePricing.js";
 import { formatPkr } from "../utilities/money.js";
 import { ApprovalPanel } from "../../material-demand/components/ApprovalPanel.jsx";
+import { PriceComparison } from "../components/PriceComparison.jsx";
 import styles from "./PricingPage.module.css";
 
 const PRICE_PATTERN = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/;
@@ -128,7 +129,10 @@ function PricingEditor({ initialDetail, onReload, onSelectVersion }) {
         </div>
       )}
 
-      <p className={styles.historyNote}>Previous Purchase Price is unavailable until actual purchasing history exists.</p>
+      <p className={styles.historyNote}>
+        Each line shows the most recent ACTUAL purchase price for the same catalogue item, matched on the exact
+        Company Item identity — never on a similar description.
+      </p>
       {actionError && <p className={styles.error} role="alert">{actionError}</p>}
 
       <div className={styles.tableWrapper}>
@@ -138,7 +142,9 @@ function PricingEditor({ initialDetail, onReload, onSelectVersion }) {
               <th>Item</th>
               <th>Approved Qty</th>
               <th>Unit</th>
+              <th>Previous Actual Price</th>
               <th>Estimated Unit Price (PKR)</th>
+              <th>Difference</th>
               <th>Line Total</th>
             </tr>
           </thead>
@@ -163,6 +169,18 @@ function PricingEditor({ initialDetail, onReload, onSelectVersion }) {
                   <td>{line.requested_quantity}</td>
                   <td>{line.uom_name_snapshot}</td>
                   <td>
+                    {line.previous_purchase_unit_price ? (
+                      <>
+                        {formatPkr(line.previous_purchase_unit_price)}
+                        <span className={styles.previousMeta}>
+                          {line.previous_purchase_ipo_number}
+                        </span>
+                      </>
+                    ) : (
+                      <span className={styles.previousMeta}>No previous purchase history</span>
+                    )}
+                  </td>
+                  <td>
                     <Input
                       aria-label={`Estimated unit price for ${line.item_name_snapshot}`}
                       inputMode="decimal"
@@ -173,6 +191,9 @@ function PricingEditor({ initialDetail, onReload, onSelectVersion }) {
                         [line.demand_line_id]: { ...value, price: event.target.value },
                       }))}
                     />
+                  </td>
+                  <td>
+                    <PriceComparison line={line} />
                   </td>
                   <td>{value.price ? (isValidPrice(value.price) ? formatPkr(lineTotal(line)) : "Invalid price") : "—"}</td>
                 </tr>

@@ -4,6 +4,7 @@ import { listDepartmentsManage } from "../../workforce/api.js";
 import { FormField, Textarea, Select } from "../../../shared/components/FormField.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { DemandItemPicker } from "./DemandItemPicker.jsx";
+import { CarryForwardPanel } from "./CarryForwardPanel.jsx";
 import styles from "./DemandForm.module.css";
 
 function linesToSelections(lines) {
@@ -12,6 +13,29 @@ function linesToSelections(lines) {
     selections[line.catalog_entry_id] = String(line.requested_quantity);
   }
   return selections;
+}
+
+// A saved Draft line may already be a claim against an earlier unresolved
+// requirement. Reopening the Draft has to restore that intent alongside the
+// quantity, or a later save would serialize the line as an ordinary request —
+// silently dropping the claim, leaving the source fully available, and letting
+// the same outstanding quantity be carried into another Demand as well.
+//
+// Deliberately generic over source type: the server decides what a source is,
+// so nothing here special-cases IPO shortfall, out-of-budget or receiving
+// shortage.
+function linesToCarryForward(lines) {
+  const sources = {};
+  for (const line of lines || []) {
+    if (!line.carry_forward_source_type || !line.carry_forward_source_id) continue;
+
+    sources[line.catalog_entry_id] = {
+      sourceType: line.carry_forward_source_type,
+      sourceId: line.carry_forward_source_id,
+      quantity: Number(line.carry_forward_quantity),
+    };
+  }
+  return sources;
 }
 
 // Reused for both "New Demand" (no initialDemand) and "Edit Draft"
@@ -31,6 +55,12 @@ export function DemandForm({ initialDemand, initialLines, submitLabel, onSubmit 
   const [departments, setDepartments] = useState([]);
   const [note, setNote] = useState(initialDemand?.note || "");
   const [selections, setSelections] = useState(() => linesToSelections(initialLines));
+  // Which selected lines are claims against an earlier unresolved requirement,
+  // keyed by catalogue entry. Seeded from the Draft being edited so the claim
+  // survives reopen/edit/save, and sent with the line so the server can make
+  // it authoritative at submit. The server re-validates the source and its
+  // remaining availability regardless — this state is intent, never authority.
+  const [carryForward, setCarryForward] = useState(() => linesToCarryForward(initialLines));
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -41,13 +71,43 @@ export function DemandForm({ initialDemand, initialLines, submitLabel, onSubmit 
       .catch(() => {});
   }, [isDepartmentLocked, isEditing]);
 
+  // Removing a line from the Draft withdraws its claim with it: a material the
+  // user later re-adds by hand is a fresh requirement, not a continuation of
+  // the old carried one. Without this, an unchecked-then-re-checked item would
+  // silently keep pointing at a source the user never chose for it.
+  function handleSelectionsChange(next) {
+    setSelections(next);
+    setCarryForward((current) => {
+      const retained = {};
+      for (const [catalogEntryId, source] of Object.entries(current)) {
+        if (catalogEntryId in next) retained[catalogEntryId] = source;
+      }
+      return retained;
+    });
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     if (submitting) return;
 
     const lines = Object.entries(selections)
       .filter(([, quantity]) => quantity !== "" && Number(quantity) > 0)
-      .map(([catalogEntryId, quantity]) => ({ catalogEntryId, quantity: Number(quantity) }));
+      .map(([catalogEntryId, quantity]) => {
+        const source = carryForward[catalogEntryId];
+        return {
+          catalogEntryId,
+          quantity: Number(quantity),
+          // Never claim more than this line actually asks for.
+          ...(source
+            ? {
+                carryForward: {
+                  ...source,
+                  quantity: Math.min(Number(source.quantity), Number(quantity)),
+                },
+              }
+            : {}),
+        };
+      });
 
     setFormError(null);
     setSubmitting(true);
@@ -97,10 +157,23 @@ export function DemandForm({ initialDemand, initialLines, submitLabel, onSubmit 
 
       <div className={styles.section}>
         <h2 className={styles.sectionTitle}>Materials</h2>
-        <DemandItemPicker
+        {/* Unresolved prior requirements for the items already chosen. Shown
+          only while creating; an existing Draft is edited line by line. */}
+      {!isEditing && (
+        <CarryForwardPanel
           departmentId={departmentId}
           selections={selections}
-          onChange={setSelections}
+          onAdd={(catalogEntryId, quantity, source) => {
+            setSelections((current) => ({ ...current, [catalogEntryId]: String(quantity) }));
+            setCarryForward((current) => ({ ...current, [catalogEntryId]: source }));
+          }}
+        />
+      )}
+
+      <DemandItemPicker
+          departmentId={departmentId}
+          selections={selections}
+          onChange={handleSelectionsChange}
           disabled={submitting}
         />
       </div>

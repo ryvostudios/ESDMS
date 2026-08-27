@@ -330,7 +330,7 @@ The application must never connect to its production database over an unencrypte
 The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
 
 - `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
-- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the 46 explicitly reviewed application tables plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
+- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the explicitly reviewed application tables named in `scripts/provision-db-roles.sql` — that allowlist is the authoritative list, and it grows only when a migration adds a table and the script is updated to name it — plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
 
@@ -368,7 +368,11 @@ race finalization. Ordinary Demand queries do not join either table.
 
 The migration `1787416000000_material-demand-final-pricing-approval.js`
 (Checkpoint 5) adds no table or directly callable function, so the runtime
-boundary remains 46 application tables (47 with owner-only `pgmigrations`).
+boundary was unchanged by it — 46 application tables (47 with owner-only
+`pgmigrations`) as of that checkpoint. The per-migration totals in this
+section are each accurate for the migration they describe; the current
+boundary is whatever `scripts/provision-db-roles.sql` names, never a number
+copied from here.
 It adds stage/version-aware partial unique indexes and a composite FINAL
 approval foreign key binding Pricing id + Demand id + Demand revision.
 Existing approval rows are preserved as `INITIAL`; existing Pricing headers
@@ -383,7 +387,7 @@ The Workforce trigger functions (`employee_contracts_enforce_immutability`, `emp
 
 PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.
 
-`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants the 46-table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants its explicit table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table it names. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
 
 ```sh
 read -rs ESDMS_RUNTIME_PASSWORD
@@ -644,3 +648,207 @@ Procurement/Receiving audit log per `docs/PROCUREMENT_RECEIVING_SPEC.md`
   §8.2's DB-level append-only guarantees, and no new log-management UI or
   endpoint is introduced merely by documenting this invariant — one is
   built only when a specific module's checkpoint actually requires it.
+
+
+---
+
+## 15. Procurement & Material Receiving V1 — Security Model
+
+Checkpoints 6-8 add the IPO, purchasing, Delivery Challan, receiving,
+documents and exports. They introduce no new authentication, authorization
+or audit mechanism — every rule below is the existing platform model applied
+to new records.
+
+### 15.1 Financial confidentiality is a query-projection boundary
+
+Commercial data (estimated price, actual purchase price, totals, internal
+Procurement notes, previous-price history) is only ever SELECTed for an
+actor holding `procurement.view_prices`, `procurement.purchase` or
+`procurement.pricing`. A request without that authority does not receive
+those columns and then hide them — the projection never contains them. This
+holds identically in the API, the PDFs and the Excel exports, matching the
+Workforce compensation precedent in §13.
+
+Consequences that are enforced and tested:
+
+- `ipo.view` is operational visibility only. A Team Lead can follow their
+  department's IPO — quantities, statuses, delivery and receiving progress —
+  and never see an amount.
+- The **IPO PDF additionally requires commercial authority**, so an
+  operational viewer cannot use the document endpoint as a price-leak
+  bypass. ADMIN and Gate Guard are refused it.
+- The **Demand List PDF carries no pricing for any viewer at all**, CEO
+  included. One unpriced representation removes the possibility of that
+  endpoint becoming a financial-authorization bypass.
+- The **Delivery Challan has no price column in its schema**, so the
+  operational document a department receives — including the copy shared
+  over WhatsApp — cannot leak commercial information.
+- Receiving screens and APIs contain no pricing at all: confirming physical
+  arrival never requires a price.
+- Audit metadata and notification payloads carry identifiers and quantities
+  only, never prices or Procurement notes — both streams have a wider
+  audience than the price capability.
+
+`backend/test/procurement-security-sweep.test.js` sweeps every readable
+surface with distinctive commercial values and asserts none of them escape
+to a price-blind department user, to ADMIN, to HR or to the Gate Guard.
+
+### 15.2 Action authority is separate from record scope
+
+**Admin fallback custody is contextual authority, not a scope tier.**
+`receiving.fallback_receive` is deliberately absent from the generic
+supply-chain scope resolver. It authorizes one narrow physical act — taking
+temporary custody of another department's delivery at the actor's own site
+when nobody from that department is available — and reaches only the queue of
+still-open deliveries at that site, the detail of such a delivery, and the
+fallback receipt itself. It expires when the delivery closes. It never widens
+access to IPO records, purchasing, receiving history, carry-forward sources,
+Procurement exports or any commercial data, and it never crosses a site
+boundary.
+
+A fallback custodian's receipt list is their ordinary department history plus
+the specific receipts they personally recorded or took handover of — never
+another department's history. The personal part matters because an Admin
+belongs to the Admin department: without it, the delivery they took custody of
+would vanish from their own history the moment they recorded it, leaving them
+unable to follow the handover they are responsible for. It is added to their
+normal scope, never substituted for it, and it is actor-specific: a second
+Admin in the same department sees nothing extra. Requesting a department
+filter suppresses it, so a filter can only narrow a result.
+
+
+One shared resolver (`shared/authorization/supply-chain-scope.js`) applies
+the same three tiers Material Demand established — ALL (CEO /
+`demand.all_departments`), SITE (a cross-department responsibility holder),
+OWN (an ordinary department actor) — to IPO, Delivery Challan and Receiving
+alike. Holding `receiving.receive` says the actor may record a receipt,
+never whose material. An out-of-scope record id is reported identically to a
+nonexistent one, so a caller cannot probe for another department's or site's
+records.
+
+The deliberate receiving split is a security control, not a convenience:
+ordinary `receiving.receive` never crosses a department boundary, while
+temporary Admin custody requires the separate, explicitly granted
+`receiving.fallback_receive` (cross-department, still site-bound). ADMIN
+holds the fallback capability and NOT the ordinary one.
+
+`procurement.purchase`, `dc.manage` and `ipo.cancel` are CEO-only by
+default; no PROCUREMENT global role was invented, and an individual DENY
+always wins.
+
+### 15.3 Documents
+
+PDFs are generated server-side from persisted data, never from client-
+supplied content, and are never served from a public or guessable path.
+Authorization is re-checked on every download. A finalized IPO/DC has its
+rendered bytes stored in `procurement_documents` (append-only) so an issued
+document stays historically stable.
+
+Business references legitimately contain `/` (`ESET/2026/32`). Every
+download filename is derived through `documentFilename()`, which allowlists
+`[A-Za-z0-9_-]` and excludes `.` from the base name — no input can produce a
+path separator, a `..`, a second extension, or a quote/newline that would
+break a `Content-Disposition` header.
+
+### 15.4 Export authority never widens data authority
+
+`procurement.export` means only "may take out what you can already see".
+Every commercial column is gated again at projection level, and the
+inherently commercial `procurement-history` dataset is refused outright
+without price authority rather than served empty. Filters are applied
+server-side in SQL over a scoped query. Formula injection is neutralized
+with the existing `sanitizeCell` while numeric/date cells keep their real
+types. Every export writes a `PROCUREMENT_EXPORT_GENERATED` governance audit
+row recording the dataset, row count, whether pricing was included, and the
+filters applied.
+
+### 15.5 WhatsApp document delivery
+
+Only the official WhatsApp Business Platform is supported. No WhatsApp Web
+scraping, headless-browser automation, reverse-engineered session library or
+personal-account session reuse exists in this codebase, and none will be
+added. Credentials come only from the environment and never appear in
+source, the database, logs, audit metadata or API responses; provider error
+text is never persisted verbatim into a durable outbox row (ESDMS-021).
+
+Delivery is an outbox job that runs after the business transaction has
+already committed, so a messaging failure can never roll back, delete or
+block an IPO or a Delivery Challan. Retries cannot double-send: the
+idempotency key is stable per document, an in-flight external job whose
+outcome is unknown goes to `UNCERTAIN` rather than being replayed, and a
+document for a cancelled record is voided instead of shared. When delivery
+is disabled or unconfigured the row is written terminally as `DISABLED`
+with a reason — never left pending, never misreported as failed. Captions
+carry the document reference only, never an amount.
+
+### 15.6 Audit immutability (extends §14)
+
+`procurement_audit_log` and `material_receipt_lines` are append-only at the
+database level via the existing `forbid_update_delete()` trigger. Issued
+IPOs, IPO lines, Delivery Challans, receipts and stored documents cannot be
+deleted at all, and their identity/snapshot columns cannot be changed. No
+Procurement or Receiving endpoint modifies or deletes history for any role,
+Upper Management included — the §14 invariant is preserved, and no second
+governance mechanism was introduced.
+
+### 15.7 Financial corrections
+
+A purchase is never edited or deleted. A mistake is withdrawn by a reversal
+event that names the exact purchase it reverses and inherits that purchase's
+price — the API accepts no price on a reversal, so a correction cannot be used
+to restate value. Reversals cannot exceed the purchase they reverse (checked
+under a row lock, so concurrent corrections serialize), cannot reference a
+purchase on another IPO line (structurally, via a composite foreign key),
+cannot reverse another reversal, and cannot reduce purchasing below what a
+Delivery Challan already carries. A correction requires a reason and is
+audited by the purchase it touched; recording one needs exactly the same
+purchasing capability as recording a purchase — no new authority exists.
+
+Purchase history remains financial data: it is projected only for an actor
+with price authority, along with the reversal linkage itself.
+
+### 15.8 Request idempotency
+
+Receiving, Delivery Challan creation and purchasing each require a
+client-generated `operation_id`, unique at the database level. A retry after a
+lost response returns the record that already exists rather than booking a
+second physical receipt, cutting a second challan (consuming a second DC
+number), or recording a second purchase — and writes no second audit event,
+because nothing happened. A genuinely separate operation carries a new id.
+This matters most on a phone at a site gate, where a lost response is routine.
+
+An operation id identifies one logical request **against one parent**, and that
+binding is enforced. For Delivery Challan creation, an id already owned by a
+challan on a different IPO is rejected as a conflict rather than answered with
+that challan: returning it would report a shipment as cut that never was, and
+would report it with a success status. A purchase-event operation id likewise
+identifies one semantic purchase operation: reuse with another IPO, another
+line, a different quantity or price, a different event type (purchase versus
+correction) or a different reversal source is rejected, because returning
+success would report a purchase that never happened. A receiving operation id
+identifies one semantic receipt operation in the same way: the same Delivery
+Challan with the same receipt payload replays to the same receipt, while reuse
+against a different challan — or with a materially different payload — is
+rejected. The payload compared is the physical fact recorded: the custody type
+(an ordinary department receipt and temporary Admin custody are different
+facts), the physical receiver, the exact set of Delivery Challan lines, and each
+line's received quantity, discrepancy quantity and discrepancy type. Free-text
+wording is deliberately excluded — a reworded note changes nothing about what
+quantity or custody was booked, so it must not break a legitimate retry.
+
+The conflict names nothing about the owning request, so a guessed id reveals only that it is in use — which global
+uniqueness makes unavoidable — never which IPO, department or site owns it.
+Ordinary authorization still applies first: an operation id is never a
+capability or scope bypass.
+
+### 15.9 Concurrency
+
+One documented lock order covers the whole chain: **Demand → Pricing → IPO →
+Delivery Challan → Material Receipt.** Every writer takes the subset it
+needs in that order and re-validates state only after acquiring the locks;
+unlocked reads exist solely to discover which parent rows to lock. Database
+constraints back every service-level rule that matters — exactly-once IPO
+generation (`unique (demand_id, demand_revision)`), no double allocation of
+purchased quantity to Delivery Challans, no over-receipt against a Delivery
+Challan line, and frozen line dispositions once a final decision exists — so
+none of them depends on service code alone.

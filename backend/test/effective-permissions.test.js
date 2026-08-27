@@ -51,6 +51,14 @@ test("a user with no overrides has exactly their role's permissions", async () =
   assert.deepEqual(
     [...permissions].sort(),
     [
+      // Procurement & Receiving V1 baseline for a department Team Lead:
+      // operational visibility of the IPO/Delivery Challan for their own
+      // department, authority to receive and to close a receiving cycle, and
+      // permission-aware export. Deliberately NO financial capability —
+      // procurement.view_prices / procurement.purchase / procurement.pricing
+      // are all absent, which is what keeps every price out of this user's
+      // API responses, documents and exports.
+      "dc.view",
       "demand.create",
       "demand.edit",
       "demand.submit",
@@ -59,8 +67,13 @@ test("a user with no overrides has exactly their role's permissions", async () =
       "gate_pass.edit_draft",
       "gate_pass.submit",
       "gate_pass.view_own",
+      "ipo.view",
       "material_catalog.manage",
       "material_catalog.view",
+      "procurement.export",
+      "receiving.confirm",
+      "receiving.receive",
+      "receiving.view",
     ],
   );
 });

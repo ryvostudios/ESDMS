@@ -143,7 +143,18 @@ test("INITIAL history is preserved and distinct FINAL actors approve the exact P
     assert.equal(review.body.data.demand.status, "PENDING_FINAL_APPROVAL");
     const approval = await finalDecision(detail.demand.id, "final-approvals", tokens.hr, pricingId);
     assert.equal(approval.status, 200);
-    assert.equal(approval.body.data.demand.status, "READY_FOR_IPO");
+    // Completing the final gate now also generates the official IPO in the
+    // same transaction, so READY_FOR_IPO is an audited boundary rather than a
+    // resting state (docs/PROCUREMENT_RECEIVING_SPEC.md §15).
+    assert.equal(approval.body.data.demand.status, "IPO_GENERATED");
+    const generated = await pool.query(
+      "SELECT ipo_number, status, demand_revision, pricing_id FROM ipos WHERE demand_id = $1",
+      [detail.demand.id],
+    );
+    assert.equal(generated.rowCount, 1);
+    assert.equal(generated.rows[0].status, "GENERATED");
+    assert.equal(generated.rows[0].pricing_id, pricingId);
+    assert.match(generated.rows[0].ipo_number, /^ESET\/\d{4}\/\d+$/);
 
     const rows = await pool.query(
       `SELECT approval_stage, approval_type, pricing_id, decision
@@ -213,7 +224,7 @@ test("ordinary dual-capability actor cannot fill both FINAL slots, while CEO rem
     assert.equal((await finalDecision(exceptional.demand.id, "final-reviews", tokens.ceo, ceoPricingId)).status, 200);
     const completed = await finalDecision(exceptional.demand.id, "final-approvals", tokens.ceo, ceoPricingId);
     assert.equal(completed.status, 200);
-    assert.equal(completed.body.data.demand.status, "READY_FOR_IPO");
+    assert.equal(completed.body.data.demand.status, "IPO_GENERATED");
   } finally {
     await clearOverride(users.siteManager, "demand.approve");
   }
@@ -290,7 +301,10 @@ test("rejection preserves v1, creates controlled v2, and v2 resubmission has ind
   assert.equal((await finalDecision(demandId, "final-reviews", tokens.siteManager, v2Id)).status, 200);
   const ready = await finalDecision(demandId, "final-approvals", tokens.ceo, v2Id);
   assert.equal(ready.status, 200);
-  assert.equal(ready.body.data.demand.status, "READY_FOR_IPO");
+  assert.equal(ready.body.data.demand.status, "IPO_GENERATED");
+  const v2Ipo = await pool.query("SELECT pricing_id FROM ipos WHERE demand_id = $1", [demandId]);
+  assert.equal(v2Ipo.rowCount, 1, "exactly one IPO exists, bound to the approved version");
+  assert.equal(v2Ipo.rows[0].pricing_id, v2Id);
 
   const versions = await pool.query(
     "SELECT id, version, status FROM material_demand_pricing WHERE demand_id = $1 ORDER BY version",
@@ -404,13 +418,29 @@ test("FINAL decisions stay append-only and the database enforces pricing-version
     pool.query("UPDATE material_demand_approvals SET reason = 'tampered' WHERE id = $1", [approval.rows[0].id]),
     /append-only/i,
   );
+  // A FINAL decision must name the exact purchasing set it approved, so one
+  // recorded without a fingerprint is refused outright.
   await assert.rejects(
     pool.query(
       `INSERT INTO material_demand_approvals
          (demand_id, revision, approval_stage, approval_type, pricing_id,
           decision, actor_user_id)
        VALUES ($1, 1, 'FINAL', 'FORMAL_APPROVAL', $2, 'APPROVED', $3)`,
-      [first.demand.id, second.pricing.id, users.ceo],
+      [first.demand.id, first.pricing.id, users.ceo],
+    ),
+    /fingerprint_check/,
+  );
+
+  // With a well-formed fingerprint, the composite binding is still what
+  // prevents a decision claiming another Demand's Pricing version.
+  const fingerprint = "a".repeat(64);
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO material_demand_approvals
+         (demand_id, revision, approval_stage, approval_type, pricing_id,
+          disposition_fingerprint, decision, actor_user_id)
+       VALUES ($1, 1, 'FINAL', 'FORMAL_APPROVAL', $2, $3, 'APPROVED', $4)`,
+      [first.demand.id, second.pricing.id, fingerprint, users.ceo],
     ),
     /pricing_binding_fkey|foreign key constraint/,
   );

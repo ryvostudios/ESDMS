@@ -13,12 +13,24 @@ import { getUserProfileById, isProfileActive } from "../users/user-profile.repos
 // individual GRANT, minus individual DENY) AND is in scope: CEO, or holds
 // `allScopePermissionCode` (if given), or belongs to `siteId`.
 //
+// `departmentId` (optional) narrows a notification to the users who own that
+// department's work — the Team Lead of the department a delivery belongs to,
+// not every capable user at the site. A broad-scope holder (CEO /
+// allScopePermissionCode) stays eligible regardless, exactly as with site
+// scope; everyone else must match BOTH site and department. Omitting it
+// preserves the original site-only behavior byte for byte.
+//
 // Deliberately O(active users) — one getUserProfileById call each, not a
 // single hand-written reverse-direction query — correct-by-construction
 // over clever, and cheap enough at this application's real scale. Revisit
 // with a dedicated query only if the user base ever grows enough for this
 // to matter.
-export async function resolveEligibleRecipients({ capabilityCode, allScopePermissionCode = null, siteId }) {
+export async function resolveEligibleRecipients({
+  capabilityCode,
+  allScopePermissionCode = null,
+  siteId,
+  departmentId = null,
+}) {
   const { rows } = await pool.query("SELECT id FROM users");
 
   const eligible = [];
@@ -33,6 +45,7 @@ export async function resolveEligibleRecipients({ capabilityCode, allScopePermis
       profile.role === "CEO" || (allScopePermissionCode && profile.permissions.includes(allScopePermissionCode));
 
     if (!hasBroadScope && profile.site_id !== siteId) continue;
+    if (!hasBroadScope && departmentId && profile.department_id !== departmentId) continue;
 
     eligible.push(profile.id);
   }

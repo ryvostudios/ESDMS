@@ -1,3 +1,4 @@
+import pool from "../../config/database.js";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { enqueue } from "../../shared/notifications/outbox.repository.js";
 import { resolveEligibleRecipients } from "../../shared/notifications/recipient-resolver.js";
@@ -19,7 +20,21 @@ import {
   DECISION,
 } from "./material-demand.constants.js";
 import { PRICE_VIEW_PERMISSION } from "../procurement/procurement-pricing.constants.js";
+import { generateIpoForApprovedDemand } from "../ipo/ipo.service.js";
 import * as pricingRepo from "../procurement/procurement-pricing.repository.js";
+import { documentFilename } from "../../shared/documents/document-number.js";
+import {
+  allocateCarryForwardOnSubmit,
+  assertCarryForwardLinesValid,
+  findAllocationsForDemand,
+  releaseCarryForward,
+} from "./carry-forward.service.js";
+import { generateDemandListPdf } from "./material-demand.pdf.js";
+import {
+  computeDispositionFingerprint,
+  findDispositionsByDemandId,
+  redactDispositions,
+} from "./material-demand.disposition.service.js";
 import * as repo from "./material-demand.repository.js";
 
 const ALL_DEPARTMENTS_PERMISSION = "demand.all_departments";
@@ -64,6 +79,7 @@ export async function createDemand(actor, input) {
   const department = await loadUsableDepartment(departmentId);
 
   const entriesByCatalogEntryId = await resolveLineEntries(departmentId, input.lines);
+  await assertCarryForwardLinesValid(departmentId, input.lines);
 
   return withTransaction(async (client) => {
     const demandNumber = await repo.nextDemandNumber(client);
@@ -108,6 +124,7 @@ export async function updateDraft(actor, id, input) {
 
     if (input.lines) {
       const entriesByCatalogEntryId = await resolveLineEntries(demand.department_id, input.lines);
+      await assertCarryForwardLinesValid(demand.department_id, input.lines);
       await repo.replaceLines(client, id, demand.department_id, input.lines, entriesByCatalogEntryId);
     }
 
@@ -130,11 +147,14 @@ export async function getDemandDetail(actor, id) {
 
   assertDemandViewable(actor, demand);
 
-  const [lines, auditLog, storedApprovals] = await Promise.all([
+  const [lines, auditLog, storedApprovals, storedDispositions, ipo] = await Promise.all([
     repo.findLinesByDemandId(id),
     repo.findAuditLogByDemandId(id),
     repo.findApprovalsByDemandId(id),
+    findDispositionsByDemandId(id),
+    repo.findIpoSummaryByDemandId(id),
   ]);
+  const carryForwardAllocations = await findAllocationsForDemand(pool, id);
 
   const canSeeFinancialReasons =
     actor.permissions.has(PRICE_VIEW_PERMISSION) || actor.permissions.has("procurement.pricing");
@@ -144,7 +164,13 @@ export async function getDemandDetail(actor, id) {
       : approval,
   );
 
-  return { demand, lines, auditLog, approvals };
+  // The department that raised the Demand must be able to see that a line
+  // was excluded and under which category, so it can decide whether to carry
+  // it forward — but the free-text financial explanation stays behind the
+  // price gate, exactly like a FINAL rejection reason.
+  const dispositions = redactDispositions(storedDispositions, actor);
+
+  return { demand, lines, auditLog, approvals, dispositions, ipo, carryForwardAllocations };
 }
 
 export async function listDemands(actor, filters) {
@@ -190,6 +216,13 @@ export async function submitDemand(actor, id) {
     if (lines.length === 0) {
       throw new ValidationError("A Demand must have at least one line before it can be submitted.");
     }
+
+    // Submitting is the moment the department commits to the request, so it
+    // is also the moment any carried-forward quantity is actually claimed
+    // against its source. Runs under the Demand row lock already held, and
+    // the allocation guard locks the source itself, so two Demands submitting
+    // against the same remaining quantity serialize instead of both winning.
+    await allocateCarryForwardOnSubmit(client, demand, actor.id);
 
     await repo.markSubmitted(client, id, definition.to);
 
@@ -313,6 +346,10 @@ async function recordApprovalDecision(actor, id, approvalType, { decision, reaso
 
     if (decision === DECISION.REJECTED) {
       await repo.updateStatus(client, id, MATERIAL_DEMAND_STATUS.REJECTED);
+      // The request died, so any quantity it had claimed returns to the pool
+      // for the department's next Demand. The claim rows are kept, marked
+      // RELEASED, so who claimed what and when stays readable.
+      await releaseCarryForward(client, id);
       return;
     }
 
@@ -397,7 +434,15 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
       throw new ConflictError("The submitted Pricing version changed. Reload before deciding.");
     }
 
-    const stageOptions = { approvalStage: APPROVAL_STAGE.FINAL, pricingId: pricing.id };
+    // The exact purchasing set this decision is about. Recorded on the
+    // approval row, so a later out-of-budget exclusion cannot leave this
+    // decision authoritative over a set its decider never saw.
+    const dispositionFingerprint = await computeDispositionFingerprint(client, id, pricing.id);
+    const stageOptions = {
+      approvalStage: APPROVAL_STAGE.FINAL,
+      pricingId: pricing.id,
+      dispositionFingerprint,
+    };
     const existingSame = await repo.findApproval(
       client,
       id,
@@ -407,7 +452,7 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
     );
     if (existingSame) {
       throw new ConflictError(
-        `${approvalType === APPROVAL_TYPE.MANAGEMENT_REVIEW ? "Final Management Review" : "Final Formal Approval"} has already been decided for Pricing Version ${pricing.version}.`,
+        `${approvalType === APPROVAL_TYPE.MANAGEMENT_REVIEW ? "Final Management Review" : "Final Formal Approval"} has already been decided for Pricing Version ${pricing.version} and the current purchasing set.`,
       );
     }
 
@@ -433,6 +478,7 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
       approvalStage: APPROVAL_STAGE.FINAL,
       approvalType,
       pricingId: pricing.id,
+      dispositionFingerprint,
       decision,
       actorUserId: actor.id,
       reason,
@@ -452,6 +498,7 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
         approvalType,
         pricingId: pricing.id,
         pricingVersion: pricing.version,
+        dispositionFingerprint,
       },
     });
 
@@ -494,6 +541,10 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
       return;
     }
 
+    // Both responsibilities must have approved the SAME purchasing set. An
+    // approval recorded before a line was excluded has a different
+    // fingerprint, so it does not satisfy this — that reviewer decides again
+    // on the new set, and their earlier decision stays in the history.
     const otherApproval = await repo.findApproval(
       client,
       id,
@@ -512,6 +563,24 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
       newStatus: MATERIAL_DEMAND_STATUS.READY_FOR_IPO,
       metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
     });
+
+    // The owner's decision: no manual "Generate IPO" step. The final approved
+    // workflow produces the official IPO itself, in THIS transaction, under
+    // the Demand row lock already held above — so a retry, a double-click, or
+    // two approvers completing the gate concurrently can never produce two
+    // IPOs (the unique (demand_id, demand_revision) index is the ultimate
+    // guarantee, and generateIpoForApprovedDemand is a no-op on replay).
+    // READY_FOR_IPO therefore remains a real, audited boundary in the
+    // history, but is never a resting state.
+    await generateIpoForApprovedDemand(client, {
+      demand,
+      pricing,
+      // The exact set both responsibilities approved — the same value the gate
+      // check immediately above matched on. Bound onto the IPO permanently so
+      // its signoffs can never drift to a later, different purchasing set.
+      dispositionFingerprint,
+      actorId: actor.id,
+    });
   });
 }
 
@@ -520,3 +589,21 @@ export const recordFinalManagementReview = (actor, id, decision) =>
 
 export const recordFinalFormalApproval = (actor, id, decision) =>
   recordFinalApprovalDecision(actor, id, APPROVAL_TYPE.FORMAL_APPROVAL, decision);
+
+// Generated on demand from persisted data. Authorization is re-checked here
+// on every download using the same assertDemandViewable rule the ordinary
+// detail endpoint uses — a cross-department or cross-site Demand id is
+// refused identically to a nonexistent one.
+export async function generateDemandPdf(actor, id) {
+  const demand = await repo.findById(id);
+  if (!demand) throw new NotFoundError("Demand not found.");
+  assertDemandViewable(actor, demand);
+
+  const [lines, approvals] = await Promise.all([
+    repo.findLinesByDemandId(id),
+    repo.findApprovalsByDemandId(id),
+  ]);
+
+  const buffer = await generateDemandListPdf({ demand, lines, approvals });
+  return { buffer, filename: documentFilename(demand.demand_number, "pdf") };
+}

@@ -227,6 +227,32 @@ orchestrates the atomic pricing-submission transition through the Demand
 repository interface. Ordinary Demand detail queries never join the
 commercial tables.
 
+Checkpoints 6-8 extend the same modular-monolith pattern with four more
+bounded modules — `ipo/` (the approved purchasing document, its numbering
+and purchasing progress), `delivery-challan/` (operational delivery),
+`receiving/` (physical receipt, temporary Admin custody, handover,
+confirmation) and `reports/procurement-reports.*` (permission-aware Excel
+export) — plus shared, single-implementation infrastructure in
+`shared/documents/` (configurable numbering, PDF layout primitives, stored
+document delivery), `shared/authorization/supply-chain-scope.js` (one
+three-tier scope resolver reused by all three chain modules) and
+`shared/audit/procurement-audit.repository.js`.
+
+Two cross-cutting rules keep those modules safe together:
+
+- **One documented lock order for the whole chain: Demand → Pricing → IPO →
+  Delivery Challan → Material Receipt.** Every writer takes the subset of
+  locks it needs in that order, and re-validates state only AFTER acquiring
+  them; an unlocked read is used solely to discover which parent rows to
+  lock. This is what lets Procurement close purchasing while a Team Lead
+  confirms the last receipt without deadlocking.
+- **Commercial data is a projection decision, never a filtering one.** A
+  request without price authority never SELECTs a price column — in the API,
+  in the documents, or in the exports.
+
+Delivery Challan and Gate Pass remain entirely separate domains, sharing no
+foreign key in either direction.
+
 Checkpoint 5 keeps that boundary while coordinating the final gate through
 defined repository/service interfaces. Material Demand owns staged immutable
 approval decisions and lifecycle outcomes; Procurement owns server-sequenced
@@ -234,8 +260,10 @@ Pricing versions and protected commercial reads. Both flows acquire locks in
 the consistent order Demand → current Pricing. FINAL decisions reference the
 exact Pricing header through a composite database constraint. Rejection may
 create a later Procurement DRAFT only through the explicit repricing action;
-submitted versions are never reopened. `READY_FOR_IPO` is currently an
-integration boundary, not an IPO entity.
+submitted versions are never reopened. `READY_FOR_IPO` is now an audited
+boundary crossed inside the final-approval transaction itself: completing
+the gate generates the official IPO entity in that same transaction and
+moves the Demand on to `IPO_GENERATED`.
 
 A module must not directly manipulate another module's internal controller logic, React state or private database implementation.
 

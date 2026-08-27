@@ -1,3 +1,4 @@
+import pool from "../../config/database.js";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors/app-error.js";
 import { enqueue } from "../../shared/notifications/outbox.repository.js";
@@ -16,6 +17,9 @@ import {
   PRICING_PERMISSION,
   PRICING_STATUS,
 } from "./procurement-pricing.constants.js";
+import { getPreviousPurchasePrices } from "../ipo/ipo.service.js";
+import { findDispositions } from "../material-demand/material-demand.disposition.repository.js";
+import { comparePrices } from "./price-comparison.js";
 import * as repo from "./procurement-pricing.repository.js";
 
 function normalizeLine(line) {
@@ -86,9 +90,46 @@ export async function getPricing(actor, demandId, { version = null } = {}) {
     throw new NotFoundError("Submitted pricing not found.");
   }
 
+  // Previous Purchase Price — the actual price last paid for the same
+  // physical item, from finalized purchasing history only (never from an old
+  // estimate). Attached only for an actor who may see commercial data at all;
+  // an operational viewer's response never contains it.
+  const previousPurchases = await getPreviousPurchasePrices(
+    actor,
+    detail.lines.map((line) => line.company_item_id).filter(Boolean),
+  );
+  const dispositions = detail.pricing ? await findDispositions(pool, detail.pricing.id) : [];
+  const dispositionByLine = new Map(dispositions.map((row) => [row.demand_line_id, row]));
+
+  const linesWithHistory = detail.lines.map((line) => {
+    const previous = previousPurchases.get(line.company_item_id);
+    // Exact decimal comparison; null (not zero) when there is genuinely no
+    // prior purchase, so the UI can say "no previous purchase history"
+    // instead of falsely asserting the price did not move.
+    const comparison = comparePrices({
+      estimatedUnitPrice: line.estimated_unit_price,
+      previousUnitPrice: previous?.actual_unit_price,
+    });
+    const disposition = dispositionByLine.get(line.demand_line_id);
+
+    return {
+      ...line,
+      previous_purchase_unit_price: previous?.actual_unit_price ?? null,
+      previous_purchase_at: previous?.purchased_at ?? null,
+      previous_purchase_ipo_number: previous?.ipo_number ?? null,
+      price_difference: comparison?.difference ?? null,
+      price_difference_percentage: comparison?.percentageDifference ?? null,
+      price_direction: comparison?.direction ?? null,
+      disposition: disposition?.disposition ?? "APPROVED_FOR_PURCHASE",
+      exclusion_category: disposition?.exclusion_category ?? null,
+      exclusion_reason: disposition?.reason ?? null,
+    };
+  });
+
   const latestVersion = detail.versions[0]?.version || 1;
   return {
     ...detail,
+    lines: linesWithHistory,
     canEdit:
       canEdit &&
       detail.pricing?.status !== PRICING_STATUS.SUBMITTED &&

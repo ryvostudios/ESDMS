@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { NavList } from "./NavList.jsx";
@@ -13,6 +13,9 @@ vi.mock("../../core/auth/AuthContext.jsx", () => ({
 
 describe("permission-driven Workforce navigation", () => {
   beforeEach(() => {
+    // This file renders without a global auto-cleanup, so a prior test's tree
+    // would otherwise still be in the document and duplicate every link.
+    cleanup();
     authState.permissions = new Set();
     authState.user = { employeeId: null };
   });
@@ -61,5 +64,26 @@ describe("permission-driven Workforce navigation", () => {
     authState.permissions.add("procurement.pricing");
     rerender(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Procurement" })).toBeTruthy();
+  });
+
+  test("IPO, Receiving and History navigation follow their own capabilities, not price authority", () => {
+    // A department Team Lead: operational IPO/receiving visibility, no
+    // financial capability of any kind.
+    authState.permissions = new Set(["ipo.view", "receiving.view", "dc.view"]);
+    const { rerender } = render(<MemoryRouter><NavList /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: "IPOs" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Receiving" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Procurement" })).toBeNull();
+
+    // Gate Guard gains nothing from this phase.
+    authState.permissions = new Set(["gate_pass.verify", "gate_pass.exit", "gate_pass.return"]);
+    rerender(<MemoryRouter><NavList /></MemoryRouter>);
+    expect(screen.queryByRole("link", { name: "IPOs" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Receiving" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Procurement History" })).toBeNull();
+
+    authState.permissions = new Set(["procurement.export"]);
+    rerender(<MemoryRouter><NavList /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Procurement History" })).toBeTruthy();
   });
 });

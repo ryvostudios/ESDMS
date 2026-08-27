@@ -44,13 +44,20 @@ export async function insertDepartment(siteId, name) {
   return result.rows[0];
 }
 
-export async function updateDepartmentFields(id, { name, isActive }) {
+export async function updateDepartmentFields(id, { name, isActive, whatsappDestination }) {
+  // whatsappDestination is three-valued: undefined leaves it alone, null
+  // clears it, a string sets it — so a plain COALESCE would make clearing
+  // impossible. The explicit "was this field supplied?" flag keeps all three
+  // reachable without a second query.
   const result = await pool.query(
     `UPDATE departments
-     SET name = COALESCE($2, name), is_active = COALESCE($3, is_active), updated_at = CURRENT_TIMESTAMP
+     SET name = COALESCE($2, name),
+         is_active = COALESCE($3, is_active),
+         whatsapp_destination = CASE WHEN $4 THEN $5 ELSE whatsapp_destination END,
+         updated_at = CURRENT_TIMESTAMP
      WHERE id = $1
-     RETURNING id, name, is_active, site_id`,
-    [id, name ?? null, isActive ?? null],
+     RETURNING id, name, is_active, site_id, whatsapp_destination`,
+    [id, name ?? null, isActive ?? null, whatsappDestination !== undefined, whatsappDestination ?? null],
   );
   return result.rows[0] || null;
 }

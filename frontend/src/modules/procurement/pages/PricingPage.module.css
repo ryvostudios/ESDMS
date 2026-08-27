@@ -79,3 +79,9 @@
 .submitted {
   margin-top: var(--space-3);
 }
+
+.previousMeta {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}

@@ -224,7 +224,35 @@ identity, exact Pricing-version binding, two final responsibilities,
 rejection to `PRICING_REVISION_REQUIRED`, immutable sequential Pricing
 versions, versioned notifications, and completion at `READY_FOR_IPO` —
 migration `1787416000000_material-demand-final-pricing-approval.js`.
-Official IPO generation/numbering and Closure remain unimplemented.
+
+**Checkpoints 6-8 implemented — Procurement & Material Receiving V1 is
+complete end to end.** Checkpoint 6 (Official IPO + numbering + purchasing +
+Delivery Challan) — backend modules `backend/src/modules/ipo/` and
+`backend/src/modules/delivery-challan/`, frontend modules
+`frontend/src/modules/ipo/` and `frontend/src/modules/delivery-challan/`,
+migrations `1787417000000_ipo-and-purchasing.js` and
+`1787418000000_delivery-challan.js`. The IPO is generated automatically
+inside the final-approval transaction (exactly-once by a database unique
+constraint), numbered through the configurable
+`document_number_settings`/`document_number_counters` surface in the
+authentic `ESET/2026/32` format, and locked by immutability triggers.
+Checkpoint 7 (Receiving, Admin fallback custody/handover, Team Lead closure)
+— backend module `backend/src/modules/receiving/`, frontend module
+`frontend/src/modules/receiving/`, migration
+`1787419000000_material-receiving.js`. Checkpoint 8 (line-level budget
+disposition, previous-price comparison, carry-forward, PDFs, Excel exports,
+official WhatsApp document delivery, history) — migrations
+`1787420000000_procurement-history-export.js`,
+`1787421000000_demand-line-disposition.js` and
+`1787422000000_procurement-document-delivery.js`; new shared
+`src/shared/documents/` (numbering, PDF layout, document delivery),
+`src/shared/authorization/supply-chain-scope.js`,
+`src/shared/audit/procurement-audit.repository.js`, and
+`src/modules/reports/procurement-reports.*`.
+
+Full Inventory remains deliberately unimplemented — no stock balance,
+ledger, FIFO/batch consumption, Material Issue, usage, return, adjustment or
+transfer exists (§4, and `docs/PROCUREMENT_RECEIVING_SPEC.md` §24).
 
 ---
 

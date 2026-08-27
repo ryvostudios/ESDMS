@@ -86,7 +86,11 @@ describe("PricingPage", () => {
     expect(screen.getByText("Binding Wire")).toBeTruthy();
     expect(screen.getByText("50.00")).toBeTruthy();
     expect(screen.getByText("Bags")).toBeTruthy();
-    expect(screen.getByText(/previous purchase price is unavailable/i)).toBeTruthy();
+    // Previous Purchase Price is matched on exact Company Item identity; with
+    // no prior purchase in this fixture the absence is stated, not shown as
+    // zero.
+    expect(screen.getByRole("columnheader", { name: "Previous Actual Price" })).toBeTruthy();
+    expect(screen.getAllByText(/no previous purchase history/i).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("textbox")).toHaveLength(4); // two prices + two optional notes
   });
 

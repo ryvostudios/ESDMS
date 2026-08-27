@@ -23,7 +23,11 @@ import businessHistoryRoutes from "./modules/workforce/business-history.routes.j
 import materialCatalogRoutes from "./modules/material-catalog/material-catalog.routes.js";
 import materialDemandRoutes from "./modules/material-demand/material-demand.routes.js";
 import procurementPricingRoutes from "./modules/procurement/procurement-pricing.routes.js";
+import ipoRoutes from "./modules/ipo/ipo.routes.js";
+import deliveryChallanRoutes from "./modules/delivery-challan/delivery-challan.routes.js";
+import receivingRoutes from "./modules/receiving/receiving.routes.js";
 import reportRoutes from "./modules/reports/reports.routes.js";
+import procurementReportRoutes from "./modules/reports/procurement-reports.routes.js";
 import notificationRoutes from "./shared/notifications/notifications.routes.js";
 import { apiUnauthenticatedIpRateLimiter, apiAuthenticatedIpRateLimiter } from "./middleware/rate-limit.js";
 import { notFoundHandler, errorHandler } from "./middleware/error-handler.js";
@@ -98,7 +102,11 @@ app.use("/api/v1/me/history", businessHistoryRoutes);
 app.use("/api/v1/material-catalog", materialCatalogRoutes);
 app.use("/api/v1/demands", materialDemandRoutes);
 app.use("/api/v1/procurement/pricing", procurementPricingRoutes);
+app.use("/api/v1/ipos", ipoRoutes);
+app.use("/api/v1/delivery-challans", deliveryChallanRoutes);
+app.use("/api/v1/receiving", receivingRoutes);
 app.use("/api/v1/reports/workforce", reportRoutes);
+app.use("/api/v1/reports/procurement", procurementReportRoutes);
 app.use("/api/v1/workforce-config", workforceConfigRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
 

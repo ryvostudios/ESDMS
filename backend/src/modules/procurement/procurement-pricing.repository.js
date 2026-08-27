@@ -189,11 +189,13 @@ export async function getPricingDetail(demandId, revision, { version = null } = 
     const result = await client.query(
       `SELECT mdl.id AS demand_line_id, mdl.line_no, mdl.item_name_snapshot,
               mdl.uom_code_snapshot, mdl.uom_name_snapshot, mdl.requested_quantity,
+              dmc.company_item_id,
               mdpl.estimated_unit_price, mdpl.procurement_note,
               CASE WHEN mdpl.estimated_unit_price IS NULL THEN NULL
                    ELSE (mdl.requested_quantity * mdpl.estimated_unit_price)::numeric(26,2)
               END AS line_total
        FROM material_demand_lines mdl
+       JOIN department_material_catalog dmc ON dmc.id = mdl.catalog_entry_id
        LEFT JOIN material_demand_pricing_lines mdpl
          ON mdpl.demand_line_id = mdl.id
         AND mdpl.pricing_id = $2::uuid

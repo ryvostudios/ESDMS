@@ -255,6 +255,27 @@ export const config = {
   // regardless of the host machine's local timezone. Stored timestamps
   // remain UTC/timestamptz; this only affects display/derivation.
   appTimezone,
+  // Official WhatsApp Business Platform delivery for finalized IPO and
+  // Delivery Challan documents. Disabled by default and NEVER required for
+  // the business workflow to succeed: when disabled or unconfigured, the
+  // document is still generated, stored and downloadable, and the delivery
+  // record is written as DISABLED rather than left pending or retried.
+  //
+  // Credentials only ever come from the environment — never from source,
+  // never from the database, never echoed into logs, audit metadata or API
+  // responses (see shared/notifications/whatsapp-provider.js).
+  whatsapp: {
+    enabled: process.env.WHATSAPP_ENABLED === "true",
+    apiBaseUrl: process.env.WHATSAPP_API_BASE_URL || "https://graph.facebook.com",
+    apiVersion: process.env.WHATSAPP_API_VERSION || "v21.0",
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || null,
+    businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || null,
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN || null,
+    // Where a finalized IPO goes: the Procurement/company destination.
+    ipoDestination: process.env.WHATSAPP_IPO_DESTINATION || null,
+    // Fallback for a department that has no whatsapp_destination of its own.
+    departmentDefaultDestination: process.env.WHATSAPP_DEPARTMENT_DESTINATION || null,
+  },
   storageDir: process.env.STORAGE_DIR || "./storage",
   // "local" (disk) or "supabase" (private bucket) — see
   // shared/storage/storage-service.js. Local is refused at startup in

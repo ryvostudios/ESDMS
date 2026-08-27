@@ -330,8 +330,14 @@ describe("DemandDetailPage", () => {
       reload: vi.fn(),
     });
     await renderPage();
-    expect(screen.getAllByText("Rs 72,500.00")).toHaveLength(2);
+    // Pricing summary line + summary total + the line-decision panel's own
+    // line total — the third occurrence is the new per-line purchasing
+    // decision table.
+    expect(screen.getAllByText("Rs 72,500.00")).toHaveLength(3);
     expect(screen.getByText("Pending Final Management Review / Formal Approval")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Line purchasing decisions" })).toBeTruthy();
+    // No prior purchase in this fixture — stated plainly, never as Rs 0 or 0%.
+    expect(screen.getAllByText(/no previous purchase history/i).length).toBeGreaterThan(0);
   });
 
   test("Team Lead and ADMIN-like viewers without financial capability render no pricing component or hidden values", async () => {
@@ -432,10 +438,11 @@ describe("DemandDetailPage", () => {
     cleanup();
     mockPermissions = new Set(["demand.view"]);
     mockUseDemand.mockReturnValue({
-      result: baseDemand({ status: "READY_FOR_IPO" }), status: "ready", error: null, reload: vi.fn(),
+      result: baseDemand({ status: "IPO_GENERATED" }), status: "ready", error: null, reload: vi.fn(),
     });
     await renderPage();
-    expect(screen.getByText(/ready for the future official IPO workflow/i)).toBeTruthy();
+    // The official IPO is now generated automatically by the final gate.
+    expect(screen.getByText(/official IPO has been generated/i)).toBeTruthy();
     expect(mockUsePricing).toHaveBeenCalledTimes(1); // only the earlier authorized render
   });
 });

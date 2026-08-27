@@ -48,3 +48,18 @@ export function recordFinalManagementReview(id, body) {
 export function recordFinalFormalApproval(id, body) {
   return apiClient.post(`/demands/${id}/final-approvals`, body);
 }
+
+export function setLineDispositions(id, body) {
+  return apiClient.put(`/demands/${id}/line-dispositions`, body);
+}
+
+export function getDemandPdf(id) {
+  return apiClient.getBlob(`/demands/${id}/pdf`);
+}
+
+export function listOutstandingForCatalogEntries(catalogEntryIds, departmentId) {
+  const query = new URLSearchParams();
+  catalogEntryIds.forEach((id) => query.append("catalogEntryIds", id));
+  if (departmentId) query.set("departmentId", departmentId);
+  return apiClient.get(`/ipos/outstanding?${query.toString()}`);
+}

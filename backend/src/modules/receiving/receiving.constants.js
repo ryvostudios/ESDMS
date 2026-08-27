@@ -1,0 +1,17 @@
+export const RECEIPT_STATUS = {
+  AWAITING_HANDOVER: "AWAITING_HANDOVER",
+  PENDING_CONFIRMATION: "PENDING_CONFIRMATION",
+  COMPLETED: "COMPLETED",
+};
+
+export const RECEIPT_TYPE = {
+  DEPARTMENT: "DEPARTMENT",
+  ADMIN_FALLBACK: "ADMIN_FALLBACK",
+};
+
+export const DISCREPANCY_TYPES = ["SHORT", "DAMAGED", "WRONG_SPEC", "REJECTED"];
+
+export const RECEIVING_VIEW_PERMISSION = "receiving.view";
+export const RECEIVING_RECEIVE_PERMISSION = "receiving.receive";
+export const RECEIVING_FALLBACK_PERMISSION = "receiving.fallback_receive";
+export const RECEIVING_CONFIRM_PERMISSION = "receiving.confirm";

@@ -6,6 +6,16 @@ export const MATERIAL_DEMAND_STATUS = {
   PENDING_FINAL_APPROVAL: "PENDING_FINAL_APPROVAL",
   PRICING_REVISION_REQUIRED: "PRICING_REVISION_REQUIRED",
   READY_FOR_IPO: "READY_FOR_IPO",
+  // Set in the same transaction as final approval — the official IPO is
+  // generated automatically, so READY_FOR_IPO is an audited boundary rather
+  // than a resting state (see material-demand.service.js and
+  // modules/ipo/ipo.service.js#generateIpoForApprovedDemand).
+  IPO_GENERATED: "IPO_GENERATED",
+  IPO_CANCELLED: "IPO_CANCELLED",
+  // The DIGITAL Demand -> Procurement -> Receiving workflow is finished.
+  // It does NOT mean the material was consumed, and it says nothing about
+  // any current stock level — ESDMS has no inventory balance (spec §24).
+  COMPLETED: "COMPLETED",
 };
 
 export const APPROVAL_STAGE = {

@@ -75,9 +75,46 @@ const MATERIAL_DEMAND_TABLES = [
 // 1787414000000_material-demand-initial-approval.js.
 const MATERIAL_DEMAND_APPROVAL_TABLES = ["material_demand_approvals"];
 
+// Management's line-level purchasing disposition (out-of-budget exclusion)
+// — see 1787421000000_demand-line-disposition.js.
+const LINE_DISPOSITION_TABLES = ["material_demand_line_dispositions"];
+
 // Procurement estimated pricing (Checkpoint 4) is isolated in two
 // sensitive tables — see 1787415000000_material-demand-procurement-pricing.js.
 const PROCUREMENT_PRICING_TABLES = ["material_demand_pricing", "material_demand_pricing_lines"];
+
+// Official IPO + Procurement purchasing (Checkpoint 6a) — see
+// 1787417000000_ipo-and-purchasing.js. document_number_* is the shared,
+// configurable numbering surface for IPO and Delivery Challan;
+// procurement_audit_log is the append-only audit stream for the whole
+// IPO -> DC -> Receiving chain.
+const IPO_TABLES = [
+  "document_number_settings",
+  "document_number_counters",
+  "ipos",
+  "ipo_lines",
+  // Each partial purchase is its own immutable event; the line-level total is
+  // derived from them (see 1787417000000_ipo-and-purchasing.js).
+  "ipo_purchase_events",
+  "procurement_audit_log",
+];
+
+// Delivery Challan (Checkpoint 6b) — see 1787418000000_delivery-challan.js.
+const DELIVERY_CHALLAN_TABLES = ["delivery_challans", "delivery_challan_lines"];
+
+// Material Receiving, Admin fallback custody and department confirmation
+// (Checkpoint 7) — see 1787419000000_material-receiving.js. No inventory
+// balance/ledger/batch table exists or is expected here (spec §24).
+const RECEIVING_TABLES = ["material_receipts", "material_receipt_lines"];
+
+// Stored, historically stable IPO/DC renderings backing both download and
+// official WhatsApp delivery — see 1787422000000_procurement-document-delivery.js.
+const PROCUREMENT_DOCUMENT_TABLES = ["procurement_documents"];
+
+// Authoritative claim of an unresolved prior quantity against its source, so
+// the same shortage cannot be carried into several Demands — see
+// 1787423000000_carry-forward-allocation.js.
+const CARRY_FORWARD_TABLES = ["carry_forward_allocations"];
 
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
@@ -88,6 +125,12 @@ const RUNTIME_APPLICATION_TABLES = [
   ...MATERIAL_DEMAND_TABLES,
   ...MATERIAL_DEMAND_APPROVAL_TABLES,
   ...PROCUREMENT_PRICING_TABLES,
+  ...IPO_TABLES,
+  ...DELIVERY_CHALLAN_TABLES,
+  ...RECEIVING_TABLES,
+  ...LINE_DISPOSITION_TABLES,
+  ...PROCUREMENT_DOCUMENT_TABLES,
+  ...CARRY_FORWARD_TABLES,
 ];
 const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];

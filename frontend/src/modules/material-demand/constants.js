@@ -9,6 +9,9 @@ export const MATERIAL_DEMAND_STATUSES = [
   "PENDING_FINAL_APPROVAL",
   "PRICING_REVISION_REQUIRED",
   "READY_FOR_IPO",
+  "IPO_GENERATED",
+  "IPO_CANCELLED",
+  "COMPLETED",
 ];
 
 export const STATUS_TONE = {
@@ -19,6 +22,9 @@ export const STATUS_TONE = {
   PENDING_FINAL_APPROVAL: "warning",
   PRICING_REVISION_REQUIRED: "danger",
   READY_FOR_IPO: "success",
+  IPO_GENERATED: "info",
+  IPO_CANCELLED: "danger",
+  COMPLETED: "success",
 };
 
 export const APPROVAL_TYPE_LABEL = {

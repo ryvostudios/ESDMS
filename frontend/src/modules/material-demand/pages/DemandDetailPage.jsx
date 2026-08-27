@@ -4,6 +4,7 @@ import { useDemand } from "../hooks/useDemand.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { submitDemand, recordManagementReview, recordFormalApproval } from "../api.js";
 import { DemandStatusBadge } from "../components/DemandStatusBadge.jsx";
+import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { AuditTimeline } from "../components/AuditTimeline.jsx";
 import { ApprovalPanel } from "../components/ApprovalPanel.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
@@ -14,6 +15,9 @@ import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { usePricing } from "../../procurement/hooks/usePricing.js";
 import { PricingSummary } from "../../procurement/components/PricingSummary.jsx";
 import { FinalApprovalPanel } from "../../procurement/components/FinalApprovalPanel.jsx";
+import { LineDispositionPanel } from "../../procurement/components/LineDispositionPanel.jsx";
+import { downloadBlob } from "../../../shared/utilities/download.js";
+import { getDemandPdf } from "../api.js";
 import styles from "./DemandDetailPage.module.css";
 
 const EDITABLE_STATUSES = ["DRAFT"];
@@ -24,7 +28,12 @@ const PENDING_NOTICE = {
   READY_FOR_PRICING: "This Demand has completed initial approval and is ready for Procurement pricing.",
   PENDING_FINAL_APPROVAL: "Pricing is complete and this Demand is pending final management review and formal approval.",
   PRICING_REVISION_REQUIRED: "Submitted pricing was rejected at the final gate and requires a new immutable Pricing version.",
-  READY_FOR_IPO: "Final pricing approval is complete. This Demand is ready for the future official IPO workflow.",
+  READY_FOR_IPO: "Final pricing approval is complete. The official IPO is being generated.",
+  IPO_GENERATED:
+    "Final approval is complete and the official IPO has been generated. Procurement now purchases against it.",
+  IPO_CANCELLED: "The IPO generated from this Demand was cancelled. Its number and history are preserved.",
+  COMPLETED:
+    "The Demand, procurement and receiving workflow is complete. This does not mean the material has been consumed — ESDMS does not track stock levels.",
 };
 
 function DemandPricingSection({ demandId, reloadDemand }) {
@@ -35,6 +44,15 @@ function DemandPricingSection({ demandId, reloadDemand }) {
   return (
     <>
       <PricingSummary detail={result} />
+      {/* Line-by-line purchasing decisions come BEFORE the final decision:
+          the approver must see, and be bound to, exactly the set they
+          approve. */}
+      <LineDispositionPanel
+        detail={result}
+        onChanged={async () => {
+          await Promise.all([reload(), reloadDemand()]);
+        }}
+      />
       <FinalApprovalPanel
         detail={result}
         onChanged={async () => {
@@ -69,12 +87,17 @@ export function DemandDetailPage() {
     return <ErrorState message={error} onRetry={reload} />;
   }
 
-  const { demand, lines, auditLog, approvals } = result;
+  const { demand, lines, auditLog, approvals, dispositions = [] } = result;
+  // Latest decision per line — a Demand can have several Pricing versions,
+  // and only the most recent one describes the current purchasing set.
+  const dispositionByLine = new Map(dispositions.map((entry) => [entry.demand_line_id, entry]));
   const canEdit = EDITABLE_STATUSES.includes(demand.status) && hasPermission("demand.edit");
   const canSubmit = SUBMITTABLE_STATUSES.includes(demand.status) && hasPermission("demand.submit");
   const canPrice = demand.status === "READY_FOR_PRICING" && hasPermission("procurement.pricing");
   const canViewSubmittedPrices =
-    ["PENDING_FINAL_APPROVAL", "PRICING_REVISION_REQUIRED", "READY_FOR_IPO"].includes(demand.status) &&
+    ["PENDING_FINAL_APPROVAL", "PRICING_REVISION_REQUIRED", "READY_FOR_IPO", "IPO_GENERATED", "IPO_CANCELLED", "COMPLETED"].includes(
+      demand.status,
+    ) &&
     hasPermission("procurement.view_prices", "procurement.pricing");
 
   const isPendingReview = demand.status === "PENDING_INITIAL_REVIEW";
@@ -111,6 +134,22 @@ export function DemandDetailPage() {
           </div>
         </div>
         <div className={styles.actions}>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              await downloadBlob(
+                await getDemandPdf(id),
+                `${demand.demand_number.replaceAll("/", "-")}.pdf`,
+              );
+            }}
+          >
+            Download Demand PDF
+          </Button>
+          {result.ipo && (
+            <Button variant="secondary" onClick={() => navigate(`/ipos/${result.ipo.id}`)}>
+              View {result.ipo.ipo_number}
+            </Button>
+          )}
           {canEdit && (
             <Button variant="secondary" onClick={() => navigate(`/demands/${id}/edit`)}>
               Edit
@@ -145,16 +184,36 @@ export function DemandDetailPage() {
                     <th>Material</th>
                     <th>Quantity</th>
                     <th>Unit</th>
+                    <th>Purchasing decision</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((line) => (
-                    <tr key={line.id}>
-                      <td>{line.item_name_snapshot}</td>
-                      <td>{line.requested_quantity}</td>
-                      <td>{line.uom_name_snapshot}</td>
-                    </tr>
-                  ))}
+                  {lines.map((line) => {
+                    // Visible to the department itself: knowing a line was
+                    // excluded (and broadly why) is what lets them decide
+                    // whether to carry it forward. The financial explanation
+                    // stays behind the price gate, server-side.
+                    const decision = dispositionByLine.get(line.id);
+                    return (
+                      <tr key={line.id}>
+                        <td>{line.item_name_snapshot}</td>
+                        <td>{line.requested_quantity}</td>
+                        <td>{line.uom_name_snapshot}</td>
+                        <td>
+                          {decision?.disposition === "EXCLUDED" ? (
+                            <StatusBadge
+                              tone="danger"
+                              label={`Excluded — ${(decision.exclusion_category || "")
+                                .replaceAll("_", " ")
+                                .toLowerCase()}`}
+                            />
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

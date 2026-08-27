@@ -42,6 +42,30 @@ export const NAV_ITEMS = [
     permission: ["procurement.pricing"],
   },
   {
+    // Operational IPO visibility. Deliberately NOT gated on a price
+    // capability: a department lead may follow their own IPO's progress
+    // without ever seeing an amount (the backend redacts every commercial
+    // column for them, and refuses the IPO PDF outright).
+    label: "IPOs",
+    to: "/ipos",
+    icon: BoxIcon,
+    end: true,
+    permission: ["ipo.view", "procurement.purchase", "procurement.view_prices"],
+  },
+  {
+    label: "Receiving",
+    to: "/receiving",
+    icon: ClipboardCheckIcon,
+    end: true,
+    permission: ["receiving.view"],
+  },
+  {
+    label: "Procurement History",
+    to: "/procurement/history",
+    icon: ClipboardCheckIcon,
+    permission: ["ipo.view", "procurement.view_prices", "procurement.purchase", "procurement.export"],
+  },
+  {
     label: "Workforce Config",
     to: "/workforce/config",
     icon: ClipboardCheckIcon,

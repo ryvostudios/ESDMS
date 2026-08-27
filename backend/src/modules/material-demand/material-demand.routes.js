@@ -12,10 +12,16 @@ router.param("id", validateUuidParam("id"));
 router.get("/", requirePermission("demand.view"), controller.list);
 router.post("/", requirePermission("demand.create"), controller.create);
 router.get("/:id", requirePermission("demand.view", "demand.review", "demand.approve"), controller.detail);
+router.get("/:id/pdf", requirePermission("demand.view", "demand.review", "demand.approve"), controller.downloadPdf);
 router.patch("/:id", requirePermission("demand.edit"), controller.updateDraft);
 router.post("/:id/submit", requirePermission("demand.submit"), controller.submit);
 router.post("/:id/reviews", requirePermission("demand.review"), controller.recordReview);
 router.post("/:id/approvals", requirePermission("demand.approve"), controller.recordApproval);
+router.put(
+  "/:id/line-dispositions",
+  requirePermission("demand.review", "demand.approve"),
+  controller.setLineDispositions,
+);
 router.post("/:id/final-reviews", requirePermission("demand.review"), controller.recordFinalReview);
 router.post("/:id/final-approvals", requirePermission("demand.approve"), controller.recordFinalApproval);
 

@@ -27,6 +27,13 @@ import { DemandFormPage } from "../../modules/material-demand/pages/DemandFormPa
 import { DemandDetailPage } from "../../modules/material-demand/pages/DemandDetailPage.jsx";
 import { PricingQueuePage } from "../../modules/procurement/pages/PricingQueuePage.jsx";
 import { PricingPage } from "../../modules/procurement/pages/PricingPage.jsx";
+import { ProcurementHistoryPage } from "../../modules/procurement/pages/ProcurementHistoryPage.jsx";
+import { IpoListPage } from "../../modules/ipo/pages/IpoListPage.jsx";
+import { IpoDetailPage } from "../../modules/ipo/pages/IpoDetailPage.jsx";
+import { DeliveryChallanDetailPage } from "../../modules/delivery-challan/pages/DeliveryChallanDetailPage.jsx";
+import { ReceivingQueuePage } from "../../modules/receiving/pages/ReceivingQueuePage.jsx";
+import { ReceiveDeliveryPage } from "../../modules/receiving/pages/ReceiveDeliveryPage.jsx";
+import { ReceiptDetailPage } from "../../modules/receiving/pages/ReceiptDetailPage.jsx";
 
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
@@ -140,6 +147,63 @@ export function AppRoutes() {
           element={
             <PermissionRoute permissions={["procurement.pricing"]}>
               <PricingPage />
+            </PermissionRoute>
+          }
+        />
+
+        <Route
+          path="/procurement/history"
+          element={
+            <PermissionRoute permissions={["ipo.view", "procurement.view_prices", "procurement.purchase", "procurement.export"]}>
+              <ProcurementHistoryPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/ipos"
+          element={
+            <PermissionRoute permissions={["ipo.view", "procurement.purchase", "procurement.view_prices"]}>
+              <IpoListPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/ipos/:id"
+          element={
+            <PermissionRoute permissions={["ipo.view", "procurement.purchase", "procurement.view_prices"]}>
+              <IpoDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/delivery-challans/:id"
+          element={
+            <PermissionRoute permissions={["dc.view", "dc.manage"]}>
+              <DeliveryChallanDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/receiving"
+          element={
+            <PermissionRoute permissions={["receiving.view"]}>
+              <ReceivingQueuePage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/receiving/challans/:id"
+          element={
+            <PermissionRoute permissions={["receiving.view"]}>
+              <ReceiveDeliveryPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/receiving/receipts/:id"
+          element={
+            <PermissionRoute permissions={["receiving.view"]}>
+              <ReceiptDetailPage />
             </PermissionRoute>
           }
         />

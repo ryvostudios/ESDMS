@@ -29,14 +29,21 @@ Inventory is a distinct, later project phase.
 | 3 | Initial Management/Formal approval + notification routing | **Implemented** |
 | 4 | Procurement pricing + financial visibility | **Implemented** |
 | 5 | Final pricing approval + controlled repricing foundation | **Implemented** (stops at `READY_FOR_IPO`; official IPO awaits owner documents) |
-| 6 | Purchase progress + Delivery Challan | Not started |
-| 7 | Department receiving + Admin fallback custody/handover + Team Lead closure | Not started |
-| 8 | End-to-end regression + reporting/history + beta polish | Not started |
+| 6 | Official IPO + numbering + purchasing + Delivery Challan | **Implemented** |
+| 7 | Department receiving + Admin fallback custody/handover + Team Lead closure | **Implemented** |
+| 8 | Line-level budget disposition, previous-price comparison, carry-forward, PDFs, Excel exports, WhatsApp delivery, history | **Implemented** |
 
-Sections explicitly marked Implemented through Checkpoint 5 describe
-working behavior. Official IPO generation/numbering and everything after
-`READY_FOR_IPO` remain target design only and must not be implemented
-until the owner supplies authoritative E-Set IPO/Demand/DC examples.
+Procurement & Material Receiving V1 is complete end to end: Department
+Catalog → Demand → Initial Approval → Pricing → Final Approval → IPO →
+Purchasing → Delivery Challan → Receiving → Department Confirmation →
+Completed History, with PDFs, Excel exports and official WhatsApp document
+delivery.
+
+**Still deliberately NOT built** (see §24, §38): current stock balance,
+stock ledger, FIFO/batch consumption, Material Issue, usage, return, stock
+adjustment, stock transfer, warehouse/bin management, and offline mutation
+sync. Receiving records what physically arrived; it never states what is in
+stock today.
 
 ---
 
@@ -378,12 +385,179 @@ silently rewritten.
 
 ---
 
-## 15. IPO — First-Class Business Document (future checkpoint)
+## 15. IPO — First-Class Business Document — **Implemented (Checkpoint 6)**
 
-No official IPO model is implemented. Its entity, number, layout, and
-generation rules intentionally await the owner's authoritative E-Set
-IPO/Demand/DC documents and numbering examples. The text below remains
-target design and must not be treated as current behavior.
+Tables: `ipos`, `ipo_lines`. Generated automatically inside the very
+transaction that completes final approval — there is no manual "Generate
+IPO" step. Exactly-once generation is a DATABASE guarantee, not a service
+convention: `unique (demand_id, demand_revision)` means a replayed or
+concurrent final approval can only ever conflict, never produce a second
+IPO. `READY_FOR_IPO` remains a real audited boundary in the history but is
+never a resting state; the Demand moves straight on to `IPO_GENERATED`.
+
+Each IPO pins the exact Demand id and revision, the exact approved Pricing
+version (composite FK to `material_demand_pricing(id, demand_id,
+demand_revision)`), department, site, currency, the server-computed
+approved total, the generation timestamp and actor. Lines snapshot the item
+name, UOM, approved quantity, estimated unit price and the physical
+`company_item_id`. Database triggers make that whole snapshot immutable and
+forbid DELETE of an IPO or an IPO line, so cancellation preserves both the
+record and its number.
+
+Only lines management approved for purchase reach the IPO (§15a).
+
+**IPO numbering.** Server-controlled, concurrency-safe, never reused.
+Issuance reuses the existing atomic year-keyed counter pattern
+(`document_number_counters`, `INSERT .. ON CONFLICT DO UPDATE ..
+RETURNING`), and the FORMAT is data (`document_number_settings`: prefix,
+separator, suffix, pad width, start value). The V1 default follows the
+authentic E-Set reference format `ESET/2026/32`. A cancelled IPO keeps its
+number and the counter is never rolled back. Because a reference legitimately
+contains `/`, every download filename goes through
+`documentFilename()`, which allowlists `[A-Za-z0-9_-]` so no separator can
+reach a Content-Disposition header or a storage path.
+
+**IPO lifecycle:** `GENERATED → ACKNOWLEDGED → PURCHASING → COMPLETED`,
+plus `CANCELLED`. Acknowledgement is audited and does not block purchasing.
+
+**Cancellation** requires `ipo.cancel` (CEO by default), a free-text reason
+and an optional category; it preserves the IPO, its number and its history,
+notifies Procurement and management, and blocks further purchasing. V1
+takes the conservative rule while the business policy is unresolved: an IPO
+with recorded purchases or a live Delivery Challan cannot be cancelled at
+all, so real recorded purchases are never silently voided — outstanding
+quantity is resolved through purchasing closure instead.
+
+### 15a. Line-Level Purchasing Disposition — **Implemented (Checkpoint 8)**
+
+Management routinely funds most of a Demand and marks one line "out of
+budget". Table: `material_demand_line_dispositions`, one row per
+(`pricing_id`, `demand_line_id`), values `APPROVED_FOR_PURCHASE` /
+`EXCLUDED` with categories `OUT_OF_BUDGET`, `NOT_REQUIRED_NOW`,
+`ALREADY_AVAILABLE`, `DUPLICATE`, `OTHER`.
+
+An exclusion is **not** a deletion: the Demand line, its requested quantity,
+its Pricing version and its estimated price all survive, and the decision
+itself snapshots quantity and estimate. A line with no row is implicitly
+`APPROVED_FOR_PURCHASE`, so nothing needed backfilling. Excluding every
+line is refused — that is a rejection, which already has its own path.
+
+Determinism of the approved set, without blocking a real business event. The
+owner's actual sequence is: the Site Manager records the final management
+review, and only THEN the CEO rules a line out of budget. Freezing at the first
+decision would make that impossible.
+
+Instead every FINAL approval records a `disposition_fingerprint` — a hash of
+the exact purchasing set it decided on — and the gate completes only when both
+responsibilities have approved the SAME, still-current set. A later exclusion
+neither rewrites nor deletes the earlier approval; that approval simply stops
+satisfying the gate, and its author decides again on the new set as a NEW
+immutable row (the FINAL slot uniqueness is widened by the fingerprint). The
+generated IPO therefore always contains exactly the set the formal authority
+approved. Dispositions freeze for good once the IPO exists.
+
+Recording a disposition requires a management responsibility
+(`demand.review` or `demand.approve`) AND `procurement.view_prices` — it is
+a decision about a price. The department sees the disposition and its
+category (it needs them to decide about carry-forward); the free-text
+financial explanation is redacted exactly like a FINAL rejection reason.
+
+### 15b. Previous Purchase Price — **Implemented (Checkpoint 8)**
+
+When Procurement prices a line, the system shows the most recent **actual
+finalized purchase price** — the latest purchase EVENT that still stands, on a
+non-cancelled IPO whose purchasing has been formally closed
+(`purchasing_closed_at IS NOT NULL`). A purchase still in progress is not an
+authoritative "what we last paid", because it can still move; neither is one
+that was later reversed. Only the unreversed remainder counts, so a fully
+reversed purchase drops out entirely and the lookup falls back to the newest
+purchase that survives, while a partially reversed one stays eligible — units
+really were bought at that price and kept — for the same
+material, plus the difference in PKR
+and as a percentage. Matching is on the authoritative `company_item_id`
+snapshot stored on `ipo_lines` — never on a similar description, so
+"Screw 1/2 inch" and "Screw 2 inch" can never share price history. Fuzzy
+search assists catalogue discovery only; it never determines financial
+identity.
+
+Arithmetic is exact (`src/modules/procurement/price-comparison.js`): both
+prices convert to integer minor units as BigInt, so no float ever touches
+money; only the percentage is a ratio, computed at two decimals with
+explicit half-away-from-zero rounding. With no prior purchase the response
+is `null` and the UI says "No previous purchase history" — never `Rs 0` or
+`0%`, which would falsely assert the price had not moved. The whole
+comparison is gated behind price authority.
+
+### 15c. Purchase events and corrections — **Implemented**
+
+One IPO line is realistically bought more than once at different prices, so
+each purchase is its own append-only `ipo_purchase_events` row (quantity,
+price paid, actor, time, operation id). The line-level `purchased_quantity` is
+a maintained aggregate, and a deferred constraint trigger proves it always
+equals the sum of its events — a total cannot be fabricated without the events
+behind it. Once purchasing is closed, a trigger freezes the purchasing facts
+for every writer, and ordinary Procurement cannot append anything further.
+
+**A correction is a linked reversal, never a free-priced negative purchase.**
+A negative event must name the exact purchase it withdraws
+(`reverses_purchase_event_id`) and inherits that purchase's price, which the
+server reads from the referenced event — the API accepts no price on a
+reversal at all, and requires a reason. Without that link, "reverse the 60
+bought at 100" could be recorded as "-60 at 1" and leave 5,940 of value on a
+line that was fully undone.
+
+The rules, enforced in the service AND at the database:
+
+- a reversal references an original purchase, never another reversal or itself;
+- a composite foreign key makes referencing a purchase on another IPO line —
+  and therefore another IPO — structurally impossible;
+- total reversals against one purchase can never exceed its quantity, checked
+  under a row lock on the original so two concurrent corrections serialize;
+- the original row is never rewritten: `+60 @ 100` and `-20 @ 100` both stand,
+  netting 40 @ 100;
+- net purchased quantity can never go negative, exceed the approved quantity,
+  or drop below what a live Delivery Challan already carries — material that
+  has physically moved cannot be corrected away.
+
+### 15d. Carry-forward allocation — **Implemented**
+
+An unresolved quantity carried into a later Demand is an authoritative CLAIM
+against its source (`carry_forward_allocations`), not a hint. Availability is
+`source_quantity` minus every ACTIVE claim, so the same outstanding 40 cannot
+be carried into three Demands. Three non-overlapping sources:
+`UNPURCHASED_IPO_QUANTITY` (approved and ordered, purchasing closed short),
+`OUT_OF_BUDGET` (excluded from the set that actually became purchasing
+authority — proven by an IPO generated from that same Pricing version) and
+`RECEIVING_SHORTAGE` (purchased, delivered, and confirmed short). The first two
+were never bought; the third was — so no unit is ever counted twice.
+
+The claim becomes authoritative at SUBMIT, so an abandoned draft reserves
+nothing and there are no orphan reservations. A Demand that is rejected, or
+whose IPO is cancelled, releases its claim (marked RELEASED, never deleted).
+Allocation is guarded by a trigger that locks the source first, so two Demands
+submitting against the same remaining quantity serialize.
+
+Allocations are append-only historical links: source, target, quantity,
+department, site, creator and creation time are frozen at the database, and a
+row can never be deleted. Release is a one-way lifecycle transition — ACTIVE to
+RELEASED, once — which restores the source's remaining availability without
+erasing the claim that was made. Undoing an allocation therefore means
+releasing it and claiming again through the normal workflow, so both events
+stay readable. A ledger whose entries can be restated afterwards would offer no
+more protection than no ledger at all: rewriting a claim of 25 down to 10 frees
+15 that another Demand has already spent.
+
+A Draft therefore carries source INTENT without reserving quantity, and that
+intent is durable: the source linkage is stored on the Demand line, returned
+with the Draft, and restored when it is reopened, so editing an unrelated
+field — or the carried quantity itself — never silently converts the line into
+an ordinary request. Removing the line withdraws its intent with it, and
+re-adding the same material by hand is a fresh, unsourced requirement. The
+restored linkage is only intent: the server re-validates the source, its
+department and its remaining availability on every save and at submission, so
+a tampered client cannot switch a claim to another department's source.
+
+**The historical target text below is retained for context.**
 
 **IPO is the final approved purchasing document generated from the final
 approved Demand revision.** It is a real first-class domain entity, never
@@ -398,7 +572,32 @@ generated, the IPO is locked, and Procurement is notified automatically.
 
 ---
 
-## 16. Procurement Purchase (Checkpoint 6)
+## 16. Procurement Purchase — **Implemented (Checkpoint 6)**
+
+Procurement records, per IPO line, the actual purchased quantity, the actual
+purchase unit price, an optional internal note and the purchase
+timestamp/actor. `purchase_status` (`NOT_PURCHASED` /
+`PARTIALLY_PURCHASED` / `PURCHASED`) is a stored derivation of the
+quantities, and a CHECK constraint proves it can never drift from them.
+
+Values are recorded as ABSOLUTE line values, never deltas — which is what
+makes a replayed request naturally idempotent instead of double-counting.
+Over-purchase is rejected by the database as well as the service (V1 has no
+exception policy). A purchased quantity also cannot be reduced below what a
+live Delivery Challan already carries; both that check and DC creation hold
+the same IPO row lock, so they cannot race.
+
+Estimated and actual price are permanently distinct columns: recording an
+actual price never overwrites the estimate. All totals are computed
+server-side in exact numeric; no client total is trusted.
+
+`procurement.purchase` is CEO-only by default — real Procurement staff
+receive an explicit per-user GRANT, exactly like `procurement.pricing`.
+ADMIN, SITE_MANAGER, UPPER_MANAGEMENT and TEAM_LEAD hold none of it by role.
+
+### Historical target text
+
+
 
 Procurement works item-by-item against the IPO. Each IPO line supports
 `NOT_PURCHASED` / `PARTIALLY_PURCHASED` / `PURCHASED`. Procurement records
@@ -419,7 +618,42 @@ Workforce. Gate Guard and Driver continue to have zero price visibility
 
 ---
 
-## 17. Delivery Challan (Checkpoint 6)
+## 17. Delivery Challan — **Implemented (Checkpoint 6)**
+
+Tables: `delivery_challans`, `delivery_challan_lines`. A first-class
+operational document, deliberately NOT merged with Gate Pass: the two share
+no foreign key in either direction, and a DC id is not addressable through
+the Gate Pass API (both are asserted by test).
+
+Numbering reuses the same configurable mechanism as the IPO
+(`ESET-DC/2026/8` by default). Lifecycle: `DRAFT → FINALIZED → RECEIVING →
+COMPLETED`, plus `CANCELLED`.
+
+One IPO may produce several Delivery Challans, because partial purchasing
+produces partial delivery. The invariant that keeps that safe is
+allocation: across all non-cancelled challans, the quantity allocated from
+an IPO line can never exceed that line's actual purchased quantity. It is
+enforced in the service under the IPO row lock AND re-checked by a trigger
+that locks the parent `ipo_lines` row, so two concurrent allocations
+serialize rather than both passing.
+
+Creation is idempotent through a client-supplied operation id, bound to the
+IPO it was issued against: retrying the same request returns the same challan
+and the same number, while reusing that id under a different IPO is a conflict,
+never a replay.
+
+A finalized challan is immutable — a trigger refuses content changes and
+line writes once it leaves DRAFT, and no challan can ever be deleted.
+Correction is cancel-and-replace, and cancellation is refused once anything
+has been received against it, so receiving history is never voided by a
+Procurement-side correction.
+
+`dc.manage` is CEO-only by default (per-user GRANT for Procurement staff);
+`dc.view` is operational and carries no pricing.
+
+### Historical target text
+
+
 
 Delivery Challan (DC) is a separate first-class operational document from
 Demand, IPO, and Gate Pass (existing decision, reaffirmed — see
@@ -433,7 +667,67 @@ coupled to Gate Pass.
 
 ---
 
-## 18. WhatsApp Remains Part of the Real Workflow
+## 18. WhatsApp Document Delivery — **Implemented (Checkpoint 8)**
+
+Finalizing an IPO or a Delivery Challan automatically queues its PDF for
+delivery to the configured WhatsApp destination — the Procurement/company
+destination for an IPO, and the owning department's own destination
+(`departments.whatsapp_destination`, falling back to a configured default)
+for a Delivery Challan.
+
+**Scope limitation to validate in production.** The provider sends to a
+configured DESTINATION using the Cloud API's `recipient_type: individual`.
+Automatic delivery to a department WhatsApp GROUP is the owner's eventual
+goal; the architecture and per-department configuration support it, but
+whether a given destination is deliverable depends on the provider and
+business account, which cannot be verified from this codebase. Configuration
+and UI therefore say "destination", never "group", until that is confirmed.
+
+**Only the official WhatsApp Business Platform is supported.** There is no
+WhatsApp Web scraping, headless-browser automation, reverse-engineered
+session library or personal-account cookie reuse anywhere in this codebase,
+and none will be added: those violate WhatsApp's terms, break without
+warning, and would put a real business account at risk of a ban.
+Credentials come only from the environment (`WHATSAPP_ENABLED`,
+`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
+`WHATSAPP_BUSINESS_ACCOUNT_ID`, `WHATSAPP_API_VERSION`, destinations) and
+never appear in source, the database, logs, audit metadata or API responses.
+
+**A delivery failure can never touch a business record.** The chain reuses
+the existing Gate Pass outbox architecture exactly:
+
+```text
+IPO / DC transaction COMMITS
+      → SYSTEM job enqueued in that same transaction (so it is as durable
+        as the record itself)
+      → render PDF, store bytes, insert procurement_documents
+      → WHATSAPP job enqueued with a per-document idempotency key
+      → official provider attempt; outcome recorded on the outbox row
+```
+
+An IPO is never rolled back, deleted or blocked because a renderer, object
+store or messaging API had a problem, and the document stays downloadable
+either way. Retries never double-send: the idempotency key is stable per
+document, a stale in-flight external job goes to `UNCERTAIN` rather than
+being replayed, and a document for a cancelled IPO/DC is voided instead of
+shared.
+
+**Disabled is a first-class, honest outcome.** With `WHATSAPP_ENABLED=false`
+(the default) or missing credentials, the workflow still succeeds and the
+delivery row is written terminally as `DISABLED` with a `skippedReason`,
+plus a `DOCUMENT_DELIVERY_SKIPPED` audit event — never left `PENDING`
+(which would retry forever) and never `FAILED` (which would misreport a
+configuration choice as an error). Users download and share by hand.
+
+Delivery history — document type/id, destination, event, status, attempts,
+provider message id, timestamps, failure information and idempotency key —
+is the existing `notification_outbox` row; no parallel mechanism was added.
+
+Captions carry the document reference only, never an amount: a WhatsApp
+caption is visible in a notification preview, a far wider surface than the
+document's own authorization.
+
+### Historical context
 
 Do not replace WhatsApp in V1. Today, the Delivery Challan is shared in
 the relevant WhatsApp group, and material photos are commonly shared in
@@ -446,7 +740,52 @@ This may be revisited later based on operational feedback.
 
 ---
 
-## 19. Receiving — Core Owner Rule (Checkpoint 7)
+## 19-21. Receiving, Confirmation and Admin Fallback — **Implemented (Checkpoint 7)**
+
+Tables: `material_receipts`, `material_receipt_lines`.
+
+**Department ownership.** Any appropriate active member of the owning
+department may record receipt — `receiving.receive` is a default EMPLOYEE
+capability, so a Team Lead is not the only possible receiver and no Admin
+approval is involved at any point. The department's Team Lead is then
+notified and closes the cycle with `receiving.confirm`. Nothing here is
+department-specific: the same code serves Civil, WTG, E-BOP, HSE, Admin and
+any future department.
+
+**Two authorizations, never collapsed into one.** Ordinary
+`receiving.receive` is strictly the actor's own department at their own
+site — knowing another department's Delivery Challan id gains nothing.
+Temporary Admin custody is a separate, explicitly granted
+`receiving.fallback_receive`, which is cross-department but still
+site-bound. ADMIN holds the fallback capability and NOT `receiving.receive`,
+so the ordinary path is refused for them even at their own site.
+
+**Custody is never rewritten.** An `ADMIN_FALLBACK` receipt starts
+`AWAITING_HANDOVER`; the DEPARTMENT (not Admin) acknowledges the handover,
+which sets the recipient and handover time while leaving the original Admin
+receiver and receipt time untouched — a trigger refuses any attempt to
+change either, or to rewrite a completed handover.
+
+**Actor identity is never forged.** The audit actor is always the
+authenticated user. When the person who physically took delivery has no
+login, `physical_receiver_employee_id` records them separately, preserving
+the platform-wide Employee ≠ User separation.
+
+**Quantities.** DC quantity, received quantity, discrepancy quantity and
+the resulting unresolved quantity are stored separately and never
+collapsed. Discrepancy types: `SHORT`, `DAMAGED`, `WRONG_SPEC`, `REJECTED`,
+each with an optional note; a discrepancy quantity must name its type, and
+discrepant material is never counted as received. Over-receipt is rejected
+by both the service and a trigger that locks the DC line first, so two
+concurrent receivers cannot both take the last quantity. Recorded receipt
+lines are append-only at the database level.
+
+Receiving creates NO stock. There is no balance, ledger, batch, issue,
+usage or return table anywhere in this phase — asserted by test.
+
+### Historical target text
+
+
 
 Any appropriate person from the relevant department who is present at the
 site may physically receive that department's material — no Admin
@@ -531,7 +870,24 @@ broadcast to unrelated users.
 
 ---
 
-## 23. Closing the Demand / Receiving Cycle (Checkpoint 7-8)
+## 23. Closing the Demand / Receiving Cycle — **Implemented**
+
+Closure is evaluated, never asserted by a button. A Delivery Challan
+completes only when every line's confirmed quantity (from receipts a
+department authority actually closed) equals its full challan quantity. The
+IPO and the Demand complete only when, in addition:
+
+- Procurement has explicitly closed purchasing, so any approved-but-
+  unpurchased quantity is deliberate, traceable carry-forward; and
+- every purchased quantity has been placed on a Delivery Challan; and
+- every Delivery Challan is COMPLETED or CANCELLED.
+
+Requested / Approved / Purchased / Delivered / Received / Outstanding /
+Discrepant all remain separately readable after closure.
+
+### Historical target text
+
+
 
 A Demand/IPO purchasing cycle closes only through explicit resolution
 conditions, never an arbitrary close button: received and
@@ -618,17 +974,30 @@ cutover — not by retrofitting a computed balance onto V1 receiving data.
   without copying price values or protected rejection reasons into the
   ordinary Demand payload.
 
+### Implemented (Checkpoints 6-8)
+
+- `document_number_settings` / `document_number_counters` — one configurable,
+  concurrency-safe numbering surface shared by IPO and Delivery Challan.
+- `ipos` / `ipo_lines` — the immutable approved purchasing document and its
+  snapshotted, purchase-tracking lines.
+- `material_demand_line_dispositions` — management's line-level
+  approve/exclude decision, frozen by the first final decision.
+- `delivery_challans` / `delivery_challan_lines` — operational delivery,
+  allocation-bounded against actual purchased quantity.
+- `material_receipts` / `material_receipt_lines` — physical receipt,
+  temporary Admin custody, handover, department confirmation, discrepancies.
+- `procurement_audit_log` — one append-only audit stream for the whole
+  IPO → DC → Receiving chain, keyed by `ipo_id`.
+- `procurement_documents` — the stored, historically stable rendering of an
+  issued IPO/DC, backing both download and WhatsApp delivery.
+- `departments.whatsapp_destination` — per-department delivery destination.
+
 ### Target for later checkpoints — not yet created
 
 - Demand Revision as its own structure (the `revision` column exists and
   is used — every approval records the revision it applied to (§9,
   §14) — but no reopen/new-revision workflow exists yet to ever advance
   it past `1`).
-- Procurement: official IPO, IPO Line, purchasing line/progress. Final
-  pricing approval and controlled pricing versions are implemented above.
-- Delivery: Delivery Challan, Delivery Challan Line.
-- Receiving: Material Receipt, Receipt Line, department confirmation,
-  temporary Admin custody/handover record.
 
 No speculative Inventory table (`stock_movements`, `stock_balances`,
 `inventory_batches`, material issue/usage/return) exists or is planned
@@ -747,19 +1116,50 @@ none merely from its role. CEO retains the documented scope and same-actor
 exception. Holding an action capability without price-view cannot inspect
 or decide confidential pricing.
 
-**Target for later checkpoints** (capability names indicative, not final
-— define precisely when each checkpoint is designed):
+**Implemented (Checkpoints 6-8):**
 
-- Procurement: record purchasing and view actual prices. Estimated pricing
-  and its separate read capability are implemented above.
-- IPO: view, cancel where authorized, configure numbering only through
-  protected governance authority.
-- DC: create/finalize/view.
-- Receiving: receive relevant department material, receive temporarily as
-  Admin, confirm handover, Team Lead/department completion, manage
-  discrepancy where separately authorized.
+| Capability | Grants | Default role grants |
+|---|---|---|
+| `ipo.view` | View IPO records operationally — carries NO price visibility | CEO, UPPER_MANAGEMENT, SITE_MANAGER, TEAM_LEAD, ADMIN |
+| `ipo.cancel` | Cancel an IPO, preserving its number and history | CEO only |
+| `procurement.purchase` | Record actual purchasing and view actual prices | CEO only (per-user GRANT for Procurement staff) |
+| `dc.view` | View Delivery Challans (no pricing exists on one) | CEO, UPPER_MANAGEMENT, SITE_MANAGER, ADMIN, TEAM_LEAD, EMPLOYEE |
+| `dc.manage` | Create / edit / finalize / cancel Delivery Challans | CEO only (per-user GRANT for Procurement staff) |
+| `receiving.view` | View deliveries and receipts in scope | CEO, ADMIN, SITE_MANAGER, UPPER_MANAGEMENT, TEAM_LEAD, EMPLOYEE |
+| `receiving.receive` | Record receipt of the actor's OWN department's material | CEO, TEAM_LEAD, EMPLOYEE |
+| `receiving.fallback_receive` | Take temporary Admin custody of another department's material at the actor's own site | CEO, ADMIN |
+| `receiving.confirm` | Confirm and close a department receiving cycle | CEO, TEAM_LEAD, SITE_MANAGER |
+| `procurement.export` | Export permitted Demand/IPO/DC/Receiving history to Excel | CEO, UPPER_MANAGEMENT, SITE_MANAGER, ADMIN, TEAM_LEAD |
+
+HR and GATE_GUARD receive none of these. Note the deliberate splits:
+
+- **`ipo.view` is not price authority.** A Team Lead can follow their own
+  department's IPO operationally and still never see an amount; the IPO PDF
+  additionally requires `procurement.view_prices` / `procurement.purchase` /
+  `procurement.pricing`, so the document cannot be used as a price-leak
+  bypass.
+- **ADMIN holds `receiving.fallback_receive` but NOT `receiving.receive`.**
+  Temporary custody is a distinct, explicitly granted authority; ordinary
+  department receiving never crosses a department boundary.
+- **EMPLOYEE holds `receiving.receive` but NOT `receiving.confirm`.** Any
+  appropriate department member may receive; only the Team Lead closes.
+- **`procurement.purchase` and `dc.manage` are CEO-only by default**, exactly
+  like `procurement.pricing` — no PROCUREMENT global role was invented.
+
+**Record scope** for the whole chain is resolved by one shared helper
+(`shared/authorization/supply-chain-scope.js`) using the same three tiers
+Material Demand established: ALL (CEO / `demand.all_departments`), SITE (a
+cross-department responsibility holder), OWN (an ordinary department actor).
+Action capability and record scope remain separate at every tier: holding
+`receiving.receive` says the actor may record a receipt, never whose
+material. An out-of-scope id is reported identically to a nonexistent one.
+
+**Target for later checkpoints:**
+
 - Cross-department/all-site visibility: always an explicit capability,
   never implied by role or by organizational Position.
+- IPO numbering configuration UI (the settings table exists and is
+  authoritative; there is no admin screen for it yet).
 
 A user's organizational Position alone grants zero application authority,
 at every checkpoint.
@@ -778,7 +1178,31 @@ explicit denial, not a silent override or a silent empty result. All-site/
 management authority must also be tested against the existing ESDMS
 authorization model.
 
-**Implemented:** `backend/test/material-catalog-department-scope.test.js`
+**Implemented (Checkpoints 6-8):** `backend/test/ipo-purchasing.test.js`
+(exactly-once generation, numbering concurrency, immutable snapshot,
+partial purchasing, over-purchase rejection, cancellation, previous-price
+lookup, carry-forward, capability/DENY and department/site isolation, PDF
+price gating); `backend/test/delivery-challan.test.js` (allocation bounds,
+no double allocation, concurrent creation, finalized immutability,
+capability/scope, commercial-free document, Gate Pass independence);
+`backend/test/receiving.test.js` (department direct receipt with no Admin
+involvement, cross-department and cross-site denial, Admin fallback custody
+and department-acknowledged handover, immutable original receiver, partial
+receipt, over-receipt denial, concurrent receivers, discrepancy routing,
+replay safety, closure rules, absence of any inventory table);
+`backend/test/demand-line-disposition.test.js` (exclusion without deletion,
+frozen-after-decision determinism, capability intersection, redaction,
+carry-forward); `backend/test/procurement-documents.test.js` (numbering
+format and filename safety, durable document job, disabled-WhatsApp
+non-blocking, caption confidentiality, cancelled-document voiding,
+end-to-end closure, deadlock-free concurrent closure);
+`backend/test/procurement-exports.test.js` (real .xlsx, price redaction,
+commercial-dataset refusal, scope/filters, formula injection, cell types,
+audit); `backend/test/procurement-security-sweep.test.js` (adversarial
+cross-surface leak sweep, forgery, append-only audit);
+`backend/test/price-comparison.test.js` (exact decimal arithmetic).
+
+**Implemented (Checkpoints 1-5):** `backend/test/material-catalog-department-scope.test.js`
 (Checkpoint 1); `backend/test/material-demand-department-scope.test.js`
 (Checkpoint 2 — department isolation, site isolation, capability/DENY-wins
 checks, and Draft-integrity checks together);
@@ -1009,7 +1433,21 @@ conflicts, and sync status before being introduced — see
 
 ---
 
-## 34. Reporting — V1
+## 34. Reporting and History — **Implemented (Checkpoint 8)**
+
+`GET /ipos/:id` returns the whole traceable chain in one call — the IPO, its
+lines with every distinct quantity, its Delivery Challans, every receipt
+(including temporary Admin custody, handover recipient and confirmation),
+and the ordered `procurement_audit_log` stream — so the history view never
+stitches four endpoints together. `GET /demands/:id` links to its IPO and
+returns line dispositions. The frontend Procurement History page filters by
+reference/status/date and links Demand → IPO → DC → Receipt.
+
+Financial values in all of the above remain permission-redacted.
+
+### Historical target text
+
+
 
 No full reporting engine is built in V1, but data is structured so future
 reports can answer: demands by department; demand status/history; approved
@@ -1020,7 +1458,55 @@ as current stock (§24).
 
 ---
 
-## 35. Formal PDF Documents — target design
+## 35. Formal PDF Documents — **Implemented (Checkpoint 8)**
+
+Three backend-generated PDFs exist: **Demand List** (`GET /demands/:id/pdf`),
+**IPO** (`GET /ipos/:id/pdf`) and **Delivery Challan**
+(`GET /delivery-challans/:id/pdf`). All are rendered server-side from
+authoritative persisted data; no client-supplied document content is ever
+trusted, and no document is served from a public or guessable path.
+
+Layout lives in replaceable templates over one shared primitive layer
+(`shared/documents/pdf-layout.js`): `ipo.pdf.js` follows the authentic E-Set
+Internal Purchase Order structure (FROM/TO, IPO # and date, Demand
+reference, budget, Sr#/Item/Qty/UOM/Unit Price/Total Price, grand total,
+management and Procurement signature blocks, company footer, system-
+generated note); `delivery-challan.pdf.js` follows the modern E-Set Delivery
+Challan (FROM/TO, date, IPO reference, subject, Sr#/Item/Quantity/UOM,
+delivery confirmation statement, two representative signatures). Fields the
+real samples show but ESDMS has no authoritative source for yet (Inquiry #,
+Ref. CPO #, Fulfil By, per-item Brand/Specs) are rendered from real data
+where it exists and left blank otherwise — never invented to fill a
+template. Replacing a template changes no schema, no workflow and no
+document identity. Gate Pass keeps its own bespoke QR layout untouched.
+
+**Historical stability (§37/§42).** A finalized IPO/DC has its rendered
+bytes stored in `procurement_documents` (append-only, one row per document).
+Downloads serve the stored copy, so a later template change or master-data
+rename cannot restate a document that was already issued and shared;
+on-demand rendering is only the fallback in the window before the generation
+job has run.
+
+**Authorization is re-checked on every single download**, never assumed from
+a URL:
+
+- Demand List PDF: `demand.view`/`review`/`approve` plus the same
+  `assertDemandViewable` scope rule the detail endpoint uses. It carries **no
+  pricing for any viewer at all**, including CEO — one unpriced
+  representation removes the possibility of this endpoint becoming a
+  financial-authorization bypass, and the priced document already exists as
+  the IPO PDF.
+- IPO PDF: `ipo.view` plus commercial authority. A Team Lead or ADMIN with
+  operational IPO visibility is refused (403).
+- Delivery Challan PDF: `dc.view` — it contains no commercial data by
+  schema, so a department receiver can obtain it with no price capability.
+- Gate Guard is refused all three.
+- Cross-department and cross-site ids are refused identically to
+  nonexistent ones.
+
+### Historical target text
+
+
 
 At minimum, three later-checkpoint document types are generated as formal,
 downloadable PDFs, mirroring the existing Gate Pass PDF/QR pattern
@@ -1046,7 +1532,40 @@ the ordinary API.
 
 ---
 
-## 36. Excel / Historical Data Export — target design
+## 36. Excel / Historical Data Export — **Implemented (Checkpoint 8)**
+
+Real `.xlsx` workbooks via ExcelJS (never a renamed CSV — asserted by
+loading the result with a real spreadsheet reader in test). Six datasets at
+`GET /api/v1/reports/procurement/:datasetKey.xlsx`, plus a `/catalog`
+endpoint so the UI only ever offers what the backend would actually serve:
+`demand-history`, `ipo-history`, `procurement-history`,
+`delivery-challan-history`, `receiving-history`, `traceability`.
+
+Filters (`from`, `to`, `siteId`, `departmentId`, `status`, `reference`) are
+applied server-side in SQL over a scoped query — the browser never receives
+an unfiltered dataset to narrow itself.
+
+**Export authority never widens data authority.** `procurement.export` only
+means "may take out what you can already see". Every commercial column is
+gated again on `procurement.view_prices` / `procurement.purchase` /
+`procurement.pricing`, and — critically — redaction is a QUERY-PROJECTION
+decision: an unauthorized export never SELECTs a price column at all, so
+there is no window in which price data exists in the process and is merely
+hidden. `procurement-history` is inherently commercial and is refused
+outright (403) without price authority rather than served as an empty shell.
+Gate Guard and EMPLOYEE hold no export capability; an individual DENY wins.
+
+Formula injection is neutralized through the existing
+`shared/reports/excel-safety.js#sanitizeCell` for every user-controllable
+string, while numeric and date cells keep their real types (with explicit
+number formats) rather than becoming text. Filenames come from
+`safeExportFilename`. Every export writes a `PROCUREMENT_EXPORT_GENERATED`
+row to the append-only governance audit log recording the dataset, row
+count, whether pricing was included, and the exact filters applied.
+
+### Historical target text
+
+
 
 All relevant structured workflow/history data is ultimately exportable to
 Excel, subject to the same authorization the application enforces
@@ -1114,8 +1633,15 @@ to audit.
   master data, and multi-tier approval thresholds beyond the single
   UM/CFO gate described above — revisit only if operational feedback or
   an explicit owner decision requires them.
-- Final PDF layouts (§35) and Excel export implementation (§36) — both are
-  target designs for later checkpoints, not Checkpoint 1 deliverables.
 - A dedicated log-management UI (§37) — the platform invariant is
   documented now; UI/endpoints are introduced only when a checkpoint
-  actually needs them.
+  actually needs them. No Procurement/Receiving endpoint can modify or
+  delete history: `procurement_audit_log` and `material_receipt_lines` are
+  append-only at the database level, and issued IPO/DC/document rows cannot
+  be deleted at all — for every role, Upper Management included.
+- An admin UI for IPO/DC numbering configuration (§15) — the settings table
+  is authoritative and changing it cannot restate an already-issued number,
+  but there is no screen for it yet.
+- Structured supplier/vendor master data, RFQ/quotation comparison, and
+  per-item Brand/Specs on printed documents — no authoritative source exists
+  in ESDMS yet, so those fields are left blank rather than invented (§35).

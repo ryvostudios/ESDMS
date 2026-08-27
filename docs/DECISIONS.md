@@ -2536,3 +2536,302 @@ examples.
   RLS-enabled tables only, creates no application table/function, and leaves
   the 46-table runtime allowlist unchanged. Its down migration explicitly
   refuses to destroy FINAL decisions or Version 2+ pricing history.
+
+---
+
+## Procurement & Material Receiving V1 — Checkpoints 6-8 (IPO, Purchasing, Delivery Challan, Receiving, Documents, Exports)
+
+### IPO generation is automatic and exactly-once by database constraint
+
+The owner ruled out a manual "Generate IPO" step. The IPO is therefore
+created inside the very transaction that completes final approval, under the
+Demand row lock that transaction already holds.
+
+Correctness does not rest on that lock alone: `unique (demand_id,
+demand_revision)` on `ipos` means a replayed request, a double-click or two
+approvers completing the gate concurrently can only ever conflict, never
+produce a second IPO. `generateIpoForApprovedDemand` pre-checks the same
+condition so a replay is a silent no-op rather than a constraint violation
+the caller must interpret.
+
+`READY_FOR_IPO` was kept as a real, audited boundary in the history rather
+than deleted — but it is no longer a resting state, so the Demand's visible
+status moves straight to `IPO_GENERATED`. Checkpoint 5's existing tests were
+updated to assert the new status **and** the existence of exactly one
+correctly-bound IPO; that is a strengthening, not a weakening.
+
+### Document numbering is configuration, not a numbering engine
+
+Issuance reuses the existing atomic year-keyed counter pattern from Gate
+Pass and Material Demand verbatim (`INSERT .. ON CONFLICT DO UPDATE ..
+RETURNING`, which row-locks the counter). The only thing added is that the
+FORMAT is data: `document_number_settings` holds prefix, separator, suffix,
+pad width and start value per document type, so the authentic E-Set
+`ESET/2026/32` format is a seeded row rather than a string literal, and
+changing it later cannot restate an already-issued number (the formatted
+string is persisted on the document itself). Cancelled numbers stay
+consumed; counters never roll back.
+
+A consequence worth recording: a real reference contains `/`. Every download
+filename is therefore derived through `documentFilename()`, which allowlists
+`[A-Za-z0-9_-]` and excludes `.` from the base name, so no reference can
+reach a filesystem path or a `Content-Disposition` header unescaped.
+
+### A line-level exclusion is a decision, not a deletion
+
+Management routinely funds most of a Demand and marks one line "out of
+budget". That is stored in its own table (`material_demand_line_dispositions`)
+rather than as a column on `material_demand_pricing_lines`, because a pricing
+line is Procurement's immutable submitted estimate while a disposition is a
+management decision taken against that exact version. Keeping them apart
+means recording "excluded" never mutates — and can never appear to have
+altered — the submitted commercial estimate.
+
+The excluded line, its quantity, its pricing version and its estimate all
+survive intact, and the decision snapshots quantity and estimate itself. A
+line with no row is implicitly `APPROVED_FOR_PURCHASE`, so no historical row
+needed backfilling. Excluding every line is refused: that is a rejection,
+which already has its own audited path.
+
+**Determinism of the approved set** (the requirement that a prior Formal
+Approval must not silently remain authoritative over a changed set) is
+enforced by a trigger that freezes every disposition for a Pricing version
+the moment its FIRST final decision is recorded. Changing the set afterwards
+requires rejection and a new immutable Pricing version — reusing Checkpoint
+5's philosophy rather than inventing a second one.
+
+### Previous Purchase Price matches on item identity, never on description
+
+The lookup is keyed on `company_item_id`, snapshotted onto `ipo_lines` at
+generation time, and reads only ACTUAL finalized purchase prices — never an
+old estimate. "Screw 1/2 inch" and "Screw 2 inch" are different Company
+Items and can never share price history; fuzzy search assists catalogue
+discovery only and never determines financial identity.
+
+Arithmetic is exact: both prices convert to integer minor units as BigInt,
+so no float ever touches money. Only the percentage is a genuine ratio,
+computed at two decimals with explicit half-away-from-zero rounding. With no
+prior purchase the API returns `null` and the UI states "No previous
+purchase history" — deliberately not `Rs 0` or `0%`, which would falsely
+assert that the price had not moved.
+
+### Conservative IPO cancellation policy while the business rule is open
+
+The owner's rule for "cancel after purchasing has started" is unresolved. V1
+therefore refuses cancellation outright once any purchase is recorded or a
+live Delivery Challan exists, rather than guessing at a compensating action.
+Real recorded purchases are never silently voided; outstanding quantity is
+resolved through explicit purchasing closure instead. This is a documented
+conservative choice, revisitable when the owner settles the policy.
+
+### Closure is evaluated, never asserted
+
+A Demand/IPO/DC chain closes only when every quantity is resolved:
+Procurement has explicitly closed purchasing (making any unpurchased
+approved quantity deliberate, traceable carry-forward), every purchased
+quantity is on a Delivery Challan, and every challan is COMPLETED (fully
+received AND department-confirmed) or CANCELLED. `COMPLETED` means the
+digital workflow is finished — never that material was consumed, and never
+that any stock level is known.
+
+### One lock order for the whole chain
+
+**Demand → Pricing → IPO → Delivery Challan → Material Receipt.** Every
+writer takes the subset it needs in that order and re-validates state only
+after acquiring the locks; unlocked reads exist solely to discover which
+parent rows to lock.
+
+This was not free: the system-wide concurrency review found that
+`closePurchasing` originally locked the IPO before the Demand, inverting the
+order used by receipt confirmation and opening a deadlock window between
+Procurement closing purchasing and a Team Lead confirming the last receipt.
+It was corrected to lock the Demand first, and a concurrency regression test
+now exercises both paths simultaneously.
+
+### Existing infrastructure reused rather than duplicated
+
+- WhatsApp document delivery reuses the Gate Pass SYSTEM-job → WHATSAPP-job
+  outbox chain, and `notification_outbox` IS the delivery record (channel,
+  destination, status, attempts, last error, provider message id,
+  idempotency key, timestamps). No parallel delivery-history table was
+  created. `DISABLED` was added as a status so a deliberately unattempted
+  delivery is neither stuck pending nor misreported as failed.
+- Only the official WhatsApp Business Platform is supported. Unofficial
+  automation (Web scraping, headless browsers, reverse-engineered session
+  libraries, personal-account sessions) is permanently out of scope.
+- One append-only `procurement_audit_log` covers IPO, Delivery Challan and
+  Receiving, keyed by `ipo_id`. Those are three bounded modules but one
+  physical purchasing chain, and a single entity-tagged stream is exactly
+  what the traceability view reads — the same shape `governance_audit_log`
+  already uses across Workforce modules.
+- Record scope for all three chain modules is one shared resolver
+  (`supply-chain-scope.js`) reusing Material Demand's three-tier shape, not
+  three near-identical implementations.
+- Excel export reuses the existing `excel-safety.js` primitives and the
+  `WORKFORCE_EXPORT_GENERATED` audit precedent.
+
+### Delivery Challan stays separate from Gate Pass
+
+Reaffirmed and now enforced: the two share no foreign key in either
+direction, and a Delivery Challan id is not addressable through the Gate
+Pass API. Both properties are asserted by test.
+
+### New database trust surface
+
+Six migrations (`1787417000000`-`1787422000000`) add eleven application
+tables. All have RLS enabled, explicit runtime grants and a single runtime
+policy; the provisioning script's allowlist and its 57-table/58-RLS counts,
+and `test/db-privilege-boundary.test.js`, were updated together. Every
+foreign key has an indexed leading column, no money or quantity column uses
+a floating-point type, and every nullable column is a genuinely optional
+lifecycle field bound by a CHECK constraint. Each down migration refuses to
+destroy issued numbers, purchasing history, receiving history or management
+decisions.
+
+---
+
+## Procurement & Material Receiving V1 — Corrective Pass After Independent Review
+
+An independent adversarial review of the completed V1 found a set of real
+defects. Each was fixed at its root with the smallest safe change; no module
+was rewritten and no working architecture was replaced.
+
+### Admin fallback authority is contextual, not a scope tier
+
+The generic supply-chain scope resolver treated `receiving.fallback_receive`
+as a site-wide capability, which silently gave ADMIN cross-department read
+access to every IPO, Delivery Challan, receiving record, carry-forward source
+and Procurement export at their site. That is far more than the business rule
+grants.
+
+The capability was removed from `SITE_WIDE_PERMISSIONS` entirely. Fallback
+authority now reaches exactly three things, in the receiving module only: the
+queue of deliveries at the actor's own site that are still open for receiving,
+the detail of such a delivery, and recording a fallback receipt against one.
+It expires the moment the delivery closes. Receiving history is not widened at
+all — a fallback custodian sees only receipts they personally recorded or took
+handover of. IPO, purchasing, exports and all commercial surfaces are
+unaffected by holding it.
+
+### Carry-forward is an authoritative claim, not a suggestion
+
+Carrying an unresolved quantity into a later Demand left no claim against its
+source, so the same outstanding 40 could be carried into Demand A, B and C and
+each would look legitimate. `carry_forward_allocations` now records the claim
+with a real foreign key to its source, and availability is always
+`source_quantity` minus every ACTIVE claim.
+
+Three sources, chosen because they cannot overlap: `UNPURCHASED_IPO_QUANTITY`
+(approved, ordered, but purchasing closed short), `OUT_OF_BUDGET` (excluded
+from the set that became purchasing authority, so never ordered) and
+`RECEIVING_SHORTAGE` (purchased and delivered, but confirmed short). The first
+two are quantities never bought; the third was bought. The same unit can
+therefore never be counted twice.
+
+**The claim becomes authoritative at SUBMIT, not while drafting.** A
+reservation taken because someone opened a form would either leak — abandoned
+drafts holding quantity indefinitely — or need an expiry mechanism this scale
+does not justify. Submitting is when the department commits to the request, so
+that is when the quantity is committed. A Demand that dies (rejected, or whose
+IPO is cancelled) releases its claim; the row is marked RELEASED, never
+deleted.
+
+### Request idempotency, because the network is not reliable
+
+Quantity constraints could not distinguish a genuine second partial receipt
+from a retry of the same one, so a lost HTTP response meant 20 units received
+became 40 recorded. Receiving, Delivery Challan creation and purchasing now
+each take a client-generated `operation_id`, unique at the database level. A
+replay returns the record that already exists — no second receipt, no second
+challan, no second DC number, no second purchase, and no second audit event,
+because nothing actually happened.
+
+### Purchasing is an event log, not a cumulative field
+
+One IPO line is realistically bought more than once at different prices (60 @
+100, then 20 @ 110). A single `purchased_quantity` plus one `actual_unit_price`
+could not represent that without silently destroying the first transaction and
+restating it as 80 @ 110.
+
+`ipo_purchase_events` now records each purchase as its own append-only event.
+The line-level total is derived from them, and a deferred constraint trigger
+proves the stored aggregate always equals the sum of the events — a total
+cannot be fabricated without the events behind it. A mistake before closing is
+corrected with an explicit negative-quantity reversal event, so the original
+entry stays readable rather than being edited away. Once purchasing is closed,
+a trigger freezes the purchasing facts for every writer.
+
+### Previous Actual Price requires finalized purchasing
+
+It previously accepted any non-cancelled IPO with a price recorded, including
+purchases still in progress that could still move. It now requires
+`purchasing_closed_at IS NOT NULL` on a non-cancelled IPO, and reads the most
+recent positive purchase EVENT, matched on `company_item_id`.
+
+### Line dispositions bind to approvals by fingerprint
+
+Freezing dispositions at the first final decision blocked the owner's real
+workflow: a Site Manager records the final review, and only then does the CEO
+rule a line out of budget.
+
+Each FINAL approval now records a `disposition_fingerprint` — a hash of the
+exact purchasing set it decided on — and the gate completes only when both
+responsibilities have approved the SAME, still-current set. A later exclusion
+neither rewrites nor deletes the earlier approval; it simply means that
+approval no longer satisfies the gate, and its author decides again on the new
+set as a new immutable row (the FINAL slot uniqueness is widened by the
+fingerprint). The generated IPO therefore always contains exactly the set the
+formal authority actually approved. Dispositions freeze for real once the IPO
+exists.
+
+The backfill for this column has to lift `material_demand_approvals`'
+append-only trigger for one statement. That is legitimate precisely because it
+is the migration owner doing a one-time structural fill of a newly added
+column — no decision content changes, and the guard is restored in the same
+transaction.
+
+A related subtlety worth recording: the first version of the fingerprint CHECK
+was `disposition_fingerprint ~ '...'`, which evaluates to NULL for a NULL
+value — and a CHECK constraint ACCEPTS NULL. The `IS NOT NULL` test in the
+final constraint is load-bearing, not redundant.
+
+### Reports bind to the exact authoritative Pricing version
+
+Joining every SUBMITTED version duplicated a repriced Demand and presented a
+rejected v1 alongside the approved v2 as though both were authoritative. The
+Demand-history and traceability datasets now join the one version the IPO was
+generated from, falling back to the latest submitted version only where no IPO
+exists yet.
+
+### Documents state only what is true
+
+The IPO PDF no longer carries purchased quantity or current workflow status: a
+document whose meaning drifts after issuance is not an authority. The Delivery
+Challan PDF no longer asserts "received the above material in good order"
+before any receipt has happened — it now carries the blank confirmation area
+the authentic E-Set sample uses, and omits mutable workflow status.
+
+### Other corrections
+
+- Site coherence is enforced relationally: an IPO cannot claim a site other
+  than its Demand's, a challan other than its IPO's, or a receipt other than
+  its challan's.
+- Completed handover and confirmation tuples freeze at the database level, as
+  the original receiver already did.
+- A cancellation reason routinely carries commercial context, so it is
+  withheld from operational viewers and kept out of audit metadata and
+  notification payloads; the category stays visible.
+- Excel exports are bounded at 50,000 rows and refuse an oversized request with
+  a message asking for narrower filters, rather than assembling an unbounded
+  workbook in memory.
+
+### WhatsApp — unchanged, and honestly described
+
+The official WhatsApp Business Platform provider is unchanged and remains the
+only kind that will ever ship. Its send uses `recipient_type: individual`,
+which is what the Cloud API supports; the configuration and UI therefore say
+"destination", never "group". Automatic delivery to a department WhatsApp
+GROUP remains an external production-validation item: the architecture is in
+place and the destination is configurable per department, but group delivery
+depends on the provider and business account actually supporting that
+destination, which cannot be verified from this codebase.

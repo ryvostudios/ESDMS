@@ -53,7 +53,18 @@ Full Inventory development (stock ledger/balances) must not begin until
 the Gate Pass MVP has reached a stable, reviewed checkpoint and
 Procurement & Material Receiving V1 has been adopted — see
 `docs/PROCUREMENT_RECEIVING_SPEC.md` and `docs/DECISIONS.md` for the V1
-scope currently in progress (Checkpoint 1: Material Catalog Foundation).
+scope. Checkpoints 1-8 are implemented: Department Material Catalog →
+Demand → Initial Approval → Procurement Pricing (with previous actual-price
+comparison) → Final Approval with line-level budget disposition →
+automatically generated IPO → purchasing → Delivery Challan → Receiving
+(including Admin fallback custody and department confirmation) → Completed
+history, plus Demand/IPO/Delivery Challan PDFs, permission-aware Excel
+exports and official WhatsApp document delivery.
+
+Full Inventory is deliberately NOT implemented: there is no stock balance,
+stock ledger, FIFO/batch consumption, Material Issue, usage, return, stock
+adjustment or transfer. Receiving records what physically arrived; the
+system does not state what is in stock today.
 
 ## Technology
 

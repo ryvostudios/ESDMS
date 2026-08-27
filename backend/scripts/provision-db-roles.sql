@@ -99,12 +99,17 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 
 -- The current schema uses UUIDs and an ordinary counter table, so the API
--- needs no sequence privileges. Exactly these 46 application tables receive
+-- needs no sequence privileges. Exactly these 59 application tables receive
 -- DML access; public.pgmigrations is deliberately excluded.
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.company_items,
   public.department_material_catalog,
+  public.carry_forward_allocations,
+  public.delivery_challan_lines,
+  public.delivery_challans,
   public.departments,
+  public.document_number_counters,
+  public.document_number_settings,
   public.employee_business_history,
   public.employee_compensation_records,
   public.employee_contract_number_counters,
@@ -128,6 +133,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.gate_pass_number_counters,
   public.gate_passes,
   public.governance_audit_log,
+  public.ipo_lines,
+  public.ipo_purchase_events,
+  public.ipos,
   public.leave_requests,
   public.leave_types,
   public.material_demand_approvals,
@@ -136,8 +144,13 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.material_demand_pricing,
   public.material_demand_pricing_lines,
   public.material_demand_number_counters,
+  public.material_demand_line_dispositions,
   public.material_demands,
+  public.material_receipt_lines,
+  public.material_receipts,
   public.notification_outbox,
+  public.procurement_audit_log,
+  public.procurement_documents,
   public.permissions,
   public.positions,
   public.role_permissions,
@@ -207,7 +220,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- non-owner runtime login remains subject to policy enforcement.
 ALTER TABLE public.company_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.department_material_catalog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.carry_forward_allocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.delivery_challan_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.delivery_challans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.document_number_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.document_number_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.employee_business_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.employee_compensation_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.employee_contract_number_counters ENABLE ROW LEVEL SECURITY;
@@ -231,6 +249,9 @@ ALTER TABLE public.gate_pass_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_number_counters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_passes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.governance_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ipo_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ipo_purchase_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ipos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.leave_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.leave_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_approvals ENABLE ROW LEVEL SECURITY;
@@ -239,7 +260,12 @@ ALTER TABLE public.material_demand_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_pricing ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_pricing_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demand_number_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.material_demand_line_dispositions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.material_demands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.material_receipt_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.material_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.procurement_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.procurement_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notification_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pgmigrations ENABLE ROW LEVEL SECURITY;
@@ -263,7 +289,12 @@ BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'company_items',
     'department_material_catalog',
+    'carry_forward_allocations',
+    'delivery_challan_lines',
+    'delivery_challans',
     'departments',
+    'document_number_counters',
+    'document_number_settings',
     'employee_business_history',
     'employee_compensation_records',
     'employee_contract_number_counters',
@@ -287,6 +318,9 @@ BEGIN
     'gate_pass_number_counters',
     'gate_passes',
     'governance_audit_log',
+    'ipo_lines',
+    'ipo_purchase_events',
+    'ipos',
     'leave_requests',
     'leave_types',
     'material_demand_approvals',
@@ -295,8 +329,13 @@ BEGIN
     'material_demand_pricing',
     'material_demand_pricing_lines',
     'material_demand_number_counters',
+    'material_demand_line_dispositions',
     'material_demands',
+    'material_receipt_lines',
+    'material_receipts',
     'notification_outbox',
+    'procurement_audit_log',
+    'procurement_documents',
     'permissions',
     'positions',
     'role_permissions',
@@ -366,7 +405,12 @@ expected_tables(table_name) AS (
   VALUES
     ('company_items'),
     ('department_material_catalog'),
+    ('carry_forward_allocations'),
+    ('delivery_challan_lines'),
+    ('delivery_challans'),
     ('departments'),
+    ('document_number_counters'),
+    ('document_number_settings'),
     ('employee_business_history'),
     ('employee_compensation_records'),
     ('employee_contract_number_counters'),
@@ -390,6 +434,9 @@ expected_tables(table_name) AS (
     ('gate_pass_number_counters'),
     ('gate_passes'),
     ('governance_audit_log'),
+    ('ipo_lines'),
+    ('ipo_purchase_events'),
+    ('ipos'),
     ('leave_requests'),
     ('leave_types'),
     ('material_demand_approvals'),
@@ -398,8 +445,13 @@ expected_tables(table_name) AS (
     ('material_demand_pricing'),
     ('material_demand_pricing_lines'),
     ('material_demand_number_counters'),
+    ('material_demand_line_dispositions'),
     ('material_demands'),
+    ('material_receipt_lines'),
+    ('material_receipts'),
     ('notification_outbox'),
+    ('procurement_audit_log'),
+    ('procurement_documents'),
     ('permissions'),
     ('positions'),
     ('role_permissions'),
@@ -456,47 +508,61 @@ FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REF
   AS privileges(privilege_type)
 ORDER BY privilege_type;
 
--- 5. RLS enabled on all 47 expected tables.
+-- 5. RLS enabled on all 60 expected tables.
 SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relname IN (
-        'company_items', 'department_material_catalog', 'departments', 'employee_business_history',
+        'carry_forward_allocations', 'company_items', 'delivery_challan_lines', 'delivery_challans',
+    'department_material_catalog',
+    'departments', 'document_number_counters', 'document_number_settings', 'employee_business_history',
     'employee_compensation_records', 'employee_contract_number_counters', 'employee_contracts', 'employee_custom_field_values',
     'employee_custom_fields', 'employee_document_requests', 'employee_document_types', 'employee_documents',
     'employee_emergency_contacts', 'employee_personal_details', 'employee_profile_photos', 'employee_profile_sections',
     'employee_rotation_ledger', 'employees', 'employment_assignments', 'employment_types',
     'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items', 'gate_pass_number_counters',
-    'gate_passes', 'governance_audit_log', 'leave_requests', 'leave_types',
-    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines', 'material_demand_number_counters', 'material_demands',
-    'notification_outbox', 'permissions', 'pgmigrations', 'positions',
+    'gate_passes', 'governance_audit_log', 'ipo_lines', 'ipo_purchase_events', 'ipos',
+    'leave_requests', 'leave_types',
+    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_line_dispositions',
+    'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines',
+    'material_demand_number_counters', 'material_demands',
+    'material_receipt_lines', 'material_receipts',
+    'notification_outbox', 'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
+    'procurement_documents',
     'role_permissions', 'roles', 'rotation_policies', 'sites',
     'temporary_assignments', 'units_of_measure', 'user_permission_overrides', 'users'
   )
 ORDER BY c.relname;
 
-SELECT count(*) = 47 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
+SELECT count(*) = 60 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relname IN (
-        'company_items', 'department_material_catalog', 'departments', 'employee_business_history',
+        'carry_forward_allocations', 'company_items', 'delivery_challan_lines', 'delivery_challans',
+    'department_material_catalog',
+    'departments', 'document_number_counters', 'document_number_settings', 'employee_business_history',
     'employee_compensation_records', 'employee_contract_number_counters', 'employee_contracts', 'employee_custom_field_values',
     'employee_custom_fields', 'employee_document_requests', 'employee_document_types', 'employee_documents',
     'employee_emergency_contacts', 'employee_personal_details', 'employee_profile_photos', 'employee_profile_sections',
     'employee_rotation_ledger', 'employees', 'employment_assignments', 'employment_types',
     'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items', 'gate_pass_number_counters',
-    'gate_passes', 'governance_audit_log', 'leave_requests', 'leave_types',
-    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines', 'material_demand_number_counters', 'material_demands',
-    'notification_outbox', 'permissions', 'pgmigrations', 'positions',
+    'gate_passes', 'governance_audit_log', 'ipo_lines', 'ipo_purchase_events', 'ipos',
+    'leave_requests', 'leave_types',
+    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_line_dispositions',
+    'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines',
+    'material_demand_number_counters', 'material_demands',
+    'material_receipt_lines', 'material_receipts',
+    'notification_outbox', 'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
+    'procurement_documents',
     'role_permissions', 'roles', 'rotation_policies', 'sites',
     'temporary_assignments', 'units_of_measure', 'user_permission_overrides', 'users'
   )
 \gset
 \if :all_expected_rls_enabled
 \else
-  \warn 'ERROR: RLS is not enabled on all 47 expected public tables.'
+  \warn 'ERROR: RLS is not enabled on all 60 expected public tables.'
   DO $abort$ BEGIN RAISE EXCEPTION 'RLS verification failed'; END $abort$;
 \endif
 
@@ -511,7 +577,12 @@ WITH expected_tables(table_name) AS (
   VALUES
     ('company_items'),
     ('department_material_catalog'),
+    ('carry_forward_allocations'),
+    ('delivery_challan_lines'),
+    ('delivery_challans'),
     ('departments'),
+    ('document_number_counters'),
+    ('document_number_settings'),
     ('employee_business_history'),
     ('employee_compensation_records'),
     ('employee_contract_number_counters'),
@@ -535,6 +606,9 @@ WITH expected_tables(table_name) AS (
     ('gate_pass_number_counters'),
     ('gate_passes'),
     ('governance_audit_log'),
+    ('ipo_lines'),
+    ('ipo_purchase_events'),
+    ('ipos'),
     ('leave_requests'),
     ('leave_types'),
     ('material_demand_approvals'),
@@ -543,8 +617,13 @@ WITH expected_tables(table_name) AS (
     ('material_demand_pricing'),
     ('material_demand_pricing_lines'),
     ('material_demand_number_counters'),
+    ('material_demand_line_dispositions'),
     ('material_demands'),
+    ('material_receipt_lines'),
+    ('material_receipts'),
     ('notification_outbox'),
+    ('procurement_audit_log'),
+    ('procurement_documents'),
     ('permissions'),
     ('positions'),
     ('role_permissions'),
@@ -558,7 +637,7 @@ WITH expected_tables(table_name) AS (
 )
 SELECT
   (SELECT count(*) FROM pg_policies
-   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 46
+   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 59
   AND NOT EXISTS (
     SELECT 1
     FROM expected_tables e

@@ -30,7 +30,14 @@ export async function enqueue(client, notifications) {
         // recipient the moment it is written, so it is SENT immediately.
         // WHATSAPP and SYSTEM jobs require a background step, so they start
         // PENDING for a worker to claim.
-        notification.channel === "IN_APP" ? "SENT" : "PENDING",
+        //
+        // An explicit `status` overrides that default for the one case where
+        // the row is a DELIVERY RECORD rather than a delivery request: a
+        // document whose WhatsApp delivery was deliberately not attempted
+        // because the official provider is disabled or unconfigured is
+        // written terminally as DISABLED, so it is never claimed, never
+        // retried, and still shows up in delivery history for what it is.
+        notification.status || (notification.channel === "IN_APP" ? "SENT" : "PENDING"),
         notification.channel === "IN_APP" ? new Date() : null,
         notification.idempotencyKey || null,
       ],
