@@ -81,6 +81,12 @@ export function MaterialCatalogPage() {
 
   const hasActiveFilter = Boolean(search || departmentId);
   const targetDepartmentId = departmentId || user.departmentId;
+  // "All departments" is the default filter for a company-wide actor, and they
+  // have no department of their own — so requiring a resolved department here
+  // left the button permanently greyed out for them. They can pick the
+  // department inside the dialog instead; only an actor with neither a
+  // department nor anything to choose from is genuinely unable to add.
+  const canAddMaterial = Boolean(targetDepartmentId) || (canSeeAllDepartments && departments.length > 0);
 
   return (
     <div>
@@ -89,7 +95,11 @@ export function MaterialCatalogPage() {
         description="Your department's reusable material list, used to build Demand Lists quickly."
         actions={
           canManage && (
-            <Button onClick={() => setAddDialogOpen(true)} disabled={!targetDepartmentId}>
+            <Button
+              onClick={() => setAddDialogOpen(true)}
+              disabled={!canAddMaterial}
+              title={canAddMaterial ? undefined : "You are not assigned to a department."}
+            >
               Add Material
             </Button>
           )
@@ -207,7 +217,8 @@ export function MaterialCatalogPage() {
           open={addDialogOpen}
           onClose={() => setAddDialogOpen(false)}
           onAdded={load}
-          departmentId={departmentId || user.departmentId}
+          departmentId={targetDepartmentId || ""}
+          departments={departments}
           unitsOfMeasure={unitsOfMeasure}
         />
       )}

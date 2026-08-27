@@ -14,8 +14,9 @@ vi.mock("../api.js", () => ({
   updateCatalogEntry: vi.fn(),
 }));
 
+let mockDepartments = [];
 vi.mock("../../workforce/api.js", () => ({
-  listDepartmentsManage: () => Promise.resolve({ data: [] }),
+  listDepartmentsManage: () => Promise.resolve({ data: mockDepartments }),
 }));
 
 let mockPermissions = new Set();
@@ -37,6 +38,7 @@ afterEach(() => {
   mockListUnitsOfMeasure.mockReset();
   mockPermissions = new Set();
   mockUser = { departmentId: "dept-civil" };
+  mockDepartments = [];
 });
 
 async function renderPage() {
@@ -99,5 +101,60 @@ describe("MaterialCatalogPage", () => {
     await renderPage();
 
     expect(await screen.findByText("Network error")).toBeTruthy();
+  });
+});
+
+describe("Add Material availability", () => {
+  const addButton = () => screen.queryByRole("button", { name: "Add Material" });
+
+  test("a Team Lead with material_catalog.manage can add in their own department", async () => {
+    mockPermissions = new Set(["material_catalog.view", "material_catalog.manage"]);
+    mockUser = { departmentId: "dept-civil" };
+    mockListCatalog.mockResolvedValue({ data: [], meta: { total: 0 } });
+    await renderPage();
+
+    expect(addButton()).toBeTruthy();
+    expect(addButton().disabled).toBe(false);
+  });
+
+  test("a company-wide actor with no department of their own is still able to add", async () => {
+    // CEO: departmentId is null and the filter defaults to "All departments",
+    // which used to leave this button permanently greyed out.
+    mockPermissions = new Set([
+      "material_catalog.view",
+      "material_catalog.manage",
+      "material_catalog.all_departments",
+    ]);
+    mockUser = { departmentId: null };
+    mockDepartments = [{ id: "dept-civil", name: "Civil" }];
+    mockListCatalog.mockResolvedValue({ data: [], meta: { total: 0 } });
+    await renderPage();
+
+    expect(addButton()).toBeTruthy();
+    expect(addButton().disabled).toBe(false);
+  });
+
+  test("a company-wide actor with nothing to choose from is told why", async () => {
+    mockPermissions = new Set([
+      "material_catalog.view",
+      "material_catalog.manage",
+      "material_catalog.all_departments",
+    ]);
+    mockUser = { departmentId: null };
+    mockDepartments = [];
+    mockListCatalog.mockResolvedValue({ data: [], meta: { total: 0 } });
+    await renderPage();
+
+    expect(addButton().disabled).toBe(true);
+    expect(addButton().getAttribute("title")).toMatch(/not assigned to a department/i);
+  });
+
+  test("a view-only actor is never offered the action at all", async () => {
+    mockPermissions = new Set(["material_catalog.view"]);
+    mockUser = { departmentId: "dept-civil" };
+    mockListCatalog.mockResolvedValue({ data: [], meta: { total: 0 } });
+    await renderPage();
+
+    expect(addButton()).toBeNull();
   });
 });

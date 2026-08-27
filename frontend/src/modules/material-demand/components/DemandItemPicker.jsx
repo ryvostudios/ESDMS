@@ -122,7 +122,13 @@ export function DemandItemPicker({ departmentId, selections, onChange, disabled 
       )}
 
       {!disabled && (
-        <Button type="button" variant="secondary" onClick={() => setAddDialogOpen(true)} disabled={!departmentId}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => setAddDialogOpen(true)}
+          disabled={!departmentId}
+          title={departmentId ? undefined : "Choose a department first."}
+        >
           + Add Material
         </Button>
       )}

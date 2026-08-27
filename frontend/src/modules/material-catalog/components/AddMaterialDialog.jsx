@@ -13,14 +13,27 @@ const SEARCH_DEBOUNCE_MS = 300;
 // department's default unit and confirm. Keeps "add a commonly required
 // material" a single, fast flow instead of a separate administration page
 // (see docs/PROCUREMENT_RECEIVING_SPEC.md §4).
-export function AddMaterialDialog({ open, onClose, onAdded, departmentId, unitsOfMeasure }) {
+// `departments` is only consulted when the actor has no department of their
+// own (a company-wide actor such as CEO). A catalog entry links ONE
+// department to a global Company Item, so the department is part of the
+// request — the server cannot infer it for someone who belongs to none, and
+// answers such a create with "A departmentId is required."
+export function AddMaterialDialog({ open, onClose, onAdded, departmentId, departments = [], unitsOfMeasure }) {
   const [query, setQuery] = useState("");
+  const [chosenDepartmentId, setChosenDepartmentId] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [candidate, setCandidate] = useState(null); // { type: "existing", id, name } | { type: "new", name }
   const [defaultUomId, setDefaultUomId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  // The actor's own department always wins; a chooser is only offered when
+  // they have none, so this can never be used to target a foreign department
+  // — the server re-checks that anyway.
+  const effectiveDepartmentId = departmentId || chosenDepartmentId;
+  const needsDepartmentChoice = !departmentId;
+
 
   useEffect(() => {
     if (!open) {
@@ -29,6 +42,7 @@ export function AddMaterialDialog({ open, onClose, onAdded, departmentId, unitsO
       setResults([]);
       setCandidate(null);
       setDefaultUomId("");
+      setChosenDepartmentId("");
       setError(null);
     }
   }, [open]);
@@ -43,24 +57,27 @@ export function AddMaterialDialog({ open, onClose, onAdded, departmentId, unitsO
     setSearching(true);
     const timer = setTimeout(() => {
       api
-        .searchCompanyItems(query.trim(), departmentId)
+        .searchCompanyItems(query.trim(), effectiveDepartmentId)
         .then((response) => setResults(response.data))
         .catch(() => setResults([]))
         .finally(() => setSearching(false));
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [open, query, candidate, departmentId]);
+  }, [open, query, candidate, effectiveDepartmentId]);
 
   async function handleConfirm() {
     setSubmitting(true);
     setError(null);
 
     try {
-      const body =
-        candidate.type === "existing"
-          ? { companyItemId: candidate.id, defaultUomId }
-          : { newItem: { name: candidate.name }, defaultUomId };
+      const body = {
+        ...(effectiveDepartmentId && { departmentId: effectiveDepartmentId }),
+        defaultUomId,
+        ...(candidate.type === "existing"
+          ? { companyItemId: candidate.id }
+          : { newItem: { name: candidate.name } }),
+      };
 
       const response = await api.addCatalogEntry(body);
       onAdded(response.data);
@@ -124,6 +141,26 @@ export function AddMaterialDialog({ open, onClose, onAdded, departmentId, unitsO
             <strong>{candidate.name}</strong>
           </p>
 
+          {needsDepartmentChoice && (
+            <>
+              <label className={styles.label} htmlFor="add-material-department">
+                Department
+              </label>
+              <Select
+                id="add-material-department"
+                value={chosenDepartmentId}
+                onChange={(event) => setChosenDepartmentId(event.target.value)}
+              >
+                <option value="">Select a department…</option>
+                {departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </Select>
+            </>
+          )}
+
           <label className={styles.label} htmlFor="add-material-uom">
             Default unit
           </label>
@@ -150,7 +187,11 @@ export function AddMaterialDialog({ open, onClose, onAdded, departmentId, unitsO
             <Button variant="secondary" onClick={() => setCandidate(null)} disabled={submitting}>
               Back
             </Button>
-            <Button onClick={handleConfirm} loading={submitting} disabled={!defaultUomId}>
+            <Button
+              onClick={handleConfirm}
+              loading={submitting}
+              disabled={!defaultUomId || !effectiveDepartmentId}
+            >
               Add Material
             </Button>
           </div>
