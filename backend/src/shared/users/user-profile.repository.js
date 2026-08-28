@@ -10,11 +10,61 @@ import pool from "../../config/database.js";
 // provably identical to the old role-only query when
 // user_permission_overrides is empty, which it is for every user until the
 // Workforce governance UI/API starts writing rows into it.
+//
+// WHO may act (role + permissions) stays Governance-controlled. WHERE they
+// may act — department scope — is resolved here, once, for every request.
+//
+// For a User linked to an Employee, the authoritative department is that
+// Employee's CURRENT effective-dated assignment, not a second department
+// column on the user row. Those two could otherwise drift, and in practice
+// always did: createLoginForEmployee never populated users.department_id at
+// all, so an employee-linked Team Lead with a real Civil assignment arrived
+// with departmentId = null and department-scope.js correctly — but
+// uselessly — refused every departmental action.
+//
+// Precedence is deliberate:
+//   linked Employee WITH a current assignment  -> that assignment's department
+//                                                 (even when it is NULL, so a
+//                                                 transfer out of a department
+//                                                 narrows scope rather than
+//                                                 leaving a stale value)
+//   otherwise                                  -> users.department_id, which
+//                                                 remains the explicit scope
+//                                                 for non-employee accounts
+//                                                 (bootstrap, service, future
+//                                                 external users)
+//
+// "Current" uses the same effective-dated rule as the rest of Workforce
+// (departments/positions/rotation repositories): the latest assignment whose
+// effective_date has actually arrived, so a future-dated transfer does not
+// move scope early. Missing scope stays NULL — never a fallback to
+// all-departments; department-scope.js already treats NULL as restrictive.
+//
+// Department scope must never become cross-site reach. department-scope.js
+// is keyed on department alone and never re-checks site, so if a linked
+// Employee's current assignment names a department belonging to a DIFFERENT
+// site than the User's own site_id, adopting it would hand that user another
+// site's records. That state is reachable in practice, because the transfer
+// path deliberately declines to move a privileged account's site scope on its
+// own. Such an inconsistency resolves to NULL — restrictive denial rather than
+// silently trusting mismatched data, and never a silent site move.
+//
+// site_id is deliberately NOT derived here. Employee site changes already
+// have explicit, audited synchronisation in employees.service.js, which
+// intentionally refuses to move a privileged account's site scope on its own
+// (see the SITE_CHANGED branch). Overriding that here would silently reverse
+// a documented decision.
 export async function getUserProfileById(userId) {
   const result = await pool.query(
     `SELECT
-       u.id, u.email, u.full_name, u.is_active, u.department_id, u.site_id, u.session_version,
+       u.id, u.email, u.full_name, u.is_active, u.site_id, u.session_version,
        u.must_change_password,
+       CASE
+         WHEN assignment.employee_id IS NULL THEN u.department_id
+         WHEN assignment.department_id IS NULL THEN NULL
+         WHEN assignment.department_site_id IS DISTINCT FROM u.site_id THEN NULL
+         ELSE assignment.department_id
+       END AS department_id,
        r.name AS role, r.is_active AS role_is_active,
        s.is_active AS site_is_active,
        e.id AS employee_id,
@@ -23,6 +73,15 @@ export async function getUserProfileById(userId) {
      JOIN roles r ON r.id = u.role_id
      JOIN sites s ON s.id = u.site_id
      LEFT JOIN employees e ON e.user_id = u.id
+     LEFT JOIN LATERAL (
+       SELECT ea.employee_id, ea.department_id, ad.site_id AS department_site_id
+       FROM employment_assignments ea
+       LEFT JOIN departments ad ON ad.id = ea.department_id
+       WHERE ea.employee_id = e.id
+         AND ea.effective_date <= CURRENT_DATE
+       ORDER BY ea.effective_date DESC, ea.created_at DESC
+       LIMIT 1
+     ) assignment ON true
      LEFT JOIN LATERAL (
        SELECT array_agg(p.code) AS codes
        FROM permissions p

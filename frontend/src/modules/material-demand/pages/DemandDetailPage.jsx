@@ -99,10 +99,11 @@ export function DemandDetailPage() {
   // the same rule, this only avoids offering an action that would be refused.
   // Eligibility is never inferred here — the server sends the persistent flag
   // and a Demand predating the protected lifecycle simply gets no destructive
-  // control. `!== false` keeps the button working against an older API
-  // response that omits the field entirely; the server refuses regardless.
+  // control. Fails CLOSED: an explicit `true` is required, so a response that
+  // omits the field (an older or partial API) hides the destructive control
+  // rather than offering one the server will refuse.
   const canDeleteDraft =
-    demand.status === "DRAFT" && demand.draft_delete_eligible !== false && hasPermission("demand.delete_draft");
+    demand.status === "DRAFT" && demand.draft_delete_eligible === true && hasPermission("demand.delete_draft");
   const canPrice = demand.status === "READY_FOR_PRICING" && hasPermission("procurement.pricing");
   const canViewSubmittedPrices =
     ["PENDING_FINAL_APPROVAL", "PRICING_REVISION_REQUIRED", "READY_FOR_IPO", "IPO_GENERATED", "IPO_CANCELLED", "COMPLETED"].includes(

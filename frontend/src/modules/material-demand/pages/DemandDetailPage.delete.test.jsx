@@ -67,7 +67,11 @@ afterEach(() => {
   mockPermissions = new Set();
 });
 
-async function renderDetail(status = "DRAFT", draftDeleteEligible = true) {
+// `...rest` rather than a default parameter, so a test can pass an explicit
+// `undefined` (the "server omitted the field" case) without it being replaced
+// by the default.
+async function renderDetail(status = "DRAFT", ...rest) {
+  const draftDeleteEligible = rest.length > 0 ? rest[0] : true;
   mockUseDemand.mockReturnValue({
     status: "ready",
     error: null,
@@ -117,6 +121,30 @@ describe("Delete Draft", () => {
     mockPermissions = new Set(["demand.delete_draft"]);
     await renderDetail("DRAFT", false);
     expect(screen.queryByRole("button", { name: "Delete Draft" })).toBeNull();
+  });
+
+  test("fails closed when the server omits the eligibility field entirely", async () => {
+    // An older or partial API response. The destructive control must be
+    // withheld rather than offered on an assumption the server would refuse.
+    mockPermissions = new Set(["demand.delete_draft"]);
+    await renderDetail("DRAFT", undefined);
+    expect(screen.queryByRole("button", { name: "Delete Draft" })).toBeNull();
+  });
+
+  test("is offered only on an explicit true", async () => {
+    mockPermissions = new Set(["demand.delete_draft"]);
+    for (const [value, expected] of [
+      [true, true],
+      [false, false],
+      [undefined, false],
+      [null, false],
+      ["true", false],
+    ]) {
+      await renderDetail("DRAFT", value);
+      const present = screen.queryByRole("button", { name: "Delete Draft" }) !== null;
+      expect(present).toBe(expected);
+      cleanup();
+    }
   });
 
   test("is not offered without the capability, even on a DRAFT", async () => {
