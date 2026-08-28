@@ -2,17 +2,18 @@ import { z } from "zod";
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import { generateProcurementExport, procurementExportCatalog } from "./procurement-reports.service.js";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 // Filters are applied server-side, in SQL, against a scoped query — the
 // browser never receives an unfiltered dataset to narrow down itself.
 const exportQuerySchema = z
   .object({
-    siteId: z.string().uuid().optional(),
-    departmentId: z.string().uuid().optional(),
-    from: z.string().date().optional(),
-    to: z.string().date().optional(),
-    status: z.string().trim().max(40).optional(),
-    reference: z.string().trim().max(100).optional(),
+    siteId: optionalQueryValue(z.string().uuid()),
+    departmentId: optionalQueryValue(z.string().uuid()),
+    from: optionalQueryValue(z.string().date()),
+    to: optionalQueryValue(z.string().date()),
+    status: optionalQueryValue(z.string().trim().max(40)),
+    reference: optionalQueryValue(z.string().trim().max(100)),
   })
   .strict();
 

@@ -3,7 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
@@ -32,7 +33,7 @@ export function DeliveryChallanDetailPage() {
         setState({
           result: null,
           status: "error",
-          error: error.message || "Unable to load this Delivery Challan.",
+          error,
         }),
       );
   }, [id]);
@@ -43,7 +44,8 @@ export function DeliveryChallanDetailPage() {
   }, [load]);
 
   if (state.status === "loading") return <LoadingState message="Loading Delivery Challan…" />;
-  if (state.status === "error") return <ErrorState message={state.error} onRetry={load} />;
+  if (state.status === "error")
+    return <RecordErrorState error={state.error} onRetry={load} fallback="Unable to load this Delivery Challan." />;
 
   const { deliveryChallan: challan, lines } = state.result;
   const canManage = hasPermission("dc.manage");

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiClient } from "../../../core/api/client.js";
+import { buildQuery } from "../../../core/api/query.js";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Select } from "../../../shared/components/FormField.jsx";
@@ -53,15 +54,9 @@ export function ProcurementHistoryPage() {
     setExporting(datasetKey);
     setExportError(null);
     try {
-      const query = new URLSearchParams();
       // Filters are sent to the server, which applies them in SQL — the
       // browser never downloads an unfiltered dataset to narrow itself.
-      if (filters.from) query.set("from", filters.from);
-      if (filters.to) query.set("to", filters.to);
-      if (filters.status) query.set("status", filters.status);
-      if (filters.reference) query.set("reference", filters.reference);
-      const suffix = query.toString() ? `?${query.toString()}` : "";
-      const blob = await apiClient.getBlob(`/reports/procurement/${datasetKey}.xlsx${suffix}`);
+      const blob = await apiClient.getBlob(`/reports/procurement/${datasetKey}.xlsx${buildQuery(filters)}`);
       await downloadBlob(blob, `${datasetKey}.xlsx`);
     } catch (downloadError) {
       setExportError(downloadError.message || "Unable to generate the export.");

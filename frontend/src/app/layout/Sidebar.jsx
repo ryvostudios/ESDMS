@@ -21,7 +21,7 @@ export function Sidebar() {
         </span>
         <span className={styles.brandText}>
           <span className={styles.brandName}>E-Set DMS</span>
-          <span className={styles.brandSub}>Gate Pass</span>
+          <span className={styles.brandSub}>Digital Management</span>
         </span>
       </div>
       <NavList />

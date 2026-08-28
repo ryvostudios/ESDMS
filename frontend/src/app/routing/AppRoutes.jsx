@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
 import { AppShell } from "../layout/AppShell.jsx";
 import { ProtectedRoute } from "./ProtectedRoute.jsx";
 import { PermissionRoute } from "./PermissionRoute.jsx";
@@ -35,6 +35,7 @@ import { ReceivingQueuePage } from "../../modules/receiving/pages/ReceivingQueue
 import { ReceiveDeliveryPage } from "../../modules/receiving/pages/ReceiveDeliveryPage.jsx";
 import { ReceiptDetailPage } from "../../modules/receiving/pages/ReceiptDetailPage.jsx";
 import { DiagnosticsPage } from "./DiagnosticsPage.jsx";
+import { NotFoundPage } from "./NotFoundPage.jsx";
 
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
@@ -276,7 +277,7 @@ export function AppRoutes() {
           }
         />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

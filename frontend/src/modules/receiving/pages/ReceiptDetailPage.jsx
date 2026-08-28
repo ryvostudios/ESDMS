@@ -3,7 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { acknowledgeHandover, confirmReceipt, getReceipt } from "../api.js";
@@ -21,7 +22,7 @@ export function ReceiptDetailPage() {
     return getReceipt(id)
       .then((response) => setState({ result: response.data, status: "ready", error: null }))
       .catch((error) =>
-        setState({ result: null, status: "error", error: error.message || "Unable to load this receipt." }),
+        setState({ result: null, status: "error", error }),
       );
   }, [id]);
 
@@ -31,7 +32,8 @@ export function ReceiptDetailPage() {
   }, [load]);
 
   if (state.status === "loading") return <LoadingState message="Loading receipt…" />;
-  if (state.status === "error") return <ErrorState message={state.error} onRetry={load} />;
+  if (state.status === "error")
+    return <RecordErrorState error={state.error} onRetry={load} fallback="Unable to load this receipt." />;
 
   const { receipt, lines } = state.result;
   const awaitingHandover = receipt.status === "AWAITING_HANDOVER";

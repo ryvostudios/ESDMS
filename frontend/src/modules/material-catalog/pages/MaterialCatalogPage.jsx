@@ -109,7 +109,9 @@ export function MaterialCatalogPage() {
     <div>
       <PageHeader
         title="Material Catalog"
-        description="Your department's reusable material list, used to build Demand Lists quickly."
+        description={canSeeAllDepartments
+          ? "Reusable material catalogs across departments, used to build Demand Lists quickly."
+          : "Your department's reusable material list, used to build Demand Lists quickly."}
         actions={
           canManage && (
             <Button

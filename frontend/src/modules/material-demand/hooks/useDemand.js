@@ -16,7 +16,7 @@ export function useDemand(id) {
         setStatus("ready");
       })
       .catch((requestError) => {
-        setError(requestError.message || "Unable to load this Demand.");
+        setError(requestError);
         setStatus("error");
       });
   }, [id]);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PRICING_CURRENCY } from "./procurement-pricing.constants.js";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const uuid = z.string().uuid();
 const exactPrice = z
@@ -43,14 +44,14 @@ export const startRepricingSchema = z
 
 export const pricingDetailQuerySchema = z
   .object({
-    version: z.coerce.number().int().positive().optional(),
+    version: optionalQueryValue(z.coerce.number().int().positive()),
   })
   .strict();
 
 export const pricingQueueQuerySchema = z
   .object({
-    search: z.string().trim().max(100).optional(),
-    page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
+    search: optionalQueryValue(z.string().trim().max(100)),
+    page: optionalQueryValue(z.coerce.number().int().min(1).max(10_000)).default(1),
+    pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(20),
   })
   .strict();

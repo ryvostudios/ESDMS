@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CANCELLATION_CATEGORIES, IPO_STATUS } from "./ipo.constants.js";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const uuid = z.string().uuid();
 
@@ -76,17 +77,17 @@ export const cancelIpoSchema = z
 
 export const ipoListQuerySchema = z
   .object({
-    departmentId: uuid.optional(),
-    status: z.enum(Object.values(IPO_STATUS)).optional(),
-    search: z.string().trim().max(100).optional(),
-    page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
+    departmentId: optionalQueryValue(uuid),
+    status: optionalQueryValue(z.enum(Object.values(IPO_STATUS))),
+    search: optionalQueryValue(z.string().trim().max(100)),
+    page: optionalQueryValue(z.coerce.number().int().min(1).max(10_000)).default(1),
+    pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(20),
   })
   .strict();
 
 export const outstandingQuerySchema = z
   .object({
-    departmentId: uuid.optional(),
+    departmentId: optionalQueryValue(uuid),
     catalogEntryIds: z
       .union([uuid, z.array(uuid).max(200)])
       .transform((value) => (Array.isArray(value) ? value : [value])),

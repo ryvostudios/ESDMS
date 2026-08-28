@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MATERIAL_DEMAND_STATUS } from "./material-demand.constants.js";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const uuid = z.string().uuid();
 const STATUSES = Object.values(MATERIAL_DEMAND_STATUS);
@@ -75,12 +76,12 @@ export const finalDecisionSchema = decisionSchema.and(
 );
 
 export const listQuerySchema = z.object({
-  departmentId: uuid.optional(),
-  status: z.enum(STATUSES).optional(),
-  search: z.string().trim().max(100).optional(),
-  page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
-});
+  departmentId: optionalQueryValue(uuid),
+  status: optionalQueryValue(z.enum(STATUSES)),
+  search: optionalQueryValue(z.string().trim().max(100)),
+  page: optionalQueryValue(z.coerce.number().int().min(1).max(10_000)).default(1),
+  pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(20),
+}).strict();
 
 // Line-level final purchasing disposition. An EXCLUDED line must name a
 // category; the free-text explanation is mandatory only for OTHER, where the

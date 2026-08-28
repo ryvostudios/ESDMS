@@ -9,7 +9,7 @@ export function useIpo(id) {
     return getIpo(id)
       .then((response) => setState({ result: response.data, status: "ready", error: null }))
       .catch((error) =>
-        setState({ result: null, status: "error", error: error.message || "Unable to load this IPO." }),
+        setState({ result: null, status: "error", error }),
       );
   }, [id]);
 

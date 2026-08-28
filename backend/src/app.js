@@ -60,7 +60,9 @@ app.use(
 );
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "1mb" }));
+// Parse all valid JSON values so endpoint validation, not the transport
+// parser, decides whether `null`/arrays/primitives are valid request bodies.
+app.use(express.json({ limit: "1mb", strict: false }));
 // Coarse ceiling FIRST, unconditionally, for every request — no `skip`,
 // no dependency on token validity. Closes a bypass: a token with a valid
 // signature/expiry/issuer/audience but a revoked session_version or a

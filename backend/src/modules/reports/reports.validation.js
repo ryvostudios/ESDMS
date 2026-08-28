@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 export const reportQuerySchema = z.object({
-  siteId: z.string().uuid().optional(),
-  from: z.string().date().optional(),
-  to: z.string().date().optional(),
-  withinDays: z.coerce.number().int().min(0).max(365).default(30),
-});
+  siteId: optionalQueryValue(z.string().uuid()),
+  from: optionalQueryValue(z.string().date()),
+  to: optionalQueryValue(z.string().date()),
+  withinDays: optionalQueryValue(z.coerce.number().int().min(0).max(365)).default(30),
+}).strict();
 
 export const bulkExportSchema = z.object({
   siteId: z.string().uuid().optional(),

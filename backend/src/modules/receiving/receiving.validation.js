@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DISCREPANCY_TYPES, RECEIPT_STATUS } from "./receiving.constants.js";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const uuid = z.string().uuid();
 
@@ -50,13 +51,13 @@ export const recordReceiptSchema = z
 
 export const receivingQueueQuerySchema = z
   .object({
-    departmentId: uuid.optional(),
-    search: z.string().trim().max(100).optional(),
-    page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
+    departmentId: optionalQueryValue(uuid),
+    search: optionalQueryValue(z.string().trim().max(100)),
+    page: optionalQueryValue(z.coerce.number().int().min(1).max(10_000)).default(1),
+    pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(20),
   })
   .strict();
 
 export const receiptListQuerySchema = receivingQueueQuerySchema.extend({
-  status: z.enum(Object.values(RECEIPT_STATUS)).optional(),
+  status: optionalQueryValue(z.enum(Object.values(RECEIPT_STATUS))),
 });

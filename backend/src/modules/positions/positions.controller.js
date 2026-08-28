@@ -2,7 +2,7 @@ import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
 import { resolveCreateSiteId, resolveTargetSiteId, employeeSiteFilter } from "../workforce/workforce.authorization.js";
 import { findDepartmentById } from "../departments/departments.repository.js";
-import { createPositionSchema, updatePositionSchema } from "./positions.validation.js";
+import { createPositionSchema, updatePositionSchema, positionListQuerySchema } from "./positions.validation.js";
 import {
   listActivePositionsForSite,
   listPositionsForSite,
@@ -28,7 +28,8 @@ async function assertDepartmentUsable(departmentId, siteId) {
 }
 
 export const list = asyncHandler(async (req, res) => {
-  const siteId = resolveTargetSiteId(req.user, req.query.siteId);
+  const query = parseBody(positionListQuerySchema, req.query);
+  const siteId = resolveTargetSiteId(req.user, query.siteId);
   const rows = await listActivePositionsForSite(siteId);
   res.status(200).json({ success: true, data: rows });
 });

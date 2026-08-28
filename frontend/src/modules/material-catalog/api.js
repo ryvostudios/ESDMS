@@ -1,12 +1,10 @@
 import { apiClient } from "../../core/api/client.js";
+import { buildQuery } from "../../core/api/query.js";
 
 export const listUnitsOfMeasure = () => apiClient.get("/material-catalog/units-of-measure");
 
 export const listCatalog = (params = {}) => {
-  const query = new URLSearchParams(
-    Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== "")),
-  ).toString();
-  return apiClient.get(`/material-catalog${query ? `?${query}` : ""}`);
+  return apiClient.get(`/material-catalog${buildQuery(params)}`);
 };
 
 // The backend caps pageSize at 100 (material-catalog.validation.js). Asking
@@ -40,8 +38,7 @@ export async function listAllCatalog({ departmentId, includeInactive } = {}) {
 }
 
 export const searchCompanyItems = (q, departmentId) => {
-  const params = new URLSearchParams({ q, ...(departmentId && { departmentId }) });
-  return apiClient.get(`/material-catalog/company-items/search?${params.toString()}`);
+  return apiClient.get(`/material-catalog/company-items/search${buildQuery({ q, departmentId })}`);
 };
 
 export const addCatalogEntry = (body) => apiClient.post("/material-catalog", body);

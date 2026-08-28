@@ -30,18 +30,21 @@ export function DashboardPage() {
   const { user, hasPermission } = useAuth();
   const navigate = useNavigate();
   const canApprove = hasPermission("gate_pass.approve");
+  const canViewGatePasses = hasPermission("gate_pass.view_own", "gate_pass.view_site");
 
-  const [state, setState] = useState({ status: "loading", recent: [], pending: [], counts: {}, total: 0, error: null });
+  const [state, setState] = useState(() =>
+    canViewGatePasses
+      ? { status: "loading", recent: [], pending: [], counts: {}, total: 0, error: null }
+      : { status: "ready", recent: [], pending: [], counts: {}, total: 0, error: null },
+  );
 
   useEffect(() => {
     let cancelled = false;
 
+    if (!canViewGatePasses) return undefined;
+
     const statusRequests = GATE_PASS_STATUSES.map((status) => listGatePasses({ status, page: 1, pageSize: 1 }));
-    const requests = [
-      listGatePasses({ page: 1, pageSize: 5 }),
-      listGatePasses({ page: 1, pageSize: 1 }),
-      ...statusRequests,
-    ];
+    const requests = [listGatePasses({ page: 1, pageSize: 5 }), ...statusRequests];
     if (canApprove) {
       requests.push(listGatePasses({ status: "PENDING_APPROVAL", page: 1, pageSize: 5 }));
     }
@@ -49,7 +52,7 @@ export function DashboardPage() {
     Promise.all(requests)
       .then((responses) => {
         if (cancelled) return;
-        const [recentResponse, totalResponse, ...rest] = responses;
+        const [recentResponse, ...rest] = responses;
         const statusResponses = rest.slice(0, GATE_PASS_STATUSES.length);
         const pendingResponse = canApprove ? rest[GATE_PASS_STATUSES.length] : null;
 
@@ -63,7 +66,7 @@ export function DashboardPage() {
           recent: recentResponse.data,
           pending: pendingResponse ? pendingResponse.data : [],
           counts,
-          total: totalResponse.meta.total,
+          total: recentResponse.meta.total,
           error: null,
         });
       })
@@ -75,7 +78,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [canApprove]);
+  }, [canApprove, canViewGatePasses]);
 
   const isEmpty = state.status === "ready" && state.total === 0;
 
@@ -99,8 +102,12 @@ export function DashboardPage() {
           {/* "New Gate Pass" is already the PageHeader's own action above —
               not duplicated here. */}
           <EmptyState
-            title="No Gate Passes yet"
-            message="Once Gate Passes are created for your site, they'll show up here."
+            title={canViewGatePasses ? "No Gate Passes yet" : "No Gate Pass activity for your role"}
+            message={
+              canViewGatePasses
+                ? "Once Gate Passes are created for your site, they'll show up here."
+                : "Your role doesn't include Gate Pass visibility. Use the navigation to reach the areas you work in."
+            }
           />
         </div>
       )}

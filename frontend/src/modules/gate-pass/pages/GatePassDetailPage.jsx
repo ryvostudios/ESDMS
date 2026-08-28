@@ -13,7 +13,8 @@ import {
 import { GatePassStatusBadge } from "../components/GatePassStatusBadge.jsx";
 import { AuditTimeline } from "../components/AuditTimeline.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
@@ -90,7 +91,7 @@ export function GatePassDetailPage() {
   }
 
   if (status === "error") {
-    return <ErrorState message={error} onRetry={reload} />;
+    return <RecordErrorState error={error} onRetry={reload} fallback="Unable to load this Gate Pass." />;
   }
 
   const canEdit = EDITABLE_STATUSES.includes(gatePass.status) && hasPermission("gate_pass.edit_draft");

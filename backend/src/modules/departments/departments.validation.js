@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
+
+export const departmentListQuerySchema = z.object({
+  siteId: optionalQueryValue(z.string().uuid()),
+}).strict();
 
 export const createDepartmentSchema = z.object({
   name: z.string().trim().min(1).max(100),

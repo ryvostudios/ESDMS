@@ -109,6 +109,15 @@ describe("DemandDetailPage", () => {
     expect(screen.queryByText(/pending initial review/i)).toBeNull();
   });
 
+  test("a zero-line Draft keeps Submit for Review visible but disabled", async () => {
+    mockPermissions = new Set(["demand.submit"]);
+    mockUseDemand.mockReturnValue({ result: { ...baseDemand(), lines: [] }, status: "ready", error: null, reload: vi.fn() });
+
+    await renderPage();
+
+    expect(screen.getByRole("button", { name: "Submit for Review" }).disabled).toBe(true);
+  });
+
   test("a submitted Demand is read-only and shows the pending-review notice", async () => {
     mockPermissions = new Set(["demand.edit", "demand.submit"]);
     mockUseDemand.mockReturnValue({

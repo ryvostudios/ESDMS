@@ -1,21 +1,12 @@
 import { apiClient } from "../../core/api/client.js";
-
-function buildQuery(params) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") query.set(key, value);
-  }
-  const value = query.toString();
-  return value ? `?${value}` : "";
-}
+import { buildQuery } from "../../core/api/query.js";
 
 export function listPricingQueue(filters) {
   return apiClient.get(`/procurement/pricing${buildQuery(filters)}`);
 }
 
 export function getPricing(demandId, version) {
-  const query = version ? `?version=${encodeURIComponent(version)}` : "";
-  return apiClient.get(`/procurement/pricing/${demandId}${query}`);
+  return apiClient.get(`/procurement/pricing/${demandId}${buildQuery({ version })}`);
 }
 
 export function savePricing(demandId, input) {

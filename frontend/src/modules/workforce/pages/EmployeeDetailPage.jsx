@@ -4,13 +4,15 @@ import { ApiError } from "../../../core/api/client.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Select } from "../../../shared/components/FormField.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
 import { EMPLOYEE_STATUS_TONE } from "../constants.js";
 import * as api from "../api.js";
+import { ProfilePhoto } from "../components/ProfilePhoto.jsx";
 import styles from "./EmployeeDetailPage.module.css";
 
 // Mirrors employees.service.js's ALLOWED_STATUS_TRANSITIONS exactly — the
@@ -40,7 +42,7 @@ export function EmployeeDetailPage() {
       const response = await api.getEmployee(id);
       setEmployee(response.data);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Unable to load employee.");
+      setError(err);
     }
   }, [id]);
 
@@ -62,7 +64,7 @@ export function EmployeeDetailPage() {
       .catch(() => {});
   }, [hasPermission]);
 
-  if (error) return <ErrorState message={error} onRetry={load} />;
+  if (error) return <RecordErrorState error={error} onRetry={load} fallback="Unable to load this employee." />;
   if (!employee) return <LoadingState />;
 
   const siteName = sites.find((s) => s.id === employee.primarySiteId)?.name || employee.primarySiteId;
@@ -108,9 +110,10 @@ export function EmployeeDetailPage() {
 
 function ProfileTab({ employeeId }) {
   const [profile, setProfile] = useState(null);
+  const loadPhoto = useCallback(() => api.getEmployeePhotoBlob(employeeId), [employeeId]);
   useEffect(() => { api.getEmployeeProfile(employeeId).then((result) => setProfile(result.data)); }, [employeeId]);
   if (!profile) return <LoadingState />;
-  return <div><h3>Personal details</h3><p>CNIC: {profile.personalDetails?.cnic || "—"}</p><p>Mobile: {profile.personalDetails?.mobile || "—"}</p><p>Personal email: {profile.personalDetails?.personal_email || "—"}</p><p>Address: {profile.personalDetails?.address || "—"}</p><h3>Emergency contacts</h3>{profile.emergencyContacts.map((contact) => <p key={contact.id}>{contact.name} — {contact.phone}</p>)}<h3>Additional information</h3>{profile.customFieldValues.map((field) => <p key={field.fieldId}>{field.label}: {String(field.value ?? "—")}</p>)}</div>;
+  return <div><ProfilePhoto load={loadPhoto} alt={`${profile.employee.full_legal_name} profile`} /><h3>Personal details</h3><p>CNIC: {profile.personalDetails?.cnic || "—"}</p><p>Mobile: {profile.personalDetails?.mobile || "—"}</p><p>Personal email: {profile.personalDetails?.personal_email || "—"}</p><p>Address: {profile.personalDetails?.address || "—"}</p><h3>Emergency contacts</h3>{profile.emergencyContacts.map((contact) => <p key={contact.id}>{contact.name} — {contact.phone}</p>)}<h3>Additional information</h3>{profile.customFieldValues.map((field) => <p key={field.fieldId}>{field.label}: {String(field.value ?? "—")}</p>)}</div>;
 }
 
 function AssignmentsTab({ employee, hasPermission, onChanged }) {

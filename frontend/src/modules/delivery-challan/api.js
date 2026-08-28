@@ -1,13 +1,5 @@
 import { apiClient } from "../../core/api/client.js";
-
-function buildQuery(params) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params || {})) {
-    if (value !== undefined && value !== null && value !== "") query.set(key, value);
-  }
-  const value = query.toString();
-  return value ? `?${value}` : "";
-}
+import { buildQuery } from "../../core/api/query.js";
 
 export const listDeliveryChallans = (filters) => apiClient.get(`/delivery-challans${buildQuery(filters)}`);
 export const getDeliveryChallan = (id) => apiClient.get(`/delivery-challans/${id}`);

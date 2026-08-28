@@ -9,7 +9,7 @@ vi.mock("../api.js", () => ({
   listGatePasses: (...args) => mockListGatePasses(...args),
 }));
 
-let mockPermissions = new Set();
+let mockPermissions = new Set(["gate_pass.view_site"]);
 vi.mock("../../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({
     user: { fullName: "Jordan Rivera" },
@@ -30,7 +30,7 @@ function mockCounts(counts, recent = []) {
 afterEach(() => {
   cleanup();
   mockListGatePasses.mockReset();
-  mockPermissions = new Set();
+  mockPermissions = new Set(["gate_pass.view_site"]);
 });
 
 async function renderPage() {
@@ -71,7 +71,7 @@ describe("Gate Pass DashboardPage", () => {
   });
 
   test("an actor with gate_pass.approve sees the pending-approval section", async () => {
-    mockPermissions = new Set(["gate_pass.approve"]);
+    mockPermissions = new Set(["gate_pass.view_site", "gate_pass.approve"]);
     mockCounts({ DRAFT: 0, PENDING_APPROVAL: 1, APPROVED: 0, VEHICLE_OUTSIDE: 0, COMPLETED: 0, REJECTED: 0, CANCELLED: 0 });
     await renderPage();
 
@@ -92,4 +92,21 @@ describe("Gate Pass DashboardPage", () => {
 
     expect(await screen.findByText("Network error")).toBeTruthy();
   });
+});
+
+test("an actor without Gate Pass visibility makes no Gate Pass requests", async () => {
+  mockPermissions = new Set(["procurement.pricing", "receiving.view"]);
+  await renderPage();
+
+  expect(mockListGatePasses).not.toHaveBeenCalled();
+  expect(screen.getByText("No Gate Pass activity for your role")).toBeTruthy();
+  expect(screen.queryByText("Loading dashboard…")).toBeNull();
+});
+
+test("the dashboard reuses recent-list total instead of making a redundant request", async () => {
+  mockCounts({ DRAFT: 1, PENDING_APPROVAL: 0, APPROVED: 0, VEHICLE_OUTSIDE: 0, COMPLETED: 0, REJECTED: 0, CANCELLED: 0 });
+  await renderPage();
+  const unfiltered = mockListGatePasses.mock.calls.filter(([filters]) => !filters.status);
+  expect(unfiltered).toHaveLength(1);
+  expect(mockListGatePasses).toHaveBeenCalledTimes(8);
 });

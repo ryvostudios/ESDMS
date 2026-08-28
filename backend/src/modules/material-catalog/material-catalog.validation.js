@@ -1,19 +1,20 @@
 import { z } from "zod";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const uuid = z.string().uuid();
 
 export const listQuerySchema = z.object({
-  departmentId: uuid.optional(),
-  search: z.string().trim().max(100).optional(),
-  includeInactive: z.enum(["true", "false"]).optional().default("false"),
-  page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).optional().default(50),
-});
+  departmentId: optionalQueryValue(uuid),
+  search: optionalQueryValue(z.string().trim().max(100)),
+  includeInactive: optionalQueryValue(z.enum(["true", "false"])).default("false"),
+  page: optionalQueryValue(z.coerce.number().int().min(1).max(10_000)).default(1),
+  pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(50),
+}).strict();
 
 export const searchItemsQuerySchema = z.object({
   q: z.string().trim().min(1).max(100),
-  departmentId: uuid.optional(),
-});
+  departmentId: optionalQueryValue(uuid),
+}).strict();
 
 const newItemSchema = z.object({
   name: z.string().trim().min(1).max(150),

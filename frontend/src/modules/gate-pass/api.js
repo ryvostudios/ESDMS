@@ -1,17 +1,5 @@
 import { apiClient } from "../../core/api/client.js";
-
-function buildQuery(params) {
-  const query = new URLSearchParams();
-
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") {
-      query.set(key, value);
-    }
-  }
-
-  const queryString = query.toString();
-  return queryString ? `?${queryString}` : "";
-}
+import { buildQuery } from "../../core/api/query.js";
 
 export function listGatePasses(filters) {
   return apiClient.get(`/gate-passes${buildQuery(filters)}`);

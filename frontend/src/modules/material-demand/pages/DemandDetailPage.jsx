@@ -8,7 +8,8 @@ import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { AuditTimeline } from "../components/AuditTimeline.jsx";
 import { ApprovalPanel } from "../components/ApprovalPanel.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { apiErrorMessage } from "../../../shared/utilities/api-error-message.js";
@@ -41,7 +42,7 @@ function DemandPricingSection({ demandId, reloadDemand }) {
   const { result, status, error, reload } = usePricing(demandId);
 
   if (status === "loading") return <LoadingState message="Loading protected pricing…" />;
-  if (status === "error") return <ErrorState message={error} onRetry={() => reload().catch(() => {})} />;
+  if (status === "error") return <RecordErrorState error={error} onRetry={() => reload().catch(() => {})} fallback="Unable to load Procurement pricing." />;
   return (
     <>
       <PricingSummary detail={result} />
@@ -85,7 +86,7 @@ export function DemandDetailPage() {
   }
 
   if (status === "error") {
-    return <ErrorState message={error} onRetry={reload} />;
+    return <RecordErrorState error={error} onRetry={reload} fallback="Unable to load this Demand." />;
   }
 
   const { demand, lines, auditLog, approvals, dispositions = [] } = result;
@@ -185,7 +186,15 @@ export function DemandDetailPage() {
               Delete Draft
             </Button>
           )}
-          {canSubmit && <Button onClick={() => setActiveDialog("submit")}>Submit for Review</Button>}
+          {canSubmit && (
+            <Button
+              onClick={() => setActiveDialog("submit")}
+              disabled={lines.length === 0}
+              title={lines.length === 0 ? "Add at least one material before submitting." : undefined}
+            >
+              Submit for Review
+            </Button>
+          )}
           {canPrice && <Button onClick={() => navigate(`/procurement/pricing/${id}`)}>Enter Pricing</Button>}
         </div>
       </div>

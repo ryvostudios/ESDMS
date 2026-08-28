@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { GATE_PASS_PURPOSES, GATE_PASS_STATUS } from "./gate-pass.constants.js";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const GATE_PASS_STATUSES = Object.values(GATE_PASS_STATUS);
 
@@ -44,15 +45,15 @@ export const exitActionSchema = z.object({
 });
 
 export const listQuerySchema = z.object({
-  status: z.enum(GATE_PASS_STATUSES).optional(),
-  search: z.string().trim().max(100).optional(),
-  page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
-});
+  status: optionalQueryValue(z.enum(GATE_PASS_STATUSES)),
+  search: optionalQueryValue(z.string().trim().max(100)),
+  page: optionalQueryValue(z.coerce.number().int().min(1).max(10_000)).default(1),
+  pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(20),
+}).strict();
 
 export const guardSearchQuerySchema = z.object({
   query: z.string().trim().min(1).max(100),
-});
+}).strict();
 
 export const guardVerifySchema = z.object({
   token: z.string().trim().min(1).max(200),

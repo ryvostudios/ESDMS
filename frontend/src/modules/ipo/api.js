@@ -1,17 +1,5 @@
 import { apiClient } from "../../core/api/client.js";
-
-function buildQuery(params) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params || {})) {
-    if (Array.isArray(value)) {
-      value.forEach((entry) => query.append(key, entry));
-    } else if (value !== undefined && value !== null && value !== "") {
-      query.set(key, value);
-    }
-  }
-  const value = query.toString();
-  return value ? `?${value}` : "";
-}
+import { buildQuery } from "../../core/api/query.js";
 
 export const listIpos = (filters) => apiClient.get(`/ipos${buildQuery(filters)}`);
 export const getIpo = (id) => apiClient.get(`/ipos/${id}`);

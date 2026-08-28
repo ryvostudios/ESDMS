@@ -1,13 +1,14 @@
 import { z } from "zod";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 export const expiringQuerySchema = z.object({
-  withinDays: z.coerce.number().int().min(0).max(365).default(30),
-});
+  withinDays: optionalQueryValue(z.coerce.number().int().min(0).max(365)).default(30),
+}).strict();
 
 export const uploadDocumentQuerySchema = z.object({
   documentTypeId: z.string().uuid(),
-  expiryDate: z.string().date().optional(),
-});
+  expiryDate: optionalQueryValue(z.string().date()),
+}).strict();
 
 export const verifyDocumentSchema = z.object({
   status: z.enum(["VERIFIED", "NEEDS_REPLACEMENT"]),

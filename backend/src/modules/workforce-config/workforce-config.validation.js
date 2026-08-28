@@ -5,7 +5,7 @@ import { z } from "zod";
 // management permission (see workforce-config.service.js).
 export const catalogContextSchema = z.object({
   context: z.enum(["self", "management"]),
-});
+}).strict();
 
 export const FIELD_TYPES = [
   "TEXT",

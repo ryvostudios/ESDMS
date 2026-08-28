@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
@@ -44,7 +45,7 @@ export function IpoDetailPage() {
   const [actionError, setActionError] = useState(null);
 
   if (status === "loading") return <LoadingState message="Loading IPO…" />;
-  if (status === "error") return <ErrorState message={error} onRetry={reload} />;
+  if (status === "error") return <RecordErrorState error={error} onRetry={reload} fallback="Unable to load this IPO." />;
 
   const { ipo, lines, auditLog, deliveryChallans, receipts, includesCommercialData } = result;
   const canPurchase = hasPermission("procurement.purchase");

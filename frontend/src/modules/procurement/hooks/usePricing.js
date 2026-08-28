@@ -16,7 +16,7 @@ export function usePricing(demandId, version = null) {
         return response.data;
       })
       .catch((requestError) => {
-        setError(requestError.message || "Unable to load Procurement pricing.");
+        setError(requestError);
         setStatus("error");
         throw requestError;
       });

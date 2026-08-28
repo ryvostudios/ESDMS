@@ -20,6 +20,7 @@ vi.mock("../api.js", () => ({
         employee: { full_legal_name: "Test Employee", employee_code: "EMP-1", status: "ACTIVE" },
       },
     }),
+  getMyPhotoBlob: vi.fn(() => Promise.reject(new Error("No photo"))),
   removeMyEmergencyContact: vi.fn(),
   listCustomFieldsSelf: emptyList,
   getMyDocuments: emptyList,

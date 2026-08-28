@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
+
+export const positionListQuerySchema = z.object({
+  siteId: optionalQueryValue(z.string().uuid()),
+}).strict();
 
 export const createPositionSchema = z.object({
   code: z.string().trim().min(1).max(30),

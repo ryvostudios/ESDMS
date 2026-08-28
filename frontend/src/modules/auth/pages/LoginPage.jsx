@@ -98,7 +98,7 @@ export function LoginPage() {
         </span>
         <div className={styles.brandCopy}>
           <h2>E-Set Digital Management System</h2>
-          <p>Controlled, auditable Gate Pass operations for vehicle and driver movement across E-Set sites.</p>
+          <p>Controlled, auditable operations across workforce, procurement, materials, and site access.</p>
         </div>
         <p className={styles.brandFooter}>© {new Date().getFullYear()} E-Set</p>
       </div>

@@ -11,7 +11,14 @@ export async function withTransaction(fn) {
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK");
+    // Preserve the business/SQL failure that caused the rollback. A broken
+    // connection can make ROLLBACK fail too; that secondary cleanup failure
+    // must not replace the original diagnostic.
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // The client is released below and pg discards a broken connection.
+    }
     throw error;
   } finally {
     client.release();

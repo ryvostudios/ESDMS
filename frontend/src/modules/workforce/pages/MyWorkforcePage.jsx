@@ -10,6 +10,7 @@ import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { formatDate } from "../../../shared/utilities/datetime.js";
 import styles from "./MyWorkforcePage.module.css";
 import * as api from "../api.js";
+import { ProfilePhoto } from "../components/ProfilePhoto.jsx";
 
 // ESDMS-018: each child is gated by its OWN capability, never by
 // profile.self.view as an umbrella. Documents/Rotation/Contracts/
@@ -140,6 +141,7 @@ function ProfileTab({ profile, onChanged }) {
   const [fieldValues, setFieldValues] = useState(Object.fromEntries(profile.customFieldValues.map((field) => [field.fieldId, field.value ?? ""])));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
+  const [photoVersion, setPhotoVersion] = useState(0);
 
   async function savePersonalDetails(event) {
     event.preventDefault();
@@ -180,6 +182,7 @@ function ProfileTab({ profile, onChanged }) {
     try {
       await api.uploadMyPhoto(formData);
       setMessage("Photo updated.");
+      setPhotoVersion((version) => version + 1);
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : "Unable to upload photo.");
     }
@@ -188,6 +191,7 @@ function ProfileTab({ profile, onChanged }) {
   return (
     <div>
       <div className={styles.identityRow}>
+        <ProfilePhoto load={api.getMyPhotoBlob} alt={`${profile.employee.full_legal_name} profile`} refreshKey={photoVersion} />
         <h2 className={styles.identityName}>{profile.employee.full_legal_name}</h2>
         <span className={styles.identityMeta}>{profile.employee.employee_code}</span>
         <StatusBadge tone={statusTone(profile.employee.status)} label={profile.employee.status} />

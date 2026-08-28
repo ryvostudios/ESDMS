@@ -5,7 +5,8 @@ import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { FormField, Input, Select, Textarea } from "../../../shared/components/FormField.jsx";
-import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { downloadBlob } from "../../../shared/utilities/download.js";
 import { getDeliveryChallanPdf } from "../../delivery-challan/api.js";
@@ -24,10 +25,13 @@ export function ReceiveDeliveryPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
+  const canReceive = hasPermission("receiving.receive");
+  const canFallback = hasPermission("receiving.fallback_receive");
+  const fallbackOnly = canFallback && !canReceive;
   const [state, setState] = useState({ result: null, status: "loading", error: null });
   const [draft, setDraft] = useState({});
   const [note, setNote] = useState("");
-  const [fallback, setFallback] = useState(false);
+  const [fallback, setFallback] = useState(fallbackOnly);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   // Minted once per receipt attempt. Retrying after a lost response — common
@@ -51,7 +55,7 @@ export function ReceiveDeliveryPage() {
         );
       })
       .catch((error) =>
-        setState({ result: null, status: "error", error: error.message || "Unable to load this delivery." }),
+        setState({ result: null, status: "error", error }),
       );
   }, [id]);
 
@@ -61,11 +65,10 @@ export function ReceiveDeliveryPage() {
   }, [load]);
 
   if (state.status === "loading") return <LoadingState message="Loading delivery…" />;
-  if (state.status === "error") return <ErrorState message={state.error} onRetry={load} />;
+  if (state.status === "error")
+    return <RecordErrorState error={state.error} onRetry={load} fallback="Unable to load this delivery." />;
 
   const { deliveryChallan: challan, lines, receipts } = state.result;
-  const canReceive = hasPermission("receiving.receive");
-  const canFallback = hasPermission("receiving.fallback_receive");
   const openLines = lines.filter((line) => Number(line.unresolved_quantity) > 0);
 
   function update(lineId, field, value) {
@@ -102,7 +105,7 @@ export function ReceiveDeliveryPage() {
     try {
       const response = await recordReceipt(id, {
         operationId,
-        fallback,
+        fallback: fallbackOnly || fallback,
         note: note.trim() || null,
         lines: payloadLines,
       });
@@ -175,13 +178,18 @@ export function ReceiveDeliveryPage() {
             never counted as received. This records arrival only; it does not create stock.
           </p>
 
-          {canFallback && (
+          {fallbackOnly && (
+            <p className={styles.fallback} role="note" data-testid="fallback-notice">
+              <strong>Temporary Site Administrator custody.</strong> You are receiving as temporary custody because nobody from the department is available. This is not a department receipt; the department must acknowledge the handover afterwards.
+            </p>
+          )}
+
+          {canFallback && !fallbackOnly && (
             <label className={styles.fallback}>
               <input
                 type="checkbox"
                 checked={fallback}
                 onChange={(event) => setFallback(event.target.checked)}
-                disabled={!canFallback}
               />
               <span>
                 Receive as temporary Admin custody — nobody from the department is available. The department
@@ -259,7 +267,7 @@ export function ReceiveDeliveryPage() {
           )}
 
           <Button onClick={handleSubmit} loading={submitting} disabled={!canReceive && !canFallback}>
-            {fallback ? "Record temporary custody" : "Record receipt"}
+            {fallbackOnly || fallback ? "Receive into Temporary Site Administrator Custody" : "Record receipt"}
           </Button>
         </section>
       )}

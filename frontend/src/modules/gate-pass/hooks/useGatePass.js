@@ -24,7 +24,7 @@ export function useGatePass(id) {
         })
         .catch((requestError) => {
           if (!silent) {
-            setError(requestError.message || "Unable to load this Gate Pass.");
+            setError(requestError);
             setStatus("error");
           }
         });

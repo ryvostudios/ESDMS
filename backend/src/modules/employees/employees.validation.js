@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { optionalQueryValue } from "../../shared/http/query-validation.js";
 
 const EMPLOYEE_CODE = z.string().trim().regex(/^[A-Za-z0-9_-]{2,30}$/, "Invalid employee ID format.");
 const EMPLOYMENT_STATUSES = ["ACTIVE", "INACTIVE", "RESIGNED", "TERMINATED"];
@@ -65,11 +66,11 @@ export const createLoginSchema = z.object({
 });
 
 export const listQuerySchema = z.object({
-  siteId: z.string().uuid().optional(),
-  status: z.enum(EMPLOYMENT_STATUSES).optional(),
-  departmentId: z.string().uuid().optional(),
-  positionId: z.string().uuid().optional(),
-  search: z.string().trim().max(150).optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(25),
-});
+  siteId: optionalQueryValue(z.string().uuid()),
+  status: optionalQueryValue(z.enum(EMPLOYMENT_STATUSES)),
+  departmentId: optionalQueryValue(z.string().uuid()),
+  positionId: optionalQueryValue(z.string().uuid()),
+  search: optionalQueryValue(z.string().trim().max(150)),
+  page: optionalQueryValue(z.coerce.number().int().min(1)).default(1),
+  pageSize: optionalQueryValue(z.coerce.number().int().min(1).max(100)).default(25),
+}).strict();

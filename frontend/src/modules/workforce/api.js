@@ -1,4 +1,5 @@
 import { apiClient } from "../../core/api/client.js";
+import { buildQuery } from "../../core/api/query.js";
 
 // --- Self-service (mounted at /me/...) --------------------------------
 export const getMyProfile = () => apiClient.get("/me/profile");
@@ -7,6 +8,7 @@ export const addMyEmergencyContact = (body) => apiClient.post("/me/profile/emerg
 export const removeMyEmergencyContact = (id) => apiClient.del(`/me/profile/emergency-contacts/${id}`);
 export const setMyFieldValue = (fieldId, value) => apiClient.put(`/me/profile/fields/${fieldId}`, { value });
 export const uploadMyPhoto = (formData) => apiClient.post("/me/profile/photo", formData, { isForm: true });
+export const getMyPhotoBlob = () => apiClient.getBlob("/me/profile/photo");
 
 export const getMyDocuments = () => apiClient.get("/me/documents");
 export const getMyDocumentRequests = () => apiClient.get("/me/documents/requests");
@@ -29,14 +31,14 @@ export const updateLeaveType = (id, body) => apiClient.patch(`/leave-types/${id}
 
 // --- HR / management --------------------------------------------------
 export const listEmployees = (params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return apiClient.get(`/employees${query ? `?${query}` : ""}`);
+  return apiClient.get(`/employees${buildQuery(params)}`);
 };
 export const getEmployeeStatusSummary = () => apiClient.get("/employees/status-summary");
 export const checkDuplicateEmployees = (body) => apiClient.post("/employees/check-duplicates", body);
 export const createEmployee = (body) => apiClient.post("/employees", body);
 export const getEmployee = (id) => apiClient.get(`/employees/${id}`);
 export const getEmployeeProfile = (id) => apiClient.get(`/employees/${id}/profile`);
+export const getEmployeePhotoBlob = (id) => apiClient.getBlob(`/employees/${id}/profile/photo`);
 export const getEmployeeAssignments = (id) => apiClient.get(`/employees/${id}/assignments`);
 export const transferEmployee = (id, body) => apiClient.post(`/employees/${id}/transfer`, body);
 export const changeEmployeeStatus = (id, body) => apiClient.post(`/employees/${id}/status`, body);
@@ -48,12 +50,12 @@ export const listSites = () => apiClient.get("/employees/sites");
 // Active selector (Add Employee/transfer dropdowns) — requires an explicit
 // target siteId for an all-site actor; a site-scoped actor's own site is
 // used regardless (see backend resolveTargetSiteId).
-export const listDepartments = (siteId) => apiClient.get(`/departments${siteId ? `?siteId=${siteId}` : ""}`);
+export const listDepartments = (siteId) => apiClient.get(`/departments${buildQuery({ siteId })}`);
 export const listDepartmentsManage = () => apiClient.get("/departments/manage");
 export const createDepartment = (body) => apiClient.post("/departments", body);
 export const archiveDepartment = (id, isActive) => apiClient.patch(`/departments/${id}`, { isActive });
 
-export const listPositions = (siteId) => apiClient.get(`/positions${siteId ? `?siteId=${siteId}` : ""}`);
+export const listPositions = (siteId) => apiClient.get(`/positions${buildQuery({ siteId })}`);
 export const listPositionsManage = () => apiClient.get("/positions/manage");
 export const createPosition = (body) => apiClient.post("/positions", body);
 export const updatePosition = (id, body) => apiClient.patch(`/positions/${id}`, body);
@@ -112,14 +114,13 @@ export const updateRotationPolicy = (id, body) => apiClient.patch(`/rotation-pol
 export const downloadEmployeeMasterReport = () => apiClient.getBlob("/reports/workforce/employee-master.xlsx");
 export const getReportCatalog = () => apiClient.get("/reports/workforce/catalog");
 export const downloadWorkforceReport = (key, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return apiClient.getBlob(`/reports/workforce/${key}.xlsx${query ? `?${query}` : ""}`);
+  return apiClient.getBlob(`/reports/workforce/${key}.xlsx${buildQuery(params)}`);
 };
 export const downloadBulkFiles = (body) => apiClient.postBlob("/reports/workforce/bulk-files.zip", body);
 export const downloadImportTemplate = () => apiClient.getBlob("/employees/import/template.xlsx");
 export const previewEmployeeImport = (formData) => apiClient.post("/employees/import/preview", formData, { isForm: true });
 export const confirmEmployeeImport = (formData) => apiClient.post("/employees/import/confirm", formData, { isForm: true });
-export const listExpiringDocuments = (withinDays = 30) => apiClient.get(`/documents/expiring?withinDays=${withinDays}`);
+export const listExpiringDocuments = (withinDays = 30) => apiClient.get(`/documents/expiring${buildQuery({ withinDays })}`);
 
 // Governance
 export const listUsers = () => apiClient.get("/users");

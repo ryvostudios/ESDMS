@@ -1,17 +1,5 @@
 import { apiClient } from "../../core/api/client.js";
-
-function buildQuery(params) {
-  const query = new URLSearchParams();
-
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") {
-      query.set(key, value);
-    }
-  }
-
-  const queryString = query.toString();
-  return queryString ? `?${queryString}` : "";
-}
+import { buildQuery } from "../../core/api/query.js";
 
 export function listDemands(filters) {
   return apiClient.get(`/demands${buildQuery(filters)}`);
@@ -62,8 +50,5 @@ export function getDemandPdf(id) {
 }
 
 export function listOutstandingForCatalogEntries(catalogEntryIds, departmentId) {
-  const query = new URLSearchParams();
-  catalogEntryIds.forEach((id) => query.append("catalogEntryIds", id));
-  if (departmentId) query.set("departmentId", departmentId);
-  return apiClient.get(`/ipos/outstanding?${query.toString()}`);
+  return apiClient.get(`/ipos/outstanding${buildQuery({ catalogEntryIds, departmentId })}`);
 }

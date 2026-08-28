@@ -1,7 +1,7 @@
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
 import { resolveCreateSiteId, resolveTargetSiteId, employeeSiteFilter } from "../workforce/workforce.authorization.js";
-import { createDepartmentSchema, updateDepartmentSchema } from "./departments.validation.js";
+import { createDepartmentSchema, updateDepartmentSchema, departmentListQuerySchema } from "./departments.validation.js";
 import {
   listActiveDepartmentsForSite,
   listDepartmentsForSite,
@@ -19,7 +19,8 @@ function parseBody(schema, body) {
 }
 
 export const list = asyncHandler(async (req, res) => {
-  const siteId = resolveTargetSiteId(req.user, req.query.siteId);
+  const query = parseBody(departmentListQuerySchema, req.query);
+  const siteId = resolveTargetSiteId(req.user, query.siteId);
   const rows = await listActiveDepartmentsForSite(siteId);
   res.status(200).json({ success: true, data: rows });
 });
