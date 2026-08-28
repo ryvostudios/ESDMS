@@ -71,6 +71,7 @@ export const listEmployeeContracts = (id) => apiClient.get(`/employees/${id}/con
 export const createContractDraft = (id, body) => apiClient.post(`/employees/${id}/contracts`, body);
 export const uploadContractFile = (id, contractId, formData) =>
   apiClient.post(`/employees/${id}/contracts/${contractId}/file`, formData, { isForm: true });
+export const updateContractDraft = (id, contractId, body) => apiClient.patch(`/employees/${id}/contracts/${contractId}`, body);
 export const finalizeContract = (id, contractId) => apiClient.post(`/employees/${id}/contracts/${contractId}/finalize`, {});
 export const getContractBlob = (id, contractId) => apiClient.getBlob(`/employees/${id}/contracts/${contractId}/download`);
 

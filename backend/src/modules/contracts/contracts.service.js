@@ -127,6 +127,19 @@ export async function finalizeContract(actor, employeeId, contractId) {
   if (contract.status !== "DRAFT") throw new ConflictError("Only a DRAFT contract can be finalized.");
   if (!contract.storage_key) throw new ValidationError("Upload the contract file before finalizing.");
 
+  // Finalization is irreversible: the DB trigger makes every content column
+  // immutable from here on, so an incomplete contract can never be repaired
+  // afterwards. The effective start date and the terms summary are original
+  // terms (docs/SECURITY.md) and the only human-readable record of what was
+  // agreed, so they must be present before the record is frozen. The end
+  // date stays optional — an open-ended permanent contract has none.
+  if (!contract.effective_start_date) {
+    throw new ValidationError("Set the effective start date before finalizing this contract.");
+  }
+  if (!contract.terms_summary) {
+    throw new ValidationError("Add the terms summary before finalizing this contract.");
+  }
+
   const storedFile = await storageService.read(contract.storage_key);
   if (!storageService.verifyChecksum(storedFile, contract.checksum_sha256)) {
     throw new ServiceUnavailableError("The stored contract failed its integrity check and cannot be finalized.");

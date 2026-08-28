@@ -503,7 +503,19 @@ function ContractsTab({ employeeId, hasPermission }) {
     }
   }
 
+  async function saveDraftDetails(contractId, details) {
+    setMessage(null);
+    try {
+      await api.updateContractDraft(employeeId, contractId, details);
+      setMessage("Contract details saved.");
+      load();
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : "Unable to save contract details.");
+    }
+  }
+
   async function finalize(contractId) {
+    setMessage(null);
     try {
       await api.finalizeContract(employeeId, contractId);
       load();
@@ -524,7 +536,10 @@ function ContractsTab({ employeeId, hasPermission }) {
             {c.contract_number} ({c.kind}) — {c.status}
           </p>
           {c.status === "DRAFT" && hasPermission("contract.edit_draft") && (
-            <input type="file" accept="application/pdf" onChange={(e) => uploadFile(c.id, e)} />
+            <>
+              <ContractDraftFields contract={c} onSave={saveDraftDetails} />
+              <input type="file" accept="application/pdf" onChange={(e) => uploadFile(c.id, e)} />
+            </>
           )}
           {c.status === "DRAFT" && c.has_file && hasPermission("contract.finalize") && (
             <Button onClick={() => finalize(c.id)}>Finalize (becomes immutable)</Button>
@@ -534,6 +549,44 @@ function ContractsTab({ employeeId, hasPermission }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// The effective start date and terms summary are original contract terms:
+// once finalized the DB trigger freezes them permanently, so they have to be
+// captured while the contract is still a DRAFT. The server rejects an
+// incomplete finalization regardless of what this form does — these controls
+// exist so a legitimate user can satisfy that rule, not to enforce it.
+function ContractDraftFields({ contract, onSave }) {
+  const [effectiveStartDate, setEffectiveStartDate] = useState(contract.effective_start_date?.slice(0, 10) ?? "");
+  const [termsSummary, setTermsSummary] = useState(contract.terms_summary ?? "");
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(contract.id, { effectiveStartDate, termsSummary });
+      }}
+    >
+      <FormField label="Effective start date" htmlFor={`contractStart-${contract.id}`}>
+        <Input
+          id={`contractStart-${contract.id}`}
+          type="date"
+          value={effectiveStartDate}
+          onChange={(e) => setEffectiveStartDate(e.target.value)}
+        />
+      </FormField>
+      <FormField label="Terms summary" htmlFor={`contractTerms-${contract.id}`}>
+        <Input
+          id={`contractTerms-${contract.id}`}
+          value={termsSummary}
+          onChange={(e) => setTermsSummary(e.target.value)}
+        />
+      </FormField>
+      <Button type="submit" variant="secondary">
+        Save contract details
+      </Button>
+    </form>
   );
 }
 
