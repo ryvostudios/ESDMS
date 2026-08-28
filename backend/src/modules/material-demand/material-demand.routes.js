@@ -15,6 +15,7 @@ router.get("/:id", requirePermission("demand.view", "demand.review", "demand.app
 router.get("/:id/pdf", requirePermission("demand.view", "demand.review", "demand.approve"), controller.downloadPdf);
 router.patch("/:id", requirePermission("demand.edit"), controller.updateDraft);
 router.post("/:id/submit", requirePermission("demand.submit"), controller.submit);
+router.delete("/:id", requirePermission("demand.delete_draft"), controller.deleteDraft);
 router.post("/:id/reviews", requirePermission("demand.review"), controller.recordReview);
 router.post("/:id/approvals", requirePermission("demand.approve"), controller.recordApproval);
 router.put(

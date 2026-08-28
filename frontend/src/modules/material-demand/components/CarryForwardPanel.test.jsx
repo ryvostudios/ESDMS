@@ -5,7 +5,10 @@ import { CarryForwardPanel } from "./CarryForwardPanel.jsx";
 const mockListCatalog = vi.hoisted(() => vi.fn());
 const mockListOutstanding = vi.hoisted(() => vi.fn());
 
-vi.mock("../../material-catalog/api.js", () => ({ listCatalog: (...args) => mockListCatalog(...args) }));
+vi.mock("../../material-catalog/api.js", () => ({
+  listCatalog: (...args) => mockListCatalog(...args),
+  listAllCatalog: (...args) => mockListCatalog(...args),
+}));
 vi.mock("../api.js", () => ({
   listOutstandingForCatalogEntries: (...args) => mockListOutstanding(...args),
 }));

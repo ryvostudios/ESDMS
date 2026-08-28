@@ -1,6 +1,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AddMaterialDialog } from "./AddMaterialDialog.jsx";
+import { ApiError } from "../../../core/api/client.js";
 
 // A Department Material Catalog entry links ONE department to one global
 // Company Item, so the department is part of the request — not something the
@@ -88,5 +89,44 @@ describe("AddMaterialDialog carries the department", () => {
     open({ departmentId: "dept-civil", departments: DEPARTMENTS });
     await chooseNewMaterial("Cable");
     expect(screen.queryByLabelText("Department")).toBeNull();
+  });
+});
+
+// P4-2: a name that cannot be saved should not be typeable, and when the
+// server does reject a payload the user must be told what was wrong rather
+// than the bare "Invalid request." the dialog used to surface.
+describe("AddMaterialDialog validation feedback", () => {
+  test("the name field carries the backend's own maximum length", async () => {
+    open({ departmentId: "dept-civil", departments: [] });
+    expect(screen.getByLabelText("Search materials").getAttribute("maxLength")).toBe("150");
+  });
+
+  test("a field-level rejection is shown to the user, not swallowed", async () => {
+    mockAddCatalogEntry.mockRejectedValue(
+      new ApiError(400, "VALIDATION_ERROR", "Invalid request.", {
+        formErrors: [],
+        fieldErrors: { newItem: ["Too big: expected string to have <=150 characters"] },
+      }),
+    );
+
+    open({ departmentId: "dept-civil", departments: [] });
+    await chooseNewMaterial("Cable");
+    fireEvent.change(screen.getByLabelText("Default unit"), { target: { value: "uom-bag" } });
+    fireEvent.click(screen.getByRole("button", { name: /add material/i }));
+
+    expect(await screen.findByText(/Too big: expected string to have <=150 characters/)).toBeTruthy();
+  });
+
+  test("a conflict keeps its own clear message", async () => {
+    mockAddCatalogEntry.mockRejectedValue(
+      new ApiError(409, "CONFLICT", "This material is already in the department catalog."),
+    );
+
+    open({ departmentId: "dept-civil", departments: [] });
+    await chooseNewMaterial("Cable");
+    fireEvent.change(screen.getByLabelText("Default unit"), { target: { value: "uom-bag" } });
+    fireEvent.click(screen.getByRole("button", { name: /add material/i }));
+
+    expect(await screen.findByText(/already in the department catalog/)).toBeTruthy();
   });
 });

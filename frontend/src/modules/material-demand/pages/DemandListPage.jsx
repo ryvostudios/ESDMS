@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useDemandList } from "../hooks/useDemandList.js";
 import { useDebouncedValue } from "../../../shared/hooks/useDebouncedValue.js";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
@@ -19,6 +19,10 @@ const PAGE_SIZE = 20;
 
 export function DemandListPage() {
   const navigate = useNavigate();
+  // One-shot confirmation after an action that navigated here (deleting a
+  // draft removes the record, so there is nothing left to show it on).
+  const location = useLocation();
+  const [flash] = useState(location.state?.flash ?? null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
@@ -42,6 +46,12 @@ export function DemandListPage() {
           </PermissionGate>
         }
       />
+
+      {flash && (
+        <p role="status" className={styles.flash}>
+          {flash}
+        </p>
+      )}
 
       <div className={styles.filters}>
         <SearchField

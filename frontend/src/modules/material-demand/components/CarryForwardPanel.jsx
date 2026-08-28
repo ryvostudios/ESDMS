@@ -33,7 +33,7 @@ export function CarryForwardPanel({ departmentId, selections, onAdd }) {
     }
 
     return catalogApi
-      .listCatalog({ departmentId, pageSize: 200 })
+      .listAllCatalog({ departmentId })
       .then((response) => {
         const catalogEntryIds = response.data.map((entry) => entry.id);
         if (catalogEntryIds.length === 0) return { data: [] };

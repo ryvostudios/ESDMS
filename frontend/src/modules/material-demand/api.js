@@ -29,6 +29,10 @@ export function updateDemandDraft(id, input) {
   return apiClient.patch(`/demands/${id}`, input);
 }
 
+export function deleteDraftDemand(id) {
+  return apiClient.del(`/demands/${id}`);
+}
+
 export function submitDemand(id) {
   return apiClient.post(`/demands/${id}/submit`, {});
 }

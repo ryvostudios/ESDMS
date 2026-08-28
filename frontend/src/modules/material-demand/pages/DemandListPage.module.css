@@ -106,3 +106,14 @@
     display: none;
   }
 }
+
+/* One-shot confirmation for an action that navigated here (draft deleted). */
+.flash {
+  margin: 0 0 var(--space-4, 1rem);
+  padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--color-success-border, #86efac);
+  background: var(--color-success-surface, #f0fdf4);
+  color: var(--color-success-text, #166534);
+  font-size: 0.9rem;
+}

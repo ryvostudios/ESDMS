@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Dialog } from "../../../shared/components/Dialog.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { Input, Select } from "../../../shared/components/FormField.jsx";
-import { ApiError } from "../../../core/api/client.js";
+import { apiErrorMessage } from "../../../shared/utilities/api-error-message.js";
 import * as api from "../api.js";
 import styles from "./AddMaterialDialog.module.css";
+
+export const MATERIAL_NAME_MAX_LENGTH = 150;
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -83,7 +85,7 @@ export function AddMaterialDialog({ open, onClose, onAdded, departmentId, depart
       onAdded(response.data);
       onClose();
     } catch (submitError) {
-      setError(submitError instanceof ApiError ? submitError.message : "Unable to add this material.");
+      setError(apiErrorMessage(submitError, "Unable to add this material."));
     } finally {
       setSubmitting(false);
     }
@@ -96,10 +98,13 @@ export function AddMaterialDialog({ open, onClose, onAdded, departmentId, depart
     <Dialog open={open} onClose={onClose} title="Add Material" labelledBy="add-material-title">
       {!candidate && (
         <>
+          {/* Matches newItemSchema's max in material-catalog.validation.js —
+              a name that cannot be saved should not be typeable. */}
           <Input
             autoFocus
             placeholder="Search materials…"
             aria-label="Search materials"
+            maxLength={MATERIAL_NAME_MAX_LENGTH}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />

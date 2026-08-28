@@ -6,7 +6,8 @@ const DETAIL_COLUMNS = `
   md.site_id, s.name AS site_name,
   md.department_id, d.name AS department_name,
   md.created_by_user_id, cu.full_name AS created_by_name,
-  md.submitted_at, md.created_at, md.updated_at
+  md.submitted_at, md.created_at, md.updated_at,
+  md.draft_delete_eligible
 `;
 
 const DETAIL_FROM = `
@@ -108,11 +109,47 @@ export async function updateNote(client, demandId, note) {
 export async function lockById(client, id) {
   const result = await client.query(
     `SELECT id, demand_number, status, revision, site_id, department_id, created_by_user_id,
+            draft_delete_eligible,
             (SELECT name FROM departments WHERE id = material_demands.department_id) AS department_name
      FROM material_demands WHERE id = $1 FOR UPDATE`,
     [id],
   );
 
+  return result.rows[0] || null;
+}
+
+// Counts everything downstream that must make a Demand undeletable. The
+// two foreign keys (material_demand_pricing, ipos) are ON DELETE RESTRICT,
+// so the database refuses the delete regardless — this exists so the API
+// can answer with a clear 409 instead of surfacing a raw FK violation.
+export async function countDownstreamReferences(client, demandId) {
+  const result = await client.query(
+    `SELECT
+       (SELECT COUNT(*) FROM material_demand_pricing WHERE demand_id = $1) AS pricing,
+       (SELECT COUNT(*) FROM ipos WHERE demand_id = $1) AS ipos,
+       (SELECT COUNT(*) FROM material_demand_approvals WHERE demand_id = $1) AS approvals`,
+    [demandId],
+  );
+  const row = result.rows[0];
+  return { pricing: Number(row.pricing), ipos: Number(row.ipos), approvals: Number(row.approvals) };
+}
+
+export async function countLines(client, demandId) {
+  const result = await client.query("SELECT COUNT(*) AS count FROM material_demand_lines WHERE demand_id = $1", [demandId]);
+  return Number(result.rows[0].count);
+}
+
+// Deletes only while the row is still DRAFT. The status predicate is part
+// of the statement rather than a prior read so a concurrent SUBMIT cannot
+// slip in between the check and the delete — the caller already holds the
+// row lock, and this makes the guarantee independent of that too.
+// material_demand_lines / _audit_log / _approvals cascade; pricing and ipos
+// RESTRICT and would raise instead.
+export async function deleteDraft(client, id) {
+  const result = await client.query(
+    "DELETE FROM material_demands WHERE id = $1 AND status = 'DRAFT' AND draft_delete_eligible RETURNING id",
+    [id],
+  );
   return result.rows[0] || null;
 }
 

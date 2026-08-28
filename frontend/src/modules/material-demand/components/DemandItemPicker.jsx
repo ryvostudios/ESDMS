@@ -5,7 +5,7 @@ import { Button } from "../../../shared/components/Button.jsx";
 import { LoadingState, ErrorState, EmptyState } from "../../../shared/components/StatePanel.jsx";
 import { AddMaterialDialog } from "../../material-catalog/components/AddMaterialDialog.jsx";
 import * as catalogApi from "../../material-catalog/api.js";
-import { ApiError } from "../../../core/api/client.js";
+import { apiErrorMessage } from "../../../shared/utilities/api-error-message.js";
 import styles from "./DemandItemPicker.module.css";
 
 // Controlled: `selections` is a plain { [catalogEntryId]: quantityString }
@@ -31,10 +31,13 @@ export function DemandItemPicker({ departmentId, selections, onChange, disabled 
 
     setLoading(true);
     setError(null);
+    // Pages through the department catalog in server-accepted chunks
+    // (the API caps pageSize at 100), so a department with more than 100
+    // materials is fully listed rather than silently cut off.
     return catalogApi
-      .listCatalog({ departmentId, pageSize: 200 })
+      .listAllCatalog({ departmentId })
       .then((response) => setCatalog(response.data))
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Unable to load the material catalog."))
+      .catch((err) => setError(apiErrorMessage(err, "Unable to load the material catalog.")))
       .finally(() => setLoading(false));
   }, [departmentId]);
 

@@ -7,7 +7,8 @@ import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { LoadingState, ErrorState, EmptyState } from "../../../shared/components/StatePanel.jsx";
 import { Pagination } from "../../../shared/components/Pagination.jsx";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
-import { ApiError } from "../../../core/api/client.js";
+import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
+import { apiErrorMessage } from "../../../shared/utilities/api-error-message.js";
 import { listDepartmentsManage } from "../../workforce/api.js";
 import { AddMaterialDialog } from "../components/AddMaterialDialog.jsx";
 import * as api from "../api.js";
@@ -30,6 +31,13 @@ export function MaterialCatalogPage() {
   const [departmentId, setDepartmentId] = useState("");
   const [page, setPage] = useState(1);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  // The API's includeInactive returns active AND archived rows; "Active" is
+  // the default view, "All statuses" is how an archived material is found
+  // again so it can be restored. Archiving used to be a one-way trip purely
+  // because nothing ever asked for the archived rows.
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [pendingArchive, setPendingArchive] = useState(null);
+  const [actionError, setActionError] = useState(null);
 
   useEffect(() => {
     api
@@ -54,32 +62,41 @@ export function MaterialCatalogPage() {
         pageSize: PAGE_SIZE,
         ...(search && { search }),
         ...(departmentId && { departmentId }),
+        ...(includeInactive && { includeInactive: "true" }),
       });
       setRows(response.data);
       setTotal(response.meta.total);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Unable to load the material catalog.");
+      setError(apiErrorMessage(err, "Unable to load the material catalog."));
     } finally {
       setLoading(false);
     }
-  }, [search, departmentId, page]);
+  }, [search, departmentId, page, includeInactive]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
-  async function toggleActive(row) {
+  async function setActive(row, isActive) {
+    setActionError(null);
     try {
-      await api.updateCatalogEntry(row.id, { isActive: !row.is_active });
+      await api.updateCatalogEntry(row.id, { isActive });
       load();
-    } catch {
-      // The row simply doesn't update; the existing error banner covers a
-      // failed initial load, and this is a low-stakes, retryable toggle.
+    } catch (err) {
+      setActionError(apiErrorMessage(err, isActive ? "Unable to restore this material." : "Unable to archive this material."));
     }
   }
 
-  const hasActiveFilter = Boolean(search || departmentId);
+  // Archiving removes a material from every new Demand's picker, so it is
+  // confirmed. Restoring is not — it only puts a choice back.
+  async function confirmArchive() {
+    const row = pendingArchive;
+    setPendingArchive(null);
+    if (row) await setActive(row, false);
+  }
+
+  const hasActiveFilter = Boolean(search || departmentId || includeInactive);
   const targetDepartmentId = departmentId || user.departmentId;
   // "All departments" is the default filter for a company-wide actor, and they
   // have no department of their own — so requiring a resolved department here
@@ -135,8 +152,21 @@ export function MaterialCatalogPage() {
             ))}
           </Select>
         )}
+        <Select
+          className={styles.filterSelect}
+          aria-label="Status"
+          value={includeInactive ? "all" : "active"}
+          onChange={(event) => {
+            setIncludeInactive(event.target.value === "all");
+            setPage(1);
+          }}
+        >
+          <option value="active">Active only</option>
+          <option value="all">All statuses</option>
+        </Select>
       </div>
 
+      {actionError && <ErrorState message={actionError} />}
       {loading && <LoadingState />}
       {error && <ErrorState message={error} onRetry={load} />}
 
@@ -178,7 +208,10 @@ export function MaterialCatalogPage() {
                   </td>
                   {canManage && (
                     <td className={styles.actionCell}>
-                      <Button variant="ghost" onClick={() => toggleActive(row)}>
+                      <Button
+                        variant="ghost"
+                        onClick={() => (row.is_active ? setPendingArchive(row) : setActive(row, true))}
+                      >
                         {row.is_active ? "Archive" : "Restore"}
                       </Button>
                     </td>
@@ -200,7 +233,10 @@ export function MaterialCatalogPage() {
                   <span>{row.default_uom_name}</span>
                 </div>
                 {canManage && (
-                  <Button variant="ghost" onClick={() => toggleActive(row)}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => (row.is_active ? setPendingArchive(row) : setActive(row, true))}
+                  >
                     {row.is_active ? "Archive" : "Restore"}
                   </Button>
                 )}
@@ -210,6 +246,17 @@ export function MaterialCatalogPage() {
 
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
         </>
+      )}
+
+      {pendingArchive && (
+        <ConfirmActionDialog
+          open
+          onClose={() => setPendingArchive(null)}
+          title="Archive material"
+          message={`Archive “${pendingArchive.item_name}” from the department catalog? It will no longer appear when building a new Demand. Existing Demands keep it, and you can restore it later.`}
+          confirmLabel="Archive"
+          onConfirm={confirmArchive}
+        />
       )}
 
       {canManage && (

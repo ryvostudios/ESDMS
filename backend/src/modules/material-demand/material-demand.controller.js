@@ -92,3 +92,8 @@ export const setLineDispositions = asyncHandler(async (req, res) => {
   const result = await service.getDemandDetail(req.user, req.params.id);
   res.status(200).json({ success: true, data: result });
 });
+
+export const deleteDraft = asyncHandler(async (req, res) => {
+  await service.deleteDraftDemand(req.user, req.params.id);
+  res.status(204).send();
+});

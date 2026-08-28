@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDemand } from "../hooks/useDemand.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
-import { submitDemand, recordManagementReview, recordFormalApproval } from "../api.js";
+import { submitDemand, recordManagementReview, recordFormalApproval, deleteDraftDemand } from "../api.js";
 import { DemandStatusBadge } from "../components/DemandStatusBadge.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { AuditTimeline } from "../components/AuditTimeline.jsx";
@@ -11,6 +11,7 @@ import { Button } from "../../../shared/components/Button.jsx";
 import { LoadingState, ErrorState } from "../../../shared/components/StatePanel.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
+import { apiErrorMessage } from "../../../shared/utilities/api-error-message.js";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { usePricing } from "../../procurement/hooks/usePricing.js";
 import { PricingSummary } from "../../procurement/components/PricingSummary.jsx";
@@ -93,6 +94,15 @@ export function DemandDetailPage() {
   const dispositionByLine = new Map(dispositions.map((entry) => [entry.demand_line_id, entry]));
   const canEdit = EDITABLE_STATUSES.includes(demand.status) && hasPermission("demand.edit");
   const canSubmit = SUBMITTABLE_STATUSES.includes(demand.status) && hasPermission("demand.submit");
+  // DRAFT only. Everything past submission keeps its history and is closed
+  // out through the review/rejection lifecycle instead — the server enforces
+  // the same rule, this only avoids offering an action that would be refused.
+  // Eligibility is never inferred here — the server sends the persistent flag
+  // and a Demand predating the protected lifecycle simply gets no destructive
+  // control. `!== false` keeps the button working against an older API
+  // response that omits the field entirely; the server refuses regardless.
+  const canDeleteDraft =
+    demand.status === "DRAFT" && demand.draft_delete_eligible !== false && hasPermission("demand.delete_draft");
   const canPrice = demand.status === "READY_FOR_PRICING" && hasPermission("procurement.pricing");
   const canViewSubmittedPrices =
     ["PENDING_FINAL_APPROVAL", "PRICING_REVISION_REQUIRED", "READY_FOR_IPO", "IPO_GENERATED", "IPO_CANCELLED", "COMPLETED"].includes(
@@ -111,6 +121,20 @@ export function DemandDetailPage() {
   async function handleSubmit() {
     await submitDemand(id);
     await reload();
+  }
+
+  async function handleDeleteDraft() {
+    try {
+      await deleteDraftDemand(id);
+    } catch (err) {
+      // Most likely someone submitted it in another tab between this page
+      // loading and the click. Refresh underneath so the page stops
+      // offering the action, and re-throw so ConfirmActionDialog shows the
+      // server's actual reason (the established pattern in this codebase).
+      await reload().catch(() => {});
+      throw new Error(apiErrorMessage(err, "Unable to delete this Demand."), { cause: err });
+    }
+    navigate("/demands", { replace: true, state: { flash: `${demand.demand_number} was deleted.` } });
   }
 
   async function handleReviewDecision(decision, reason) {
@@ -153,6 +177,11 @@ export function DemandDetailPage() {
           {canEdit && (
             <Button variant="secondary" onClick={() => navigate(`/demands/${id}/edit`)}>
               Edit
+            </Button>
+          )}
+          {canDeleteDraft && (
+            <Button variant="ghost" onClick={() => setActiveDialog("delete-draft")}>
+              Delete Draft
             </Button>
           )}
           {canSubmit && <Button onClick={() => setActiveDialog("submit")}>Submit for Review</Button>}
@@ -248,6 +277,14 @@ export function DemandDetailPage() {
         </div>
       </div>
 
+      <ConfirmActionDialog
+        open={activeDialog === "delete-draft"}
+        onClose={() => setActiveDialog(null)}
+        title="Delete this draft Demand?"
+        message="This cannot be undone. The draft and its material lines are removed permanently."
+        confirmLabel="Delete Draft"
+        onConfirm={handleDeleteDraft}
+      />
       <ConfirmActionDialog
         open={activeDialog === "submit"}
         onClose={() => setActiveDialog(null)}

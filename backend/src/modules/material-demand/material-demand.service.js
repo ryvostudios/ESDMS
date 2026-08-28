@@ -4,6 +4,7 @@ import { enqueue } from "../../shared/notifications/outbox.repository.js";
 import { resolveEligibleRecipients } from "../../shared/notifications/recipient-resolver.js";
 import { NotFoundError, ForbiddenError, ConflictError, ValidationError } from "../../shared/errors/app-error.js";
 import { findDepartmentById } from "../departments/departments.repository.js";
+import { recordGovernanceAudit } from "../../shared/audit/governance-audit.repository.js";
 import {
   resolveDemandDepartmentId,
   resolveDemandListScope,
@@ -184,6 +185,84 @@ export async function listDemands(actor, filters) {
   }
 
   return repo.listForScope(scope, filters);
+}
+
+export const DELETE_DRAFT_PERMISSION = "demand.delete_draft";
+
+// Hard-deletes a Demand List that is still an untouched DRAFT.
+//
+// Deliberately narrow. Everything past SUBMIT has a review/rejection
+// lifecycle and must keep its history, so DRAFT is the only deletable
+// state. The draft's own material_demand_lines / _audit_log / _approvals
+// rows cascade away with it; material_demand_pricing and ipos reference
+// material_demands with ON DELETE RESTRICT, so the database independently
+// refuses to drop anything that ever reached procurement. The explicit
+// downstream check below exists only so the API can answer 409 with a
+// reason instead of surfacing a raw foreign-key violation.
+//
+// Because the cascade removes the draft's row-level history, the
+// append-only governance_audit_log row written first is the only surviving
+// evidence the Demand existed — and it is written inside the same
+// transaction as the delete, so the two cannot diverge.
+export async function deleteDraftDemand(actor, id) {
+  if (!actor.permissions.has(DELETE_DRAFT_PERMISSION)) {
+    throw new ForbiddenError();
+  }
+
+  await withTransaction(async (client) => {
+    const demand = await repo.lockById(client, id);
+
+    if (!demand) {
+      throw new NotFoundError("Demand not found.");
+    }
+
+    // Same scope rule as editing/submitting: own department, or every
+    // department for a CEO/all-departments actor. A foreign-department
+    // Demand is reported exactly as a nonexistent one.
+    assertDemandManageable(actor, demand);
+
+    if (demand.status !== MATERIAL_DEMAND_STATUS.DRAFT) {
+      throw new ConflictError(`Cannot delete a Demand currently in ${demand.status} state. Only a DRAFT can be deleted.`);
+    }
+
+    // Being a DRAFT now is not proof of having only ever been one. Demands
+    // that predate the protected lifecycle carry draft_delete_eligible =
+    // false and stay preserved. Checked before the governance audit row is
+    // written so an ineligible attempt never records a deletion that did not
+    // happen. The message stays about the Demand, not about migrations.
+    if (!demand.draft_delete_eligible) {
+      throw new ConflictError("This Demand is not eligible for deletion and must be kept for its history.");
+    }
+
+    const downstream = await repo.countDownstreamReferences(client, id);
+    if (downstream.pricing > 0 || downstream.ipos > 0 || downstream.approvals > 0) {
+      throw new ConflictError("This Demand has downstream history and cannot be deleted.");
+    }
+
+    const lineCount = await repo.countLines(client, id);
+
+    // Identity and size only — never the business payload.
+    await recordGovernanceAudit(client, {
+      actorUserId: actor.id,
+      action: "DEMAND_DRAFT_DELETED",
+      metadata: {
+        demandId: demand.id,
+        demandNumber: demand.demand_number,
+        departmentId: demand.department_id,
+        departmentName: demand.department_name,
+        lineCount,
+      },
+    });
+
+    // Status is re-asserted in the DELETE itself, so a concurrent submit
+    // that somehow raced the row lock still cannot be destroyed here.
+    // Both facts are re-asserted in the DELETE itself, so anything that raced
+    // the row lock still cannot be destroyed here.
+    const deleted = await repo.deleteDraft(client, id);
+    if (!deleted) {
+      throw new ConflictError("Cannot delete a Demand currently in PENDING_INITIAL_REVIEW state. Only a DRAFT can be deleted.");
+    }
+  });
 }
 
 export async function submitDemand(actor, id) {

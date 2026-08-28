@@ -8,6 +8,7 @@ const mockSearchCompanyItems = vi.hoisted(() => vi.fn());
 
 vi.mock("../../material-catalog/api.js", () => ({
   listCatalog: (...args) => mockListCatalog(...args),
+  listAllCatalog: (...args) => mockListCatalog(...args),
   listUnitsOfMeasure: (...args) => mockListUnitsOfMeasure(...args),
   searchCompanyItems: (...args) => mockSearchCompanyItems(...args),
   addCatalogEntry: vi.fn(),

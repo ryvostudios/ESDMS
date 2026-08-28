@@ -60,6 +60,10 @@ test("a user with no overrides has exactly their role's permissions", async () =
       // API responses, documents and exports.
       "dc.view",
       "demand.create",
+      // Deleting one's own untouched DRAFT is the inverse of creating it, so
+      // it sits with demand.create rather than being implied by demand.edit.
+      // It reaches only DRAFTs in this Team Lead's own department.
+      "demand.delete_draft",
       "demand.edit",
       "demand.submit",
       "demand.view",
