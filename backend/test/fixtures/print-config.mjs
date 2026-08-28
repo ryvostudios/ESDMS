@@ -9,5 +9,8 @@ process.stdout.write(
     frontendOrigins: config.frontendOrigins,
     appPublicUrl: config.appPublicUrl,
     apiPublicUrl: config.apiPublicUrl,
+    databasePoolMax: config.databasePoolMax,
+    databaseConnectionTimeoutMs: config.databaseConnectionTimeoutMs,
+    buildRevision: config.buildRevision,
   }),
 );

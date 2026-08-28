@@ -211,6 +211,27 @@ if (!isValidTimezone(appTimezone)) {
 
 const storageProvider = process.env.STORAGE_PROVIDER || "local";
 
+function optionalStrictInt(name, defaultValue, range) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return defaultValue;
+  const parsed = parseStrictInt(raw.trim(), range);
+  if (parsed === null) {
+    throw new Error(`${name} must be an integer between ${range.min} and ${range.max} (got "${raw}").`);
+  }
+  return parsed;
+}
+
+const databasePoolMax = optionalStrictInt("DATABASE_POOL_MAX", 10, { min: 1, max: 100 });
+const databaseConnectionTimeoutMs = optionalStrictInt("DATABASE_CONNECTION_TIMEOUT_MS", 5_000, {
+  min: 250,
+  max: 120_000,
+});
+
+const buildRevision = process.env.BUILD_REVISION || process.env.RENDER_GIT_COMMIT || "development";
+if (!/^[A-Za-z0-9._-]{1,100}$/.test(buildRevision)) {
+  throw new Error("BUILD_REVISION must contain only letters, numbers, dots, underscores or hyphens (maximum 100 characters).");
+}
+
 const storageTimeoutRaw = process.env.SUPABASE_STORAGE_TIMEOUT_MS;
 let supabaseStorageTimeoutMs = 10_000;
 if (storageTimeoutRaw !== undefined && storageTimeoutRaw.trim() !== "") {
@@ -229,6 +250,9 @@ export const config = {
   host,
   port,
   databaseUrl: required("DATABASE_URL"),
+  databasePoolMax,
+  databaseConnectionTimeoutMs,
+  buildRevision,
   jwtSecret,
   jwtExpiresIn,
   jwtExpiresInMs: parseDurationMs(jwtExpiresIn),

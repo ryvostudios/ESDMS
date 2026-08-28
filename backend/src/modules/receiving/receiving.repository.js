@@ -157,8 +157,8 @@ export async function markConfirmed(client, id, actorId) {
   );
 }
 
-export async function findActiveEmployee(employeeId, siteId) {
-  const result = await pool.query(
+export async function findActiveEmployee(executor, employeeId, siteId) {
+  const result = await executor.query(
     `SELECT id, full_legal_name FROM employees
      WHERE id = $1 AND status = 'ACTIVE' AND primary_site_id = $2`,
     [employeeId, siteId],

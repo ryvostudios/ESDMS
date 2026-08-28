@@ -54,8 +54,8 @@ import pool from "../../config/database.js";
 // intentionally refuses to move a privileged account's site scope on its own
 // (see the SITE_CHANGED branch). Overriding that here would silently reverse
 // a documented decision.
-export async function getUserProfileById(userId) {
-  const result = await pool.query(
+async function selectUserProfiles(executor, userId = null) {
+  const result = await executor.query(
     `SELECT
        u.id, u.email, u.full_name, u.is_active, u.site_id, u.session_version,
        u.must_change_password,
@@ -100,11 +100,24 @@ export async function getUserProfileById(userId) {
          WHERE o.user_id = u.id AND o.permission_id = p.id AND o.effect = 'DENY'
        )
      ) perm ON true
-     WHERE u.id = $1`,
+     WHERE ($1::uuid IS NULL OR u.id = $1)
+     ORDER BY u.id`,
     [userId],
   );
 
-  return result.rows[0] || null;
+  return result.rows;
+}
+
+export async function getUserProfileById(userId, executor = pool) {
+  const rows = await selectUserProfiles(executor, userId);
+  return rows[0] || null;
+}
+
+// Recipient routing uses this same authoritative projection in one
+// set-oriented query. It must not rebuild effective permission or employee
+// assignment rules independently.
+export async function listUserProfiles(executor = pool) {
+  return selectUserProfiles(executor);
 }
 
 // A deactivated role or site must immediately stop granting operational

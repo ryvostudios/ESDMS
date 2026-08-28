@@ -1,5 +1,7 @@
 import { Router } from "express";
 import pool from "../config/database.js";
+import config from "../config/env.js";
+import { EXPECTED_MIGRATION, inspectSchemaCompatibility } from "../shared/db/schema-compatibility.js";
 
 const router = Router();
 
@@ -19,10 +21,26 @@ router.get("/", (req, res) => {
 // exposes the underlying DB error to the caller — only whether it's ready.
 router.get("/ready", async (req, res) => {
   try {
-    await pool.query("SELECT 1");
-    res.status(200).json({ success: true, data: { status: "ready" } });
+    const compatibility = await inspectSchemaCompatibility(pool);
+    const ready = compatibility.schemaCompatible;
+    res.status(ready ? 200 : 503).json({
+      success: ready,
+      data: {
+        status: ready ? "ready" : "not_ready",
+        backendRevision: config.buildRevision,
+        ...compatibility,
+      },
+    });
   } catch {
-    res.status(503).json({ success: false, data: { status: "not_ready" } });
+    res.status(503).json({
+      success: false,
+      data: {
+        status: "not_ready",
+        backendRevision: config.buildRevision,
+        expectedMigration: EXPECTED_MIGRATION,
+        schemaCompatible: false,
+      },
+    });
   }
 });
 

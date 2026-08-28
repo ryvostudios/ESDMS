@@ -34,6 +34,7 @@ import { DeliveryChallanDetailPage } from "../../modules/delivery-challan/pages/
 import { ReceivingQueuePage } from "../../modules/receiving/pages/ReceivingQueuePage.jsx";
 import { ReceiveDeliveryPage } from "../../modules/receiving/pages/ReceiveDeliveryPage.jsx";
 import { ReceiptDetailPage } from "../../modules/receiving/pages/ReceiptDetailPage.jsx";
+import { DiagnosticsPage } from "./DiagnosticsPage.jsx";
 
 const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"];
 
@@ -41,6 +42,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/diagnostics" element={<DiagnosticsPage />} />
       <Route
         element={
           <ProtectedRoute>

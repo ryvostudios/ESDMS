@@ -321,18 +321,18 @@ export async function submitDemand(actor, id) {
     // capabilities so a user holding both (e.g. CEO) gets one notification,
     // not two — recipient-specific idempotency keys prevent a replayed
     // Submit from ever duplicating one.
-    const [reviewers, approvers] = await Promise.all([
-      resolveEligibleRecipients({
-        capabilityCode: APPROVAL_PERMISSION[APPROVAL_TYPE.MANAGEMENT_REVIEW],
-        allScopePermissionCode: ALL_DEPARTMENTS_PERMISSION,
-        siteId: demand.site_id,
-      }),
-      resolveEligibleRecipients({
-        capabilityCode: APPROVAL_PERMISSION[APPROVAL_TYPE.FORMAL_APPROVAL],
-        allScopePermissionCode: ALL_DEPARTMENTS_PERMISSION,
-        siteId: demand.site_id,
-      }),
-    ]);
+    const reviewers = await resolveEligibleRecipients({
+      capabilityCode: APPROVAL_PERMISSION[APPROVAL_TYPE.MANAGEMENT_REVIEW],
+      allScopePermissionCode: ALL_DEPARTMENTS_PERMISSION,
+      siteId: demand.site_id,
+      executor: client,
+    });
+    const approvers = await resolveEligibleRecipients({
+      capabilityCode: APPROVAL_PERMISSION[APPROVAL_TYPE.FORMAL_APPROVAL],
+      allScopePermissionCode: ALL_DEPARTMENTS_PERMISSION,
+      siteId: demand.site_id,
+      executor: client,
+    });
     const recipientUserIds = new Set([...reviewers, ...approvers]);
 
     const payload = {
@@ -453,6 +453,7 @@ async function recordApprovalDecision(actor, id, approvalType, { decision, reaso
     const procurementRecipients = await resolveEligibleRecipients({
       capabilityCode: "procurement.pricing",
       siteId: demand.site_id,
+      executor: client,
     });
 
     if (procurementRecipients.length > 0) {
@@ -595,6 +596,7 @@ async function recordFinalApprovalDecision(actor, id, approvalType, { pricingId,
       const procurementRecipients = await resolveEligibleRecipients({
         capabilityCode: "procurement.pricing",
         siteId: demand.site_id,
+        executor: client,
       });
       if (procurementRecipients.length > 0) {
         await enqueue(

@@ -59,6 +59,22 @@ test("a fully valid production config loads without error", () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("database pool bounds and build revision are validated and exposed", () => {
+  const valid = runWithEnvPrintingConfig({
+    DATABASE_POOL_MAX: "7",
+    DATABASE_CONNECTION_TIMEOUT_MS: "1250",
+    BUILD_REVISION: "abc123-release.4",
+  });
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.equal(valid.config.databasePoolMax, 7);
+  assert.equal(valid.config.databaseConnectionTimeoutMs, 1250);
+  assert.equal(valid.config.buildRevision, "abc123-release.4");
+
+  assert.notEqual(runWithEnv({ DATABASE_POOL_MAX: "0" }).status, 0);
+  assert.notEqual(runWithEnv({ DATABASE_CONNECTION_TIMEOUT_MS: "forever" }).status, 0);
+  assert.notEqual(runWithEnv({ BUILD_REVISION: "unsafe revision/value" }).status, 0);
+});
+
 test("production refuses to start with an http:// FRONTEND_ORIGIN", () => {
   const result = runWithEnv({ FRONTEND_ORIGIN: "http://app.example.com" });
   assert.notEqual(result.status, 0);

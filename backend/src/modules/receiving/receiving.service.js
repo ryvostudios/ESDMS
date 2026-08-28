@@ -61,11 +61,12 @@ function assertReceiptVisible(actor, receipt) {
   assertSupplyChainRecordVisible(actor, receipt);
 }
 
-async function departmentRecipients(capabilityCode, record) {
+async function departmentRecipients(executor, capabilityCode, record) {
   return resolveEligibleRecipients({
     capabilityCode,
     siteId: record.site_id,
     departmentId: record.department_id,
+    executor,
   });
 }
 
@@ -293,7 +294,7 @@ export async function recordReceipt(actor, dcId, input) {
       // actor. Department linkage is deliberately not asserted: employment
       // assignment is effective-dated and a legitimately present receiver may
       // be on a temporary assignment — the site check is the meaningful one.
-      const employee = await repo.findActiveEmployee(input.physicalReceiverEmployeeId, dc.site_id);
+      const employee = await repo.findActiveEmployee(client, input.physicalReceiverEmployeeId, dc.site_id);
       if (!employee) {
         throw new ValidationError("The recorded physical receiver is not an active employee at this site.");
       }
@@ -342,10 +343,10 @@ export async function recordReceipt(actor, dcId, input) {
       },
     });
 
-    const [confirmers, receivers] = await Promise.all([
-      departmentRecipients(RECEIVING_CONFIRM_PERMISSION, dc),
-      input.fallback ? departmentRecipients(RECEIVING_RECEIVE_PERMISSION, dc) : Promise.resolve([]),
-    ]);
+    const confirmers = await departmentRecipients(client, RECEIVING_CONFIRM_PERMISSION, dc);
+    const receivers = input.fallback
+      ? await departmentRecipients(client, RECEIVING_RECEIVE_PERMISSION, dc)
+      : [];
 
     const baseNotification = {
       channel: "IN_APP",
@@ -405,14 +406,17 @@ export async function recordReceipt(actor, dcId, input) {
 // (who bought it) and site management (who may have to act on it) — and
 // nobody else. Quantities travel in the payload; prices never do.
 async function notifyDiscrepancy(client, { dc, receipt, confirmers, actorId }) {
-  const [buyers, managers] = await Promise.all([
-    resolveEligibleRecipients({ capabilityCode: "procurement.purchase", siteId: dc.site_id }),
-    resolveEligibleRecipients({
-      capabilityCode: "demand.review",
-      allScopePermissionCode: "demand.all_departments",
-      siteId: dc.site_id,
-    }),
-  ]);
+  const buyers = await resolveEligibleRecipients({
+    capabilityCode: "procurement.purchase",
+    siteId: dc.site_id,
+    executor: client,
+  });
+  const managers = await resolveEligibleRecipients({
+    capabilityCode: "demand.review",
+    allScopePermissionCode: "demand.all_departments",
+    siteId: dc.site_id,
+    executor: client,
+  });
 
   const recipients = new Set([...confirmers, ...buyers, ...managers]);
   await notify(
@@ -485,7 +489,7 @@ export async function acknowledgeHandover(actor, receiptId) {
       metadata: { dcId: receipt.dc_id, originalReceiverUserId: receipt.received_by_user_id },
     });
 
-    const confirmers = await departmentRecipients(RECEIVING_CONFIRM_PERMISSION, receipt);
+    const confirmers = await departmentRecipients(client, RECEIVING_CONFIRM_PERMISSION, receipt);
     await notify(
       client,
       confirmers.map((userId) => ({

@@ -264,18 +264,18 @@ export async function finalizeDeliveryChallan(actor, id) {
     // The owning department is told material is on its way. Routed to that
     // department's own receiving/confirming users at that site — never
     // broadcast to every capable user.
-    const [receivers, confirmers] = await Promise.all([
-      resolveEligibleRecipients({
-        capabilityCode: "receiving.receive",
-        siteId: dc.site_id,
-        departmentId: dc.department_id,
-      }),
-      resolveEligibleRecipients({
-        capabilityCode: "receiving.confirm",
-        siteId: dc.site_id,
-        departmentId: dc.department_id,
-      }),
-    ]);
+    const receivers = await resolveEligibleRecipients({
+      capabilityCode: "receiving.receive",
+      siteId: dc.site_id,
+      departmentId: dc.department_id,
+      executor: client,
+    });
+    const confirmers = await resolveEligibleRecipients({
+      capabilityCode: "receiving.confirm",
+      siteId: dc.site_id,
+      departmentId: dc.department_id,
+      executor: client,
+    });
     const recipients = new Set([...receivers, ...confirmers]);
 
     if (recipients.size > 0) {

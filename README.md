@@ -137,6 +137,8 @@ npm install
 npm run dev
 ```
 
-Tests: `npm test` in each of `backend/` and `frontend/`. See
+Tests: `npm test` in each of `backend/` and `frontend/`. Backend tests create,
+migrate and drop a freshly named local disposable database by default; use
+`npm run test:provided` only for an explicitly supplied safely named test DB. See
 `backend/scripts/provision-db-roles.sql` and `docs/SECURITY.md` §8 before
 ever pointing this at a production database.

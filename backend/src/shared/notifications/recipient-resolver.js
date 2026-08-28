@@ -1,5 +1,5 @@
 import pool from "../../config/database.js";
-import { getUserProfileById, isProfileActive } from "../users/user-profile.repository.js";
+import { listUserProfiles, isProfileActive } from "../users/user-profile.repository.js";
 
 // Answers "which ACTIVE users are actually eligible to perform this
 // workflow action right now?" — reusing getUserProfileById (the single
@@ -20,24 +20,22 @@ import { getUserProfileById, isProfileActive } from "../users/user-profile.repos
 // scope; everyone else must match BOTH site and department. Omitting it
 // preserves the original site-only behavior byte for byte.
 //
-// Deliberately O(active users) — one getUserProfileById call each, not a
-// single hand-written reverse-direction query — correct-by-construction
-// over clever, and cheap enough at this application's real scale. Revisit
-// with a dedicated query only if the user base ever grows enough for this
-// to matter.
+// Profiles for all users are loaded in one set-oriented query using the same
+// authoritative projection as authentication. The optional executor keeps
+// routing inside the caller's transaction instead of acquiring another pool
+// connection while one is already held.
 export async function resolveEligibleRecipients({
   capabilityCode,
   allScopePermissionCode = null,
   siteId,
   departmentId = null,
+  executor = pool,
 }) {
-  const { rows } = await pool.query("SELECT id FROM users");
+  const profiles = await listUserProfiles(executor);
 
   const eligible = [];
 
-  for (const { id } of rows) {
-    const profile = await getUserProfileById(id);
-
+  for (const profile of profiles) {
     if (!isProfileActive(profile)) continue;
     if (!profile.permissions.includes(capabilityCode)) continue;
 

@@ -210,10 +210,16 @@ SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') AS authen
 -- global, and per-schema defaults are additive, so revoke both the global
 -- default and any explicit public-schema grant owned by this migration role.
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM esdms_runtime;
 ALTER DEFAULT PRIVILEGES
   REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+-- The sole runtime-callable public function returns only migration count/name
+-- diagnostics. It is the narrow bridge that keeps pgmigrations owner-only
+-- while allowing readiness to detect ledger/schema incompatibility.
+GRANT EXECUTE ON FUNCTION public.esdms_schema_migration_state(text) TO esdms_runtime;
 
 -- Keep RLS enabled on every public ESDMS table. FORCE RLS is intentionally not
 -- used: the migration owner must continue to run schema migrations, while the

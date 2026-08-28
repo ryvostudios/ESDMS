@@ -158,12 +158,12 @@ function assertIsDisposableTestDatabase() {
   }
 
   const databaseName = databaseUrl.pathname.replace(/^\//, "");
-  if (databaseName !== "eset_test") {
-    throw new Error("Refusing DB security integration test: DATABASE_URL is not the isolated eset_test database.");
+  if (!/^(?:eset_test|esdms_test_[a-z0-9_]+)$/.test(databaseName)) {
+    throw new Error("Refusing DB security integration test: DATABASE_URL is not a safely named disposable test database.");
   }
 
   if (!["localhost", "127.0.0.1", "[::1]"].includes(databaseUrl.hostname)) {
-    throw new Error("Refusing DB security integration test: eset_test is not hosted on the local machine.");
+    throw new Error("Refusing DB security integration test: the test database is not hosted on the local machine.");
   }
 
   return databaseUrl;
@@ -452,7 +452,10 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
   assert.doesNotMatch(executableSql, /GRANT[^;]+ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+public/is);
   assert.doesNotMatch(executableSql, /GRANT[^;]+ON\s+ALL\s+SEQUENCES\s+IN\s+SCHEMA\s+public/is);
   assert.doesNotMatch(executableSql, /ALTER\s+DEFAULT\s+PRIVILEGES[^;]+GRANT/is);
-  assert.doesNotMatch(executableSql, /GRANT\s+EXECUTE[^;]+esdms_runtime/is);
+  const runtimeFunctionGrants = [...executableSql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+([^;]+)\s+TO\s+esdms_runtime/gi)];
+  assert.equal(runtimeFunctionGrants.length, 1, "only the readiness diagnostic function may be runtime-callable");
+  assert.match(runtimeFunctionGrants[0][1], /^public\.esdms_schema_migration_state\(text\)$/i);
+  assert.match(sql, /REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM esdms_runtime/);
   assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM esdms_runtime/);
   assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM esdms_runtime/);
   assert.match(sql, /REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC/);

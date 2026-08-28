@@ -279,23 +279,24 @@ export async function submitPricing(actor, demandId, input) {
       metadata: { pricingId: pricing.id, pricingVersion: pricing.version },
     });
 
-    const [reviewers, approvers, priceViewers] = await Promise.all([
-      resolveEligibleRecipients({
-        capabilityCode: "demand.review",
-        allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
-        siteId: demand.site_id,
-      }),
-      resolveEligibleRecipients({
-        capabilityCode: "demand.approve",
-        allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
-        siteId: demand.site_id,
-      }),
-      resolveEligibleRecipients({
-        capabilityCode: PRICE_VIEW_PERMISSION,
-        allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
-        siteId: demand.site_id,
-      }),
-    ]);
+    const reviewers = await resolveEligibleRecipients({
+      capabilityCode: "demand.review",
+      allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
+      siteId: demand.site_id,
+      executor: client,
+    });
+    const approvers = await resolveEligibleRecipients({
+      capabilityCode: "demand.approve",
+      allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
+      siteId: demand.site_id,
+      executor: client,
+    });
+    const priceViewers = await resolveEligibleRecipients({
+      capabilityCode: PRICE_VIEW_PERMISSION,
+      allScopePermissionCode: ALL_DEMAND_SCOPE_PERMISSION,
+      siteId: demand.site_id,
+      executor: client,
+    });
     const priceViewerSet = new Set(priceViewers);
     const eligibleReviewers = reviewers.filter((userId) => priceViewerSet.has(userId));
     const eligibleApprovers = approvers.filter((userId) => priceViewerSet.has(userId));

@@ -72,10 +72,16 @@ function auditQuantities(lines) {
 }
 
 async function notifyProcurement(client, ipo, { eventType, keySuffix, payload }) {
-  const [buyers, pricers] = await Promise.all([
-    resolveEligibleRecipients({ capabilityCode: "procurement.purchase", siteId: ipo.site_id }),
-    resolveEligibleRecipients({ capabilityCode: "procurement.pricing", siteId: ipo.site_id }),
-  ]);
+  const buyers = await resolveEligibleRecipients({
+    capabilityCode: "procurement.purchase",
+    siteId: ipo.site_id,
+    executor: client,
+  });
+  const pricers = await resolveEligibleRecipients({
+    capabilityCode: "procurement.pricing",
+    siteId: ipo.site_id,
+    executor: client,
+  });
   const recipients = new Set([...buyers, ...pricers]);
   if (recipients.size === 0) return;
 
@@ -600,6 +606,7 @@ export async function cancelIpo(actor, id, { category, reason }) {
       capabilityCode: "demand.review",
       allScopePermissionCode: "demand.all_departments",
       siteId: ipo.site_id,
+      executor: client,
     });
     if (reviewers.length > 0) {
       await enqueue(

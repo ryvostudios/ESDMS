@@ -14,3 +14,4 @@ export const API_BASE_URL = apiBaseUrl.replace(/\/$/, "");
 // because it's build-time, non-sensitive, and needed before the first
 // timestamp ever renders.
 export const APP_TIMEZONE = import.meta.env.VITE_APP_TIMEZONE || "Asia/Karachi";
+export const BUILD_REVISION = import.meta.env.VITE_BUILD_REVISION || "development";

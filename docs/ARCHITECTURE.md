@@ -313,9 +313,17 @@ Frontend environment configuration may contain public configuration such as:
 
 ```text
 VITE_API_URL=
+VITE_BUILD_REVISION=
 ```
 
 It must not contain backend secrets.
+
+Liveness (`GET /api/v1/health`) reports only that the process can answer.
+Readiness (`GET /api/v1/health/ready`) also verifies the migration ledger and
+the physical load-bearing schema required by that backend revision. It reports
+only non-secret revision/migration identifiers and compatibility booleans; it
+never repairs drift. `/diagnostics` compares the stamped frontend revision with
+the backend and database compatibility state without adding noise to normal UI.
 
 ---
 

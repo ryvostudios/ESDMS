@@ -329,6 +329,14 @@ The application must never connect to its production database over an unencrypte
 
 The application must never run its normal request-handling workload as a database superuser or as a role that can alter schema, create/drop roles, or create databases. Two separate credentials are used:
 
+The runtime pool is explicitly bounded by `DATABASE_POOL_MAX` and
+`DATABASE_CONNECTION_TIMEOUT_MS`; saturation fails within a configured bound
+instead of waiting indefinitely. Code already holding a transaction client must
+thread that executor through every operation-owned query, including recipient
+resolution and receiving lookups. Readiness verifies required physical schema
+objects as well as `pgmigrations`, so a forged or stale ledger cannot make a
+drifted database ready. It exposes no connection details, SQL, paths or errors.
+
 - `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
 - `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the explicitly reviewed application tables named in `scripts/provision-db-roles.sql` — that allowlist is the authoritative list, and it grows only when a migration adds a table and the script is updated to name it — plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 

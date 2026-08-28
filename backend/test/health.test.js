@@ -25,4 +25,8 @@ test("GET /health/ready is a readiness check that actually queries the database"
   const { status, body } = await apiRequest(server.baseUrl, "GET", "/api/v1/health/ready");
   assert.equal(status, 200);
   assert.equal(body.data.status, "ready");
+  assert.equal(body.data.schemaCompatible, true);
+  assert.equal(body.data.expectedMigration, "1787425000000_schema-readiness-diagnostics");
+  assert.ok(body.data.appliedMigrationCount >= body.data.expectedMigrationCount);
+  assert.match(body.data.backendRevision, /^[A-Za-z0-9._-]+$/);
 });

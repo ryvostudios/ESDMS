@@ -9,9 +9,17 @@ import { VitePWA } from 'vite-plugin-pwa'
 // HttpOnly session cookie without touching backend CORS/cookie config.
 // Unset by default — normal local dev is unaffected.
 const devApiTarget = process.env.ESDMS_DEV_API_TARGET;
+const buildRevision = process.env.VITE_BUILD_REVISION || process.env.RENDER_GIT_COMMIT || 'development';
+
+if (!/^[A-Za-z0-9._-]{1,100}$/.test(buildRevision)) {
+  throw new Error('VITE_BUILD_REVISION must be a non-secret revision label using letters, numbers, dots, underscores or hyphens.');
+}
 
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    'import.meta.env.VITE_BUILD_REVISION': JSON.stringify(buildRevision),
+  },
   server: devApiTarget
     ? {
         proxy: {
