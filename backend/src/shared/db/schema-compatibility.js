@@ -1,5 +1,5 @@
-export const EXPECTED_MIGRATION = "1787426000000_governance-capability-bundles";
-export const EXPECTED_MIGRATION_COUNT = 37;
+export const EXPECTED_MIGRATION = "1787427000000_driver-vehicle-master-and-gate-evidence";
+export const EXPECTED_MIGRATION_COUNT = 38;
 
 // This is deliberately detection-only. A migration ledger entry is not proof
 // that its load-bearing objects still exist, so readiness verifies both.
@@ -41,7 +41,23 @@ export async function inspectSchemaCompatibility(executor) {
        to_regclass('public.permission_bundles') IS NOT NULL AS permission_bundles_present,
        to_regclass('public.permission_bundle_permissions') IS NOT NULL AS bundle_permissions_present,
        to_regclass('public.user_permission_bundle_assignments') IS NOT NULL AS bundle_assignments_present,
-       EXISTS (SELECT 1 FROM permissions WHERE code = 'procurement.site_scope') AS procurement_scope_present
+       EXISTS (SELECT 1 FROM permissions WHERE code = 'procurement.site_scope') AS procurement_scope_present,
+       to_regclass('public.drivers') IS NOT NULL AS drivers_present,
+       to_regclass('public.vehicles') IS NOT NULL AS vehicles_present,
+       EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'gate_pass_files' AND column_name = 'evidence_note'
+       ) AS evidence_note_present,
+       EXISTS (
+         SELECT 1 FROM pg_constraint
+         WHERE conname = 'gate_pass_files_type_check'
+           AND pg_get_constraintdef(oid) LIKE '%RETURN_ADDITIONAL_PHOTO%'
+           AND pg_get_constraintdef(oid) LIKE '%COMPLETED_PDF%'
+       ) AS evidence_file_types_present,
+       EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'gate_passes' AND column_name = 'driver_id'
+       ) AS gate_pass_fleet_link_present
      FROM migration_state`,
     [EXPECTED_MIGRATION],
   );
@@ -58,7 +74,16 @@ export async function inspectSchemaCompatibility(executor) {
       state.permission_bundles_present &&
       state.bundle_permissions_present &&
       state.bundle_assignments_present &&
-      state.procurement_scope_present,
+      state.procurement_scope_present &&
+      // Fleet and gate-evidence objects are load-bearing for Driver/Vehicle
+      // management and multi-photo evidence. Without them readiness would
+      // report a healthy schema while every fleet request and every evidence
+      // write failed — the exact lie this module exists to prevent.
+      state.drivers_present &&
+      state.vehicles_present &&
+      state.gate_pass_fleet_link_present &&
+      state.evidence_note_present &&
+      state.evidence_file_types_present,
   );
 
   return {
