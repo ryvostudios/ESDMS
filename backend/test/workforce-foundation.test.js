@@ -77,6 +77,40 @@ test("HR can create/archive a department; archiving a used department is blocked
   assert.equal(archived.status, 200);
 });
 
+test("renaming a department does not collide with its own current name", async () => {
+  const name = unique("Dept");
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/departments", { token: hrToken, body: { name } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.data.id;
+
+  // The duplicate-name guard must exclude the row being edited: saving an
+  // unchanged name, or changing only another field, is not a duplicate.
+  const sameName = await apiRequest(server.baseUrl, "PATCH", `/api/v1/departments/${id}`, {
+    token: hrToken,
+    body: { name },
+  });
+  assert.equal(sameName.status, 200, JSON.stringify(sameName.body));
+
+  const renamed = await apiRequest(server.baseUrl, "PATCH", `/api/v1/departments/${id}`, {
+    token: hrToken,
+    body: { name: `${name} Renamed` },
+  });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.data.name, `${name} Renamed`);
+
+  // A genuine collision with a DIFFERENT department is still a conflict.
+  const other = await apiRequest(server.baseUrl, "POST", "/api/v1/departments", {
+    token: hrToken,
+    body: { name: unique("Dept") },
+  });
+  assert.equal(other.status, 201);
+  const collision = await apiRequest(server.baseUrl, "PATCH", `/api/v1/departments/${other.body.data.id}`, {
+    token: hrToken,
+    body: { name: `${name} Renamed` },
+  });
+  assert.equal(collision.status, 409);
+});
+
 test("a plain EMPLOYEE cannot create a department", async () => {
   const response = await apiRequest(server.baseUrl, "POST", "/api/v1/departments", {
     token: employeeToken,

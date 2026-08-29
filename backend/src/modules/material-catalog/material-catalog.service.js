@@ -1,5 +1,5 @@
 import { withTransaction } from "../../shared/db/with-transaction.js";
-import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors/app-error.js";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors/app-error.js";
 import { findDepartmentById } from "../departments/departments.repository.js";
 import {
   resolveCatalogDepartmentId,
@@ -16,6 +16,8 @@ import {
   insertCatalogEntry,
   findCatalogEntryById,
   updateCatalogEntryFields,
+  hasActiveCatalogEntries,
+  updateCompanyItemFields,
   listCatalogForDepartment,
 } from "./material-catalog.repository.js";
 
@@ -103,5 +105,29 @@ export async function updateCatalogEntry(actor, id, input) {
 
   assertCatalogEntryManageable(actor, entry);
 
+  if (input.isActive === true) {
+    const companyItem = await findCompanyItemById(entry.company_item_id);
+    if (!companyItem?.is_active) {
+      throw new ConflictError("Reactivate the Company Item before restoring it to a department catalog.");
+    }
+  }
+
   return updateCatalogEntryFields(id, input);
+}
+
+export async function updateCompanyItem(actor, id, input) {
+  if (actor.role !== "CEO" && !actor.permissions.has("material_catalog.all_departments")) {
+    throw new ForbiddenError("Company-wide material management permission is required.");
+  }
+
+  return withTransaction(async (client) => {
+    const item = await findCompanyItemById(id, client);
+    if (!item) throw new NotFoundError("Company item not found.");
+
+    if (input.isActive === false && item.is_active && await hasActiveCatalogEntries(id, client)) {
+      throw new ConflictError("Remove this material from every active department catalog before archiving the Company Item.");
+    }
+
+    return updateCompanyItemFields(client, id, input);
+  });
 }

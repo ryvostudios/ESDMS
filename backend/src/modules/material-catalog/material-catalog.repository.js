@@ -5,10 +5,32 @@ export async function listActiveUnitsOfMeasure() {
   return result.rows;
 }
 
-export async function findCompanyItemById(id) {
-  const result = await pool.query(
+export async function findCompanyItemById(id, executor = pool) {
+  const result = await executor.query(
     "SELECT id, name, description, is_active FROM company_items WHERE id = $1",
     [id],
+  );
+  return result.rows[0] || null;
+}
+
+export async function hasActiveCatalogEntries(companyItemId, executor = pool) {
+  const result = await executor.query(
+    "SELECT 1 FROM department_material_catalog WHERE company_item_id = $1 AND is_active = true LIMIT 1",
+    [companyItemId],
+  );
+  return result.rowCount > 0;
+}
+
+export async function updateCompanyItemFields(client, id, { name, description, isActive }) {
+  const result = await client.query(
+    `UPDATE company_items
+     SET name = COALESCE($2, name),
+         description = CASE WHEN $3::boolean THEN $4 ELSE description END,
+         is_active = COALESCE($5, is_active),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1
+     RETURNING id, name, description, is_active`,
+    [id, name ?? null, description !== undefined, description ?? null, isActive ?? null],
   );
   return result.rows[0] || null;
 }
@@ -115,6 +137,7 @@ export async function listCatalogForDepartment(departmentId, { search, includeIn
   const rows = await pool.query(
     `SELECT dmc.id, dmc.department_id, d.name AS department_name, dmc.is_active,
             ci.id AS company_item_id, ci.name AS item_name, ci.description AS item_description,
+            ci.is_active AS company_item_is_active,
             uom.id AS default_uom_id, uom.code AS default_uom_code, uom.name AS default_uom_name
      FROM department_material_catalog dmc
      JOIN company_items ci ON ci.id = dmc.company_item_id
@@ -122,7 +145,7 @@ export async function listCatalogForDepartment(departmentId, { search, includeIn
      JOIN departments d ON d.id = dmc.department_id
      WHERE ($1::uuid IS NULL OR dmc.department_id = $1)
        AND ($2::text IS NULL OR ci.name ILIKE $2)
-       AND (dmc.is_active = true OR $3 = true)
+       AND ((dmc.is_active = true AND ci.is_active = true) OR $3 = true)
      ORDER BY d.name, ci.name
      LIMIT $4 OFFSET $5`,
     [...params, pageSize, (page - 1) * pageSize],
@@ -134,7 +157,7 @@ export async function listCatalogForDepartment(departmentId, { search, includeIn
      JOIN company_items ci ON ci.id = dmc.company_item_id
      WHERE ($1::uuid IS NULL OR dmc.department_id = $1)
        AND ($2::text IS NULL OR ci.name ILIKE $2)
-       AND (dmc.is_active = true OR $3 = true)`,
+       AND ((dmc.is_active = true AND ci.is_active = true) OR $3 = true)`,
     params,
   );
 

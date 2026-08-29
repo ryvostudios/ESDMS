@@ -10,6 +10,7 @@ import { MaterialCatalogPage } from "./MaterialCatalogPage.jsx";
 const mockListCatalog = vi.hoisted(() => vi.fn());
 const mockListUnitsOfMeasure = vi.hoisted(() => vi.fn());
 const mockUpdateCatalogEntry = vi.hoisted(() => vi.fn());
+const mockUpdateCompanyItem = vi.hoisted(() => vi.fn());
 
 vi.mock("../api.js", () => ({
   listCatalog: (...args) => mockListCatalog(...args),
@@ -18,6 +19,7 @@ vi.mock("../api.js", () => ({
   searchCompanyItems: vi.fn(),
   addCatalogEntry: vi.fn(),
   updateCatalogEntry: (...args) => mockUpdateCatalogEntry(...args),
+  updateCompanyItem: (...args) => mockUpdateCompanyItem(...args),
 }));
 
 vi.mock("../../workforce/api.js", () => ({
@@ -40,6 +42,8 @@ function row(overrides = {}) {
     is_active: true,
     department_id: "dept-civil",
     department_name: "Civil",
+    company_item_id: "item-1",
+    company_item_is_active: true,
     ...overrides,
   };
 }
@@ -51,6 +55,7 @@ function respondWith(rows) {
 beforeEach(() => {
   mockListUnitsOfMeasure.mockResolvedValue({ data: [] });
   mockUpdateCatalogEntry.mockResolvedValue({ data: {} });
+  mockUpdateCompanyItem.mockResolvedValue({ data: {} });
   mockPermissions = new Set(["material_catalog.view", "material_catalog.manage"]);
 });
 
@@ -59,6 +64,7 @@ afterEach(() => {
   mockListCatalog.mockReset();
   mockListUnitsOfMeasure.mockReset();
   mockUpdateCatalogEntry.mockReset();
+  mockUpdateCompanyItem.mockReset();
 });
 
 async function renderPage() {
@@ -73,15 +79,15 @@ function inTable() {
   return within(screen.getByRole("table"));
 }
 
-describe("Material archive / reactivate lifecycle", () => {
-  test("archiving asks for confirmation first and does nothing if cancelled", async () => {
+describe("Material catalog removal / restore lifecycle", () => {
+  test("removal asks for confirmation first and does nothing if cancelled", async () => {
     respondWith([row()]);
     await renderPage();
 
-    fireEvent.click(inTable().getByRole("button", { name: "Archive" }));
+    fireEvent.click(inTable().getByRole("button", { name: "Remove from Catalog" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Archive material/i)).toBeTruthy();
-    expect(within(dialog).getByText(/Cement/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Remove from Catalog" })).toBeTruthy();
+    expect(within(dialog).getByText(/Historical Demands and records will not be changed/i)).toBeTruthy();
     expect(mockUpdateCatalogEntry).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -89,14 +95,14 @@ describe("Material archive / reactivate lifecycle", () => {
     expect(mockUpdateCatalogEntry).not.toHaveBeenCalled();
   });
 
-  test("confirming archives the entry", async () => {
+  test("confirming removes the entry from new selections", async () => {
     respondWith([row()]);
     await renderPage();
 
-    fireEvent.click(inTable().getByRole("button", { name: "Archive" }));
+    fireEvent.click(inTable().getByRole("button", { name: "Remove from Catalog" }));
     const dialog = await screen.findByRole("dialog");
     await act(async () => {
-      fireEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove from Catalog" }));
     });
 
     await waitFor(() => expect(mockUpdateCatalogEntry).toHaveBeenCalledWith("entry-1", { isActive: false }));
@@ -124,19 +130,22 @@ describe("Material archive / reactivate lifecycle", () => {
     expect(mockListCatalog.mock.calls.at(-1)[0].includeInactive).toBe("true");
   });
 
-  test("an archived row is shown as Archived and offers Restore, with no confirmation", async () => {
+  test("an archived row is shown as Archived and Restore to Catalog is confirmed", async () => {
     respondWith([row({ is_active: false })]);
     await renderPage();
 
     expect(inTable().getByText("Archived")).toBeTruthy();
-    const restore = inTable().getByRole("button", { name: "Restore" });
+    const restore = inTable().getByRole("button", { name: "Restore to Catalog" });
 
     await act(async () => {
       fireEvent.click(restore);
     });
 
-    // Restoring only puts a choice back, so it is not gated behind a dialog.
-    expect(screen.queryByRole("dialog")).toBeNull();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/available for new Demand selections again/i)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Restore to Catalog" }));
+    });
     await waitFor(() => expect(mockUpdateCatalogEntry).toHaveBeenCalledWith("entry-1", { isActive: true }));
   });
 
@@ -147,21 +156,44 @@ describe("Material archive / reactivate lifecycle", () => {
       new ApiError(404, "NOT_FOUND", "Material catalog entry not found."),
     );
 
-    fireEvent.click(inTable().getByRole("button", { name: "Archive" }));
+    fireEvent.click(inTable().getByRole("button", { name: "Remove from Catalog" }));
     const dialog = await screen.findByRole("dialog");
     await act(async () => {
-      fireEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove from Catalog" }));
     });
 
     expect(await screen.findByText(/Material catalog entry not found\./)).toBeTruthy();
   });
 
-  test("a viewer without manage permission gets no archive or restore control", async () => {
+  test("a viewer without manage permission gets no removal or restore control", async () => {
     mockPermissions = new Set(["material_catalog.view"]);
     respondWith([row()]);
     await renderPage();
 
-    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove from Catalog" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore to Catalog" })).toBeNull();
+  });
+
+  test("company-wide managers can edit metadata and must confirm Company Item archival", async () => {
+    mockPermissions = new Set(["material_catalog.view", "material_catalog.manage", "material_catalog.all_departments"]);
+    respondWith([row()]);
+    await renderPage();
+
+    fireEvent.click(inTable().getByRole("button", { name: "Edit Item" }));
+    const editDialog = await screen.findByRole("dialog");
+    fireEvent.change(within(editDialog).getByLabelText(/Material name/), { target: { value: "Cement Grade A" } });
+    await act(async () => {
+      fireEvent.click(within(editDialog).getByRole("button", { name: "Save Company Item" }));
+    });
+    expect(mockUpdateCompanyItem).toHaveBeenCalledWith("item-1", { name: "Cement Grade A", description: null });
+
+    fireEvent.click(inTable().getByRole("button", { name: "Archive Company Item" }));
+    const archiveDialog = await screen.findByRole("dialog");
+    expect(within(archiveDialog).getByText(/removed from every department catalog/i)).toBeTruthy();
+    expect(mockUpdateCompanyItem).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fireEvent.click(within(archiveDialog).getByRole("button", { name: "Archive Company Item" }));
+    });
+    expect(mockUpdateCompanyItem).toHaveBeenLastCalledWith("item-1", { isActive: false });
   });
 });

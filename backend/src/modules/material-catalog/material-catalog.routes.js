@@ -8,6 +8,7 @@ const router = Router();
 
 router.use(authenticate);
 router.param("id", validateUuidParam("id"));
+router.param("companyItemId", validateUuidParam("companyItemId"));
 
 // Specific literal paths declared before "/:id" so they're never shadowed.
 router.get(
@@ -16,6 +17,11 @@ router.get(
   controller.listUnitsOfMeasure,
 );
 router.get("/company-items/search", requirePermission("material_catalog.manage"), controller.searchItems);
+router.patch(
+  "/company-items/:companyItemId",
+  requirePermission("material_catalog.manage"),
+  controller.updateCompanyItem,
+);
 
 router.get("/", requirePermission("material_catalog.view", "material_catalog.manage"), controller.list);
 router.post("/", requirePermission("material_catalog.manage"), controller.create);

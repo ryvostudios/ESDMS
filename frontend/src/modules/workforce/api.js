@@ -53,6 +53,7 @@ export const listSites = () => apiClient.get("/employees/sites");
 export const listDepartments = (siteId) => apiClient.get(`/departments${buildQuery({ siteId })}`);
 export const listDepartmentsManage = () => apiClient.get("/departments/manage");
 export const createDepartment = (body) => apiClient.post("/departments", body);
+export const updateDepartment = (id, body) => apiClient.patch(`/departments/${id}`, body);
 export const archiveDepartment = (id, isActive) => apiClient.patch(`/departments/${id}`, { isActive });
 
 export const listPositions = (siteId) => apiClient.get(`/positions${buildQuery({ siteId })}`);

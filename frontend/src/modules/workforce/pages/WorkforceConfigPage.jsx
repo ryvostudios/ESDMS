@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Select } from "../../../shared/components/FormField.jsx";
+import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import * as api from "../api.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 
@@ -52,6 +53,79 @@ function useCreateForm(list, create) {
   return { rows, name, setName, message, handleCreate, load };
 }
 
+function LifecycleActionButton({ entityName, isActive, onConfirm }) {
+  const [open, setOpen] = useState(false);
+  const action = isActive ? "Archive" : "Reactivate";
+  return (
+    <>
+      <Button variant="secondary" onClick={() => setOpen(true)}>{action}</Button>
+      <ConfirmActionDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={`${action} ${entityName}?`}
+        message={isActive
+          ? `Archive ${entityName}? It will no longer be available for new assignments, but existing history is preserved.`
+          : `Reactivate ${entityName}? It will be available for new assignments again.`}
+        confirmLabel={action}
+        variant={isActive ? "danger" : "primary"}
+        onConfirm={onConfirm}
+      />
+    </>
+  );
+}
+
+function DepartmentRow({ department, load }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(department.name);
+  return (
+    <p>
+      {editing ? (
+        <>
+          <Input aria-label={`Department name for ${department.name}`} value={name} onChange={(event) => setName(event.target.value)} />{" "}
+          <Button onClick={async () => { await api.updateDepartment(department.id, { name }); setEditing(false); load(); }}>Save</Button>{" "}
+          <Button variant="secondary" onClick={() => { setName(department.name); setEditing(false); }}>Cancel</Button>
+        </>
+      ) : (
+        <>
+          {department.name} {department.is_active ? "" : "(archived)"}{" "}
+          <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>{" "}
+          <LifecycleActionButton
+            entityName={`department “${department.name}”`}
+            isActive={department.is_active}
+            onConfirm={async () => { await api.archiveDepartment(department.id, !department.is_active); load(); }}
+          />
+        </>
+      )}
+    </p>
+  );
+}
+
+function PositionRow({ position, load }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(position.name);
+  return (
+    <p>
+      {editing ? (
+        <>
+          {position.code} — <Input aria-label={`Position name for ${position.code}`} value={name} onChange={(event) => setName(event.target.value)} />{" "}
+          <Button onClick={async () => { await api.updatePosition(position.id, { name }); setEditing(false); load(); }}>Save</Button>{" "}
+          <Button variant="secondary" onClick={() => { setName(position.name); setEditing(false); }}>Cancel</Button>
+        </>
+      ) : (
+        <>
+          {position.code} — {position.name} {position.is_active ? "" : "(archived)"}{" "}
+          <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>{" "}
+          <LifecycleActionButton
+            entityName={`position “${position.name}”`}
+            isActive={position.is_active}
+            onConfirm={async () => { await api.updatePosition(position.id, { isActive: !position.is_active }); load(); }}
+          />
+        </>
+      )}
+    </p>
+  );
+}
+
 function DepartmentsSection() {
   const { rows, name, setName, message, handleCreate, load } = useCreateForm(api.listDepartmentsManage, api.createDepartment);
   return (
@@ -59,9 +133,7 @@ function DepartmentsSection() {
       <h2>Departments</h2>
       {message && <p role="alert">{message}</p>}
       {rows.map((d) => (
-        <p key={d.id}>
-          {d.name} {d.is_active ? "" : "(archived)"} <Button variant="secondary" onClick={async () => { await api.archiveDepartment(d.id, !d.is_active); load(); }}>{d.is_active ? "Archive" : "Reactivate"}</Button>
-        </p>
+        <DepartmentRow key={d.id} department={d} load={load} />
       ))}
       <FormField label="New department name" htmlFor="deptName">
         <Input id="deptName" value={name} onChange={(e) => setName(e.target.value)} />
@@ -98,12 +170,7 @@ function PositionsSection() {
       <h2>Positions</h2>
       {message && <p role="alert">{message}</p>}
       {rows.map((p) => (
-        <p key={p.id}>
-          {p.code} — {p.name} {p.is_active ? "" : "(archived)"}{" "}
-          <Button variant="secondary" onClick={async () => { await api.updatePosition(p.id, { isActive: !p.is_active }); load(); }}>
-            {p.is_active ? "Archive" : "Reactivate"}
-          </Button>
-        </p>
+        <PositionRow key={p.id} position={p} load={load} />
       ))}
       <FormField label="Code" htmlFor="posCode">
         <Input id="posCode" value={code} onChange={(e) => setCode(e.target.value)} />
@@ -132,9 +199,7 @@ function EmploymentTypesSection() {
       {rows.map((t) => (
         <p key={t.id}>
           {t.code} — {t.name} {t.is_active ? "" : "(archived)"}{" "}
-          <Button variant="secondary" onClick={async () => { await api.updateEmploymentType(t.id, { isActive: !t.is_active }); load(); }}>
-            {t.is_active ? "Archive" : "Reactivate"}
-          </Button>
+          <LifecycleActionButton entityName={`employment type “${t.name}”`} isActive={t.is_active} onConfirm={async () => { await api.updateEmploymentType(t.id, { isActive: !t.is_active }); load(); }} />
         </p>
       ))}
       <FormField label="Code" htmlFor="etCode">
@@ -164,7 +229,7 @@ function DocumentTypesSection() {
       <h2>Document Types</h2>
       {message && <p role="alert">{message}</p>}
       {rows.map((d) => (
-        <p key={d.id}>{d.name} {d.is_required ? "· required" : ""} {d.is_active === false ? "· archived" : ""} <Button variant="secondary" onClick={async () => { await api.updateDocumentType(d.id, { isActive: d.is_active === false }); load(); }}>{d.is_active === false ? "Reactivate" : "Archive"}</Button></p>
+        <p key={d.id}>{d.name} {d.is_required ? "· required" : ""} {d.is_active === false ? "· archived" : ""} <LifecycleActionButton entityName={`document type “${d.name}”`} isActive={d.is_active !== false} onConfirm={async () => { await api.updateDocumentType(d.id, { isActive: d.is_active === false }); load(); }} /></p>
       ))}
       <FormField label="New document type name" htmlFor="docTypeName">
         <Input id="docTypeName" value={name} onChange={(e) => setName(e.target.value)} />
@@ -178,7 +243,7 @@ function DocumentTypesSection() {
 
 function ProfileSectionsSection() {
   const { rows, name, setName, message, handleCreate, load } = useCreateForm(api.listProfileSections, api.createProfileSection);
-  return <section><h2>Profile Sections</h2>{message && <p role="alert">{message}</p>}{rows.map((section) => <p key={section.id}>{section.name} {section.is_active ? "" : "(archived)"} <Button variant="secondary" onClick={async () => { await api.updateProfileSection(section.id, { isActive: !section.is_active }); load(); }}>{section.is_active ? "Archive" : "Reactivate"}</Button></p>)}<FormField label="New section name" htmlFor="profileSectionName"><Input id="profileSectionName" value={name} onChange={(e) => setName(e.target.value)} /></FormField><Button onClick={() => handleCreate()}>Add section</Button></section>;
+  return <section><h2>Profile Sections</h2>{message && <p role="alert">{message}</p>}{rows.map((section) => <p key={section.id}>{section.name} {section.is_active ? "" : "(archived)"} <LifecycleActionButton entityName={`profile section “${section.name}”`} isActive={section.is_active} onConfirm={async () => { await api.updateProfileSection(section.id, { isActive: !section.is_active }); load(); }} /></p>)}<FormField label="New section name" htmlFor="profileSectionName"><Input id="profileSectionName" value={name} onChange={(e) => setName(e.target.value)} /></FormField><Button onClick={() => handleCreate()}>Add section</Button></section>;
 }
 
 function CustomFieldsSection() {
@@ -195,7 +260,7 @@ function CustomFieldsSection() {
     load();
   }, [load]);
   async function create(event) { event.preventDefault(); try { await api.createCustomField({ sectionId, label, fieldKey, fieldType, employeeCanView: true, employeeCanEdit: true, hrCanView: true, hrCanEdit: true }); setLabel(""); setFieldKey(""); load(); } catch (error) { setMessage(error.message); } }
-  return <section><h2>Custom Fields</h2>{message && <p role="alert">{message}</p>}{rows.map((field) => <p key={field.id}>{field.label} ({field.field_key}, {field.field_type}) {field.is_active ? "" : "· archived"} <Button variant="secondary" onClick={async () => { await api.updateCustomField(field.id, { isActive: !field.is_active }); load(); }}>{field.is_active ? "Archive" : "Reactivate"}</Button></p>)}<form onSubmit={create}><FormField label="Section" htmlFor="fieldSection"><Select id="fieldSection" value={sectionId} onChange={(e) => setSectionId(e.target.value)}>{sections.filter((section) => section.is_active).map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}</Select></FormField><FormField label="Label" htmlFor="fieldLabel"><Input id="fieldLabel" value={label} onChange={(e) => setLabel(e.target.value)} required /></FormField><FormField label="Field key" htmlFor="fieldKey"><Input id="fieldKey" value={fieldKey} onChange={(e) => setFieldKey(e.target.value)} placeholder="lowercase_snake_case" required /></FormField><FormField label="Type" htmlFor="fieldType"><Select id="fieldType" value={fieldType} onChange={(e) => setFieldType(e.target.value)}>{["TEXT","LONG_TEXT","NUMBER","DATE","BOOLEAN","DROPDOWN","MULTI_SELECT","EMAIL","PHONE","URL","PERCENTAGE"].map((type) => <option key={type}>{type}</option>)}</Select></FormField><Button type="submit">Add custom field</Button></form></section>;
+  return <section><h2>Custom Fields</h2>{message && <p role="alert">{message}</p>}{rows.map((field) => <p key={field.id}>{field.label} ({field.field_key}, {field.field_type}) {field.is_active ? "" : "· archived"} <LifecycleActionButton entityName={`custom field “${field.label}”`} isActive={field.is_active} onConfirm={async () => { await api.updateCustomField(field.id, { isActive: !field.is_active }); load(); }} /></p>)}<form onSubmit={create}><FormField label="Section" htmlFor="fieldSection"><Select id="fieldSection" value={sectionId} onChange={(e) => setSectionId(e.target.value)}>{sections.filter((section) => section.is_active).map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}</Select></FormField><FormField label="Label" htmlFor="fieldLabel"><Input id="fieldLabel" value={label} onChange={(e) => setLabel(e.target.value)} required /></FormField><FormField label="Field key" htmlFor="fieldKey"><Input id="fieldKey" value={fieldKey} onChange={(e) => setFieldKey(e.target.value)} placeholder="lowercase_snake_case" required /></FormField><FormField label="Type" htmlFor="fieldType"><Select id="fieldType" value={fieldType} onChange={(e) => setFieldType(e.target.value)}>{["TEXT","LONG_TEXT","NUMBER","DATE","BOOLEAN","DROPDOWN","MULTI_SELECT","EMAIL","PHONE","URL","PERCENTAGE"].map((type) => <option key={type}>{type}</option>)}</Select></FormField><Button type="submit">Add custom field</Button></form></section>;
 }
 
 function RotationPoliciesSection() {
@@ -215,9 +280,7 @@ function RotationPoliciesSection() {
       {rows.map((p) => (
         <p key={p.id}>
           {p.name} — {p.work_days}/{p.off_days} {p.is_active ? "" : "(archived)"}{" "}
-          <Button variant="secondary" onClick={async () => { await api.updateRotationPolicy(p.id, { isActive: !p.is_active }); load(); }}>
-            {p.is_active ? "Archive" : "Reactivate"}
-          </Button>
+          <LifecycleActionButton entityName={`rotation policy “${p.name}”`} isActive={p.is_active} onConfirm={async () => { await api.updateRotationPolicy(p.id, { isActive: !p.is_active }); load(); }} />
         </p>
       ))}
       <FormField label="Name" htmlFor="rpName">
@@ -249,7 +312,7 @@ function LeaveTypesSection() {
       <h2>Leave Types</h2>
       {message && <p role="alert">{message}</p>}
       {rows.map((t) => (
-        <p key={t.id}>{t.name} {t.is_active ? "" : "(archived)"} <Button variant="secondary" onClick={async () => { await api.updateLeaveType(t.id, { isActive: !t.is_active }); load(); }}>{t.is_active ? "Archive" : "Reactivate"}</Button></p>
+        <p key={t.id}>{t.name} {t.is_active ? "" : "(archived)"} <LifecycleActionButton entityName={`leave type “${t.name}”`} isActive={t.is_active} onConfirm={async () => { await api.updateLeaveType(t.id, { isActive: !t.is_active }); load(); }} /></p>
       ))}
       <FormField label="New leave type name" htmlFor="leaveTypeName">
         <Input id="leaveTypeName" value={name} onChange={(e) => setName(e.target.value)} />

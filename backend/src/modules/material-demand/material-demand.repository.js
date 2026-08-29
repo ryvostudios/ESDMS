@@ -45,7 +45,7 @@ export async function findCatalogEntriesForLines(departmentId, catalogEntryIds) 
      FROM department_material_catalog dmc
      JOIN company_items ci ON ci.id = dmc.company_item_id
      JOIN units_of_measure uom ON uom.id = dmc.default_uom_id
-     WHERE dmc.department_id = $1 AND dmc.is_active = true AND dmc.id = ANY($2::uuid[])`,
+     WHERE dmc.department_id = $1 AND dmc.is_active = true AND ci.is_active = true AND dmc.id = ANY($2::uuid[])`,
     [departmentId, catalogEntryIds],
   );
 

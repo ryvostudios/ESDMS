@@ -59,7 +59,7 @@ export const update = asyncHandler(async (req, res) => {
     throw new ConflictError("Cannot archive a department with active employees assigned. Reassign them first.");
   }
 
-  if (input.name && (await nameExistsForSite(department.site_id, input.name))) {
+  if (input.name && (await nameExistsForSite(department.site_id, input.name, department.id))) {
     throw new ConflictError("A department with this name already exists at this site.");
   }
 

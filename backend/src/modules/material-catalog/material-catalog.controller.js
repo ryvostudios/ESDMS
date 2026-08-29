@@ -5,6 +5,7 @@ import {
   searchItemsQuerySchema,
   createCatalogEntrySchema,
   updateCatalogEntrySchema,
+  updateCompanyItemSchema,
 } from "./material-catalog.validation.js";
 import * as service from "./material-catalog.service.js";
 
@@ -44,5 +45,11 @@ export const create = asyncHandler(async (req, res) => {
 export const update = asyncHandler(async (req, res) => {
   const input = parseBody(updateCatalogEntrySchema, req.body);
   const updated = await service.updateCatalogEntry(req.user, req.params.id, input);
+  res.status(200).json({ success: true, data: updated });
+});
+
+export const updateCompanyItem = asyncHandler(async (req, res) => {
+  const input = parseBody(updateCompanyItemSchema, req.body);
+  const updated = await service.updateCompanyItem(req.user, req.params.companyItemId, input);
   res.status(200).json({ success: true, data: updated });
 });

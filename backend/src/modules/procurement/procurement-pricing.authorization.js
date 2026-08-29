@@ -21,11 +21,12 @@ export function hasCompanyWideDemandScope(actor) {
 // prices, line totals and grand total at their site by demand id — the exact
 // thing removing it from SITE_WIDE_PERMISSIONS was meant to prevent.
 //
-// Delegating means an actor holding a genuine site-wide ACTION authority
-// (procurement.pricing, procurement.purchase, dc.manage, demand.review,
-// demand.approve) still resolves to SITE tier and is unaffected, while a
-// price-visibility-only actor correctly resolves to OWN tier and is confined
-// to their own department.
+// Delegating means an actor holding genuine site-wide reach
+// (procurement.site_scope, demand.review, demand.approve) still resolves to
+// SITE tier and is unaffected, while an actor holding only an ACTION
+// capability — pricing, purchasing or price visibility — correctly resolves
+// to OWN tier and is confined to their own department. Scope is granted
+// explicitly, never inferred from what an actor may do.
 export function assertPricingScope(actor, demand) {
   if (hasCompanyWideDemandScope(actor)) return;
 

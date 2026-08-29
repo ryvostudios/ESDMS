@@ -37,3 +37,9 @@ export const updateCatalogEntrySchema = z.object({
   defaultUomId: uuid.optional(),
   isActive: z.boolean().optional(),
 });
+
+export const updateCompanyItemSchema = z.object({
+  name: z.string().trim().min(1).max(150).optional(),
+  description: z.string().trim().max(1000).nullable().optional(),
+  isActive: z.boolean().optional(),
+}).refine((value) => Object.keys(value).length > 0, { message: "Provide at least one change." });

@@ -265,3 +265,67 @@ test("create requires exactly one of companyItemId or newItem", async () => {
   });
   assert.equal(both.status, 400);
 });
+
+test("Company Item metadata/lifecycle is company-wide, non-destructive, and blocked while any catalog link is active", async () => {
+  const originalName = unique("Company Item Lifecycle");
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/material-catalog", {
+    token: ceoToken,
+    body: { departmentId: users.departmentA, newItem: { name: originalName }, defaultUomId: uomId },
+  });
+  assert.equal(created.status, 201);
+  const companyItemId = created.body.data.company_item_id;
+  const entryId = created.body.data.id;
+
+  const scopedEdit = await apiRequest(server.baseUrl, "PATCH", `/api/v1/material-catalog/company-items/${companyItemId}`, {
+    token: teamLeadToken,
+    body: { name: `${originalName} unauthorized` },
+  });
+  assert.equal(scopedEdit.status, 403);
+
+  const unsafeArchive = await apiRequest(server.baseUrl, "PATCH", `/api/v1/material-catalog/company-items/${companyItemId}`, {
+    token: ceoToken,
+    body: { isActive: false },
+  });
+  assert.equal(unsafeArchive.status, 409);
+  assert.match(unsafeArchive.body.error.message, /every active department catalog/i);
+
+  const removeFromCatalog = await apiRequest(server.baseUrl, "PATCH", `/api/v1/material-catalog/${entryId}`, {
+    token: ceoToken,
+    body: { isActive: false },
+  });
+  assert.equal(removeFromCatalog.status, 200);
+
+  const updatedName = `${originalName} Updated`;
+  const safeArchive = await apiRequest(server.baseUrl, "PATCH", `/api/v1/material-catalog/company-items/${companyItemId}`, {
+    token: ceoToken,
+    body: { name: updatedName, description: "Safe global metadata", isActive: false },
+  });
+  assert.equal(safeArchive.status, 200);
+  assert.equal(safeArchive.body.data.name, updatedName);
+  assert.equal(safeArchive.body.data.is_active, false);
+
+  const blockedCatalogRestore = await apiRequest(server.baseUrl, "PATCH", `/api/v1/material-catalog/${entryId}`, {
+    token: ceoToken,
+    body: { isActive: true },
+  });
+  assert.equal(blockedCatalogRestore.status, 409);
+  assert.match(blockedCatalogRestore.body.error.message, /reactivate the Company Item/i);
+
+  const reactivate = await apiRequest(server.baseUrl, "PATCH", `/api/v1/material-catalog/company-items/${companyItemId}`, {
+    token: ceoToken,
+    body: { isActive: true },
+  });
+  assert.equal(reactivate.status, 200);
+  assert.equal(reactivate.body.data.is_active, true);
+
+  const allRows = await apiRequest(
+    server.baseUrl,
+    "GET",
+    `/api/v1/material-catalog?departmentId=${users.departmentA}&includeInactive=true&search=${encodeURIComponent(updatedName)}`,
+    { token: ceoToken },
+  );
+  assert.equal(allRows.status, 200);
+  const row = allRows.body.data.find((candidate) => candidate.company_item_id === companyItemId);
+  assert.equal(row.item_name, updatedName);
+  assert.equal(row.is_active, false, "reactivating a Company Item must not silently restore department catalog links");
+});

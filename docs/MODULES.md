@@ -5,6 +5,8 @@
 
 This document tracks the business modules of the E-Set Digital Management System and their current implementation status.
 
+Management lifecycle/inverse semantics are maintained in [INVERSE_ACTION_AUDIT.md](./INVERSE_ACTION_AUDIT.md).
+
 A module must not be marked as implemented merely because it has been discussed, designed, documented or represented by a prototype.
 
 Use clear status descriptions such as:

@@ -31,8 +31,11 @@ export async function listDepartmentsForSite(siteId) {
   return result.rows;
 }
 
-export async function nameExistsForSite(siteId, name) {
-  const result = await pool.query("SELECT 1 FROM departments WHERE site_id = $1 AND name = $2", [siteId, name]);
+export async function nameExistsForSite(siteId, name, excludeId = null) {
+  const result = await pool.query(
+    "SELECT 1 FROM departments WHERE site_id = $1 AND name = $2 AND ($3::uuid IS NULL OR id <> $3)",
+    [siteId, name, excludeId],
+  );
   return result.rowCount > 0;
 }
 

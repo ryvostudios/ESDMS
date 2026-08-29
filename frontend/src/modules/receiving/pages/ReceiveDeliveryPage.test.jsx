@@ -71,7 +71,7 @@ describe("ReceiveDeliveryPage", () => {
     mockPermissions = new Set(["receiving.view", "receiving.receive"]);
     mockGetDelivery.mockResolvedValue(delivery());
     await renderPage();
-    expect(screen.queryByText(/temporary admin custody/i)).toBeNull();
+    expect(screen.queryByText(/temporary site administrator custody/i)).toBeNull();
 
     cleanup();
     mockPermissions = new Set(["receiving.view", "receiving.fallback_receive"]);

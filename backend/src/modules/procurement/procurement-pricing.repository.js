@@ -5,13 +5,17 @@ const DEMAND_DETAIL_COLUMNS = `
   s.name AS site_name, md.department_id, d.name AS department_name
 `;
 
-export async function listReadyForPricing({ siteId, search, page, pageSize }) {
+export async function listReadyForPricing({ siteId, departmentId = null, search, page, pageSize }) {
   const conditions = ["md.status IN ('READY_FOR_PRICING', 'PRICING_REVISION_REQUIRED')"];
   const values = [];
 
   if (siteId) {
     values.push(siteId);
     conditions.push(`md.site_id = $${values.length}`);
+  }
+  if (departmentId) {
+    values.push(departmentId);
+    conditions.push(`md.department_id = $${values.length}`);
   }
   if (search) {
     values.push(`%${search}%`);

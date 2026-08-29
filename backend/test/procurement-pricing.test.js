@@ -141,6 +141,22 @@ test("procurement queue is capability-gated, site-scoped, status-filtered, and p
   await setOverride(users.admin, "procurement.pricing", "GRANT");
   await setOverride(users.otherSiteAdmin, "procurement.pricing", "GRANT");
   try {
+    // Without procurement.site_scope the queue must not advertise another
+    // department's Demand: the detail route would refuse it as 404, and a
+    // queue that lists what its detail route denies is the defect this
+    // guards. procurement.pricing alone answers WHAT, never WHERE.
+    const unscopedQueue = await apiRequest(
+      server.baseUrl,
+      "GET",
+      `/api/v1/procurement/pricing?search=${encodeURIComponent(ready.demand.demand_number)}`,
+      { token: tokens.admin },
+    );
+    assert.equal(unscopedQueue.status, 200);
+    assert.equal(unscopedQueue.body.data.some((row) => row.id === ready.demand.id), false);
+
+    await setOverride(users.admin, "procurement.site_scope", "GRANT");
+    await setOverride(users.otherSiteAdmin, "procurement.site_scope", "GRANT");
+
     const queue = await apiRequest(
       server.baseUrl,
       "GET",
@@ -162,14 +178,21 @@ test("procurement queue is capability-gated, site-scoped, status-filtered, and p
     assert.equal(wrongSiteQueue.body.data.some((row) => row.id === ready.demand.id), false);
   } finally {
     await clearOverride(users.admin, "procurement.pricing");
+    await clearOverride(users.admin, "procurement.site_scope");
     await clearOverride(users.otherSiteAdmin, "procurement.pricing");
+    await clearOverride(users.otherSiteAdmin, "procurement.site_scope");
   }
 });
 
 test("explicitly granted Procurement can price its site across departments but not another site", async () => {
   const detail = await createDemand();
+  // Two separate grants by design: the action capability says WHAT this actor
+  // may do, procurement.site_scope says WHERE. Cross-department reach is
+  // never inferred from holding procurement.pricing alone.
   await setOverride(users.admin, "procurement.pricing", "GRANT");
+  await setOverride(users.admin, "procurement.site_scope", "GRANT");
   await setOverride(users.otherSiteAdmin, "procurement.pricing", "GRANT");
+  await setOverride(users.otherSiteAdmin, "procurement.site_scope", "GRANT");
   try {
     const saved = await savePricing(detail, tokens.admin);
     assert.equal(saved.status, 200);
@@ -179,7 +202,9 @@ test("explicitly granted Procurement can price its site across departments but n
     assert.equal(wrongSite.status, 404);
   } finally {
     await clearOverride(users.admin, "procurement.pricing");
+    await clearOverride(users.admin, "procurement.site_scope");
     await clearOverride(users.otherSiteAdmin, "procurement.pricing");
+    await clearOverride(users.otherSiteAdmin, "procurement.site_scope");
   }
 });
 

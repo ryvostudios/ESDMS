@@ -43,3 +43,4 @@ export const searchCompanyItems = (q, departmentId) => {
 
 export const addCatalogEntry = (body) => apiClient.post("/material-catalog", body);
 export const updateCatalogEntry = (id, body) => apiClient.patch(`/material-catalog/${id}`, body);
+export const updateCompanyItem = (id, body) => apiClient.patch(`/material-catalog/company-items/${id}`, body);

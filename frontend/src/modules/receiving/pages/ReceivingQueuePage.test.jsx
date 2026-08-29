@@ -73,7 +73,7 @@ describe("ReceivingQueuePage", () => {
 
     expect(screen.getByText("Awaiting department handover")).toBeTruthy();
     expect(screen.getByText("Pending confirmation")).toBeTruthy();
-    expect(screen.getByText(/temporary admin custody/i)).toBeTruthy();
+    expect(screen.getByText(/temporary site administrator custody/i)).toBeTruthy();
     expect(screen.getByText("ESET-DC/2026/8")).toBeTruthy();
     expect(screen.getByText("Discrepancy")).toBeTruthy();
   });

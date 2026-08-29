@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { SearchField } from "../../../shared/components/SearchField.jsx";
-import { Select } from "../../../shared/components/FormField.jsx";
+import { FormField, Input, Select, Textarea } from "../../../shared/components/FormField.jsx";
+import { Dialog } from "../../../shared/components/Dialog.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { LoadingState, ErrorState, EmptyState } from "../../../shared/components/StatePanel.jsx";
 import { Pagination } from "../../../shared/components/Pagination.jsx";
@@ -16,10 +17,86 @@ import styles from "./MaterialCatalogPage.module.css";
 
 const PAGE_SIZE = 50;
 
+function EditCompanyItemDialog({ row, onClose, onSaved }) {
+  const [name, setName] = useState(row.item_name);
+  const [description, setDescription] = useState(row.item_description || "");
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      await api.updateCompanyItem(row.company_item_id, { name, description: description || null });
+      await onSaved();
+      onClose();
+    } catch (saveError) {
+      setError(apiErrorMessage(saveError, "Unable to update this Company Item."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} title="Edit Company Item" labelledBy="edit-company-item-title">
+      <form onSubmit={save}>
+        <FormField label="Material name" htmlFor="company-item-name" required>
+          <Input id="company-item-name" value={name} maxLength={150} onChange={(event) => setName(event.target.value)} required />
+        </FormField>
+        <FormField label="Description" htmlFor="company-item-description">
+          <Textarea id="company-item-description" value={description} maxLength={1000} onChange={(event) => setDescription(event.target.value)} />
+        </FormField>
+        {error && <p role="alert">{error}</p>}
+        <Button type="submit" loading={saving}>Save Company Item</Button>{" "}
+        <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+      </form>
+    </Dialog>
+  );
+}
+
+function EditCatalogEntryDialog({ row, unitsOfMeasure, onClose, onSaved }) {
+  const [defaultUomId, setDefaultUomId] = useState(row.default_uom_id || "");
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      await api.updateCatalogEntry(row.id, { defaultUomId });
+      await onSaved();
+      onClose();
+    } catch (saveError) {
+      setError(apiErrorMessage(saveError, "Unable to update the catalog entry."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} title="Edit Catalog Entry" labelledBy="edit-catalog-entry-title">
+      <form onSubmit={save}>
+        <FormField label="Default unit" htmlFor="edit-catalog-uom" required>
+          <Select id="edit-catalog-uom" value={defaultUomId} onChange={(event) => setDefaultUomId(event.target.value)} required>
+            <option value="">Select a unit…</option>
+            {unitsOfMeasure.map((uom) => <option key={uom.id} value={uom.id}>{uom.name}</option>)}
+          </Select>
+        </FormField>
+        {error && <p role="alert">{error}</p>}
+        <Button type="submit" loading={saving} disabled={!defaultUomId}>Save Catalog Entry</Button>{" "}
+        <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+      </form>
+    </Dialog>
+  );
+}
+
 export function MaterialCatalogPage() {
   const { user, hasPermission } = useAuth();
   const canManage = hasPermission("material_catalog.manage");
   const canSeeAllDepartments = hasPermission("material_catalog.all_departments");
+  const canManageCompanyItems = canManage && canSeeAllDepartments;
 
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -36,7 +113,10 @@ export function MaterialCatalogPage() {
   // again so it can be restored. Archiving used to be a one-way trip purely
   // because nothing ever asked for the archived rows.
   const [includeInactive, setIncludeInactive] = useState(false);
-  const [pendingArchive, setPendingArchive] = useState(null);
+  const [pendingCatalogAction, setPendingCatalogAction] = useState(null);
+  const [pendingCompanyItemAction, setPendingCompanyItemAction] = useState(null);
+  const [editingCompanyItem, setEditingCompanyItem] = useState(null);
+  const [editingCatalogEntry, setEditingCatalogEntry] = useState(null);
   const [actionError, setActionError] = useState(null);
 
   useEffect(() => {
@@ -84,16 +164,27 @@ export function MaterialCatalogPage() {
       await api.updateCatalogEntry(row.id, { isActive });
       load();
     } catch (err) {
-      setActionError(apiErrorMessage(err, isActive ? "Unable to restore this material." : "Unable to archive this material."));
+      setActionError(apiErrorMessage(err, isActive ? "Unable to restore this material to the catalog." : "Unable to remove this material from the catalog."));
     }
   }
 
-  // Archiving removes a material from every new Demand's picker, so it is
-  // confirmed. Restoring is not — it only puts a choice back.
-  async function confirmArchive() {
-    const row = pendingArchive;
-    setPendingArchive(null);
-    if (row) await setActive(row, false);
+  async function confirmCatalogAction() {
+    const action = pendingCatalogAction;
+    setPendingCatalogAction(null);
+    if (action) await setActive(action.row, action.isActive);
+  }
+
+  async function confirmCompanyItemAction() {
+    const action = pendingCompanyItemAction;
+    setPendingCompanyItemAction(null);
+    if (!action) return;
+    setActionError(null);
+    try {
+      await api.updateCompanyItem(action.row.company_item_id, { isActive: action.isActive });
+      load();
+    } catch (err) {
+      setActionError(apiErrorMessage(err, action.isActive ? "Unable to reactivate this Company Item." : "Unable to archive this Company Item."));
+    }
   }
 
   const hasActiveFilter = Boolean(search || departmentId || includeInactive);
@@ -210,12 +301,24 @@ export function MaterialCatalogPage() {
                   </td>
                   {canManage && (
                     <td className={styles.actionCell}>
+                      <Button variant="ghost" onClick={() => setEditingCatalogEntry(row)}>Edit Catalog</Button>
                       <Button
                         variant="ghost"
-                        onClick={() => (row.is_active ? setPendingArchive(row) : setActive(row, true))}
+                        onClick={() => setPendingCatalogAction({ row, isActive: !row.is_active })}
                       >
-                        {row.is_active ? "Archive" : "Restore"}
+                        {row.is_active ? "Remove from Catalog" : "Restore to Catalog"}
                       </Button>
+                      {canManageCompanyItems && (
+                        <>
+                          <Button variant="ghost" onClick={() => setEditingCompanyItem(row)}>Edit Item</Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setPendingCompanyItemAction({ row, isActive: !row.company_item_is_active })}
+                          >
+                            {row.company_item_is_active ? "Archive Company Item" : "Reactivate Company Item"}
+                          </Button>
+                        </>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -235,12 +338,23 @@ export function MaterialCatalogPage() {
                   <span>{row.default_uom_name}</span>
                 </div>
                 {canManage && (
-                  <Button
-                    variant="ghost"
-                    onClick={() => (row.is_active ? setPendingArchive(row) : setActive(row, true))}
-                  >
-                    {row.is_active ? "Archive" : "Restore"}
-                  </Button>
+                  <>
+                    <Button variant="ghost" onClick={() => setEditingCatalogEntry(row)}>Edit Catalog</Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setPendingCatalogAction({ row, isActive: !row.is_active })}
+                    >
+                      {row.is_active ? "Remove from Catalog" : "Restore to Catalog"}
+                    </Button>
+                    {canManageCompanyItems && (
+                      <>
+                        <Button variant="ghost" onClick={() => setEditingCompanyItem(row)}>Edit Item</Button>
+                        <Button variant="ghost" onClick={() => setPendingCompanyItemAction({ row, isActive: !row.company_item_is_active })}>
+                          {row.company_item_is_active ? "Archive Company Item" : "Reactivate Company Item"}
+                        </Button>
+                      </>
+                    )}
+                  </>
                 )}
               </li>
             ))}
@@ -250,14 +364,44 @@ export function MaterialCatalogPage() {
         </>
       )}
 
-      {pendingArchive && (
+      {pendingCatalogAction && (
         <ConfirmActionDialog
           open
-          onClose={() => setPendingArchive(null)}
-          title="Archive material"
-          message={`Archive “${pendingArchive.item_name}” from the department catalog? It will no longer appear when building a new Demand. Existing Demands keep it, and you can restore it later.`}
-          confirmLabel="Archive"
-          onConfirm={confirmArchive}
+          onClose={() => setPendingCatalogAction(null)}
+          title={pendingCatalogAction.isActive ? "Restore to Catalog" : "Remove from Catalog"}
+          message={pendingCatalogAction.isActive
+            ? `Restore “${pendingCatalogAction.row.item_name}” to this department's catalog? It will be available for new Demand selections again.`
+            : "This removes the material from new selections for this department. Historical Demands and records will not be changed."}
+          confirmLabel={pendingCatalogAction.isActive ? "Restore to Catalog" : "Remove from Catalog"}
+          variant={pendingCatalogAction.isActive ? "primary" : "danger"}
+          onConfirm={confirmCatalogAction}
+        />
+      )}
+
+      {pendingCompanyItemAction && (
+        <ConfirmActionDialog
+          open
+          onClose={() => setPendingCompanyItemAction(null)}
+          title={pendingCompanyItemAction.isActive ? "Reactivate Company Item" : "Archive Company Item"}
+          message={pendingCompanyItemAction.isActive
+            ? "Reactivate this global Company Item? Department catalog relationships remain unchanged and must be restored separately."
+            : "Archive this global Company Item? It must first be removed from every department catalog. Historical Demand snapshots will not change."}
+          confirmLabel={pendingCompanyItemAction.isActive ? "Reactivate Company Item" : "Archive Company Item"}
+          variant={pendingCompanyItemAction.isActive ? "primary" : "danger"}
+          onConfirm={confirmCompanyItemAction}
+        />
+      )}
+
+      {editingCompanyItem && (
+        <EditCompanyItemDialog row={editingCompanyItem} onClose={() => setEditingCompanyItem(null)} onSaved={load} />
+      )}
+
+      {editingCatalogEntry && (
+        <EditCatalogEntryDialog
+          row={editingCatalogEntry}
+          unitsOfMeasure={unitsOfMeasure}
+          onClose={() => setEditingCatalogEntry(null)}
+          onSaved={load}
         />
       )}
 

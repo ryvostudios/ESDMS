@@ -619,7 +619,10 @@ test("purchasing capability is required and is not implied by management or ADMI
     assert.equal(response.status, 403);
   }
 
+  // WHAT (purchase) and WHERE (site scope) are separate grants; purchasing
+  // another department's IPO needs both.
   await setOverride(users.admin, "procurement.purchase", "GRANT", users.ceo);
+  await setOverride(users.admin, "procurement.site_scope", "GRANT", users.ceo);
   try {
     assert.equal(
       (await apiRequest(ctx.baseUrl, "POST", `/api/v1/ipos/${ipoId}/purchases`, {
@@ -630,6 +633,7 @@ test("purchasing capability is required and is not implied by management or ADMI
     );
   } finally {
     await clearOverride(users.admin, "procurement.purchase");
+    await clearOverride(users.admin, "procurement.site_scope");
   }
 
   await setOverride(users.admin, "procurement.purchase", "DENY", users.ceo);

@@ -3,13 +3,13 @@ import { withTransaction } from "../../shared/db/with-transaction.js";
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors/app-error.js";
 import { enqueue } from "../../shared/notifications/outbox.repository.js";
 import { resolveEligibleRecipients } from "../../shared/notifications/recipient-resolver.js";
+import { resolveSupplyChainScope } from "../../shared/authorization/supply-chain-scope.js";
 import { MATERIAL_DEMAND_STATUS } from "../material-demand/material-demand.constants.js";
 import * as demandRepo from "../material-demand/material-demand.repository.js";
 import {
   assertCanPrice,
   assertCanViewPrices,
   assertPricingScope,
-  hasCompanyWideDemandScope,
 } from "./procurement-pricing.authorization.js";
 import {
   ALL_DEMAND_SCOPE_PERMISSION,
@@ -64,11 +64,20 @@ function assertLineOwnership(demandLines, requestedLines) {
 
 export async function listPricingQueue(actor, query) {
   assertCanPrice(actor);
-  if (!hasCompanyWideDemandScope(actor) && !actor.siteId) {
-    return { rows: [], total: 0 };
-  }
+
+  // The SAME resolver the pricing detail route enforces through
+  // assertPricingScope. A site-only queue used to list every department's
+  // Demand at the actor's site while the detail route refused all but their
+  // own — so a Procurement actor without procurement.site_scope saw rows they
+  // could only ever open as 404. A queue must never advertise a record its
+  // detail route will deny.
+  const scope = resolveSupplyChainScope(actor);
+  if (scope.tier !== "ALL" && !scope.siteId) return { rows: [], total: 0 };
+  if (scope.tier === "OWN" && !scope.departmentId) return { rows: [], total: 0 };
+
   return repo.listReadyForPricing({
-    siteId: hasCompanyWideDemandScope(actor) ? null : actor.siteId,
+    siteId: scope.siteId,
+    departmentId: scope.departmentId,
     ...query,
   });
 }

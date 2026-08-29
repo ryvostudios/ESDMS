@@ -188,9 +188,9 @@ describe("IpoDetailPage", () => {
     await renderPage();
 
     expect(screen.getAllByText("ESET-DC/2026/8").length).toBeGreaterThan(0);
-    // Admin custody and the eventual department recipient are both shown —
+    // Site Administrator custody and the eventual department recipient are both shown —
     // the original receiver is never replaced by the handover.
-    expect(screen.getByText(/temporary admin custody by test admin/i)).toBeTruthy();
+    expect(screen.getByText(/temporary site administrator custody by test admin/i)).toBeTruthy();
     expect(screen.getByText(/handed over to test employee/i)).toBeTruthy();
     expect(screen.getByText(/confirmed by test team lead/i)).toBeTruthy();
     // The badge, distinct from the "Discrepancy" quantity column header.

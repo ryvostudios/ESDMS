@@ -94,19 +94,25 @@ test("price visibility alone never elevates a department actor beyond their own 
 });
 
 test("genuine cross-department responsibility still grants site scope", () => {
-  // Each of these is an authority to ACT on other departments' records, which
-  // is what legitimately earns site-wide reach.
-  for (const capability of [
-    "procurement.pricing",
-    "procurement.purchase",
-    "dc.manage",
-    "demand.review",
-    "demand.approve",
-  ]) {
+  // Scope is explicit for Procurement: procurement.site_scope answers WHERE,
+  // while management review/approval remain intrinsically site-wide
+  // authorities to act on other departments' records.
+  for (const capability of ["procurement.site_scope", "demand.review", "demand.approve"]) {
     assert.equal(
       resolveSupplyChainScope(actorWith([capability])).tier,
       "SITE",
       `${capability} must still grant site scope`,
+    );
+  }
+
+  // Procurement ACTION capabilities answer WHAT, never WHERE: on their own
+  // they must not widen an actor beyond their own department, so Governance
+  // can remove site reach without rewriting every operational grant.
+  for (const capability of ["procurement.pricing", "procurement.purchase", "dc.manage"]) {
+    assert.equal(
+      resolveSupplyChainScope(actorWith([capability])).tier,
+      "OWN",
+      `${capability} must not grant scope on its own`,
     );
   }
 
