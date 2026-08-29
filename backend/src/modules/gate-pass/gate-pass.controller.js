@@ -86,6 +86,14 @@ export const downloadPdf = asyncHandler(async (req, res) => {
   res.send(buffer);
 });
 
+export const downloadCompletionPdf = asyncHandler(async (req, res) => {
+  const { buffer, mimeType } = await service.getCompletionPdf(req.user, req.params.id);
+  res.setHeader("Content-Type", mimeType);
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.send(buffer);
+});
+
 export const downloadFile = asyncHandler(async (req, res) => {
   const { buffer, mimeType } = await service.getAuthorizedFile(req.user, req.params.id, req.params.fileId);
   res.setHeader("Content-Type", mimeType);

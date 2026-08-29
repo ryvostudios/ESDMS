@@ -15,6 +15,11 @@ export function toDetailDto(gatePass, items = [], auditLog = [], documentReady =
     driverName: gatePass.driver_name,
     driverPhone: gatePass.driver_phone,
     vehicleRegistration: gatePass.vehicle_registration,
+    // Provenance only: which master rows were chosen. The name/phone/
+    // registration above stay the historical record and are never re-read
+    // from these ids — see gate-pass.service.js applyFleetSelection.
+    driverId: gatePass.driver_id ?? null,
+    vehicleId: gatePass.vehicle_id ?? null,
     jobOrderId: gatePass.job_order_id,
     purpose: gatePass.purpose,
     expectedReturnDate: gatePass.expected_return_date,

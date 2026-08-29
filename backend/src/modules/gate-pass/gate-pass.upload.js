@@ -1,5 +1,9 @@
 import multer from "multer";
-import { ALLOWED_PHOTO_MIME_TYPES, MAX_EVIDENCE_PHOTO_BYTES } from "./gate-pass.constants.js";
+import {
+  ALLOWED_PHOTO_MIME_TYPES,
+  MAX_EVIDENCE_PHOTO_BYTES,
+  MAX_EVIDENCE_PHOTOS_PER_REQUEST,
+} from "./gate-pass.constants.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 
 const EXTENSION_BY_MIME = {
@@ -35,7 +39,7 @@ const SIGNATURE_CHECKS = {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_EVIDENCE_PHOTO_BYTES, files: 1 },
+  limits: { fileSize: MAX_EVIDENCE_PHOTO_BYTES, files: MAX_EVIDENCE_PHOTOS_PER_REQUEST },
   fileFilter(req, file, callback) {
     if (!ALLOWED_PHOTO_MIME_TYPES.includes(file.mimetype)) {
       return callback(new ValidationError("Photo must be JPEG, PNG, or WebP."));
@@ -45,27 +49,42 @@ const upload = multer({
   },
 });
 
-export const evidencePhotoUpload = upload.single("photo");
+// Two field names, one handler: "photo" is the original single-file contract
+// (still used by the existing Guard exit/return form), "photos" carries the
+// multi-capture case. Accepting both means adding multi-photo support never
+// breaks a client that already works.
+export const evidencePhotoUpload = upload.fields([
+  { name: "photo", maxCount: 1 },
+  { name: "photos", maxCount: MAX_EVIDENCE_PHOTOS_PER_REQUEST },
+]);
 
 // Normalizes the multer file into the shape gate-pass.service expects,
 // deriving the extension from the verified MIME type — never from the
 // client-supplied original filename. Also re-validates the actual bytes
 // against the declared type: fileFilter above only ever saw the client's
 // claimed Content-Type, not the body.
-export function extractPhoto(req) {
-  if (!req.file) {
-    return null;
-  }
-
-  const isRealImage = SIGNATURE_CHECKS[req.file.mimetype]?.(req.file.buffer);
-
-  if (!isRealImage) {
+function toVerifiedPhoto(file) {
+  // fileFilter only ever saw the client's CLAIMED Content-Type; this is the
+  // check against bytes the client cannot forge into a different format.
+  if (!SIGNATURE_CHECKS[file.mimetype]?.(file.buffer)) {
     throw new ValidationError("The uploaded file is not a valid JPEG, PNG, or WebP image.");
   }
 
   return {
-    buffer: req.file.buffer,
-    mimeType: req.file.mimetype,
-    extension: EXTENSION_BY_MIME[req.file.mimetype],
+    buffer: file.buffer,
+    mimeType: file.mimetype,
+    extension: EXTENSION_BY_MIME[file.mimetype],
   };
+}
+
+// Every uploaded photo, in request order, from either field name. The first
+// one is what exit/return store as the event's primary photo (the column the
+// status-coherence CHECK requires); the rest are additional evidence rows.
+export function extractPhotos(req) {
+  const files = [...(req.files?.photo ?? []), ...(req.files?.photos ?? [])];
+  return files.map(toVerifiedPhoto);
+}
+
+export function extractPhoto(req) {
+  return extractPhotos(req)[0] ?? null;
 }

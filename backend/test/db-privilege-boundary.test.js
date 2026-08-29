@@ -116,6 +116,8 @@ const PROCUREMENT_DOCUMENT_TABLES = ["procurement_documents"];
 // 1787423000000_carry-forward-allocation.js.
 const CARRY_FORWARD_TABLES = ["carry_forward_allocations"];
 
+const FLEET_MASTER_TABLES = ["drivers", "vehicles"];
+
 const CAPABILITY_BUNDLE_TABLES = [
   "permission_bundles",
   "permission_bundle_permissions",
@@ -138,6 +140,7 @@ const RUNTIME_APPLICATION_TABLES = [
   ...PROCUREMENT_DOCUMENT_TABLES,
   ...CARRY_FORWARD_TABLES,
   ...CAPABILITY_BUNDLE_TABLES,
+  ...FLEET_MASTER_TABLES,
 ];
 const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];

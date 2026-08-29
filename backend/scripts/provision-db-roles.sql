@@ -108,6 +108,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.delivery_challan_lines,
   public.delivery_challans,
   public.departments,
+  public.drivers,
   public.document_number_counters,
   public.document_number_settings,
   public.employee_business_history,
@@ -160,7 +161,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.temporary_assignments,
   public.units_of_measure,
   public.user_permission_overrides,
-  public.users
+  public.users,
+  public.vehicles
 TO esdms_runtime;
 
 -- Capability definitions are migration-owned reference data. Runtime may
@@ -298,6 +300,8 @@ ALTER TABLE public.units_of_measure ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_permission_overrides ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_permission_bundle_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.drivers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vehicles ENABLE ROW LEVEL SECURITY;
 
 -- Converge each application table to exactly one known runtime policy. Drop
 -- and recreate is transactional and idempotent. pgmigrations intentionally has
@@ -313,6 +317,7 @@ BEGIN
     'delivery_challan_lines',
     'delivery_challans',
     'departments',
+    'drivers',
     'document_number_counters',
     'document_number_settings',
     'employee_business_history',
@@ -368,7 +373,8 @@ BEGIN
     'units_of_measure',
     'user_permission_overrides',
     'user_permission_bundle_assignments',
-    'users'
+    'users',
+    'vehicles'
   ]
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS esdms_runtime_access ON public.%I', table_name);
@@ -432,6 +438,7 @@ expected_tables(table_name) AS (
     ('delivery_challan_lines'),
     ('delivery_challans'),
     ('departments'),
+    ('drivers'),
     ('document_number_counters'),
     ('document_number_settings'),
     ('employee_business_history'),
@@ -484,7 +491,8 @@ expected_tables(table_name) AS (
     ('temporary_assignments'),
     ('units_of_measure'),
     ('user_permission_overrides'),
-    ('users')
+    ('users'),
+    ('vehicles')
 ),
 dml_privileges(privilege_type) AS (
   VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')
@@ -618,6 +626,7 @@ WITH expected_tables(table_name) AS (
     ('delivery_challan_lines'),
     ('delivery_challans'),
     ('departments'),
+    ('drivers'),
     ('document_number_counters'),
     ('document_number_settings'),
     ('employee_business_history'),
@@ -673,11 +682,12 @@ WITH expected_tables(table_name) AS (
     ('units_of_measure'),
     ('user_permission_overrides'),
     ('user_permission_bundle_assignments'),
-    ('users')
+    ('users'),
+    ('vehicles')
 )
 SELECT
   (SELECT count(*) FROM pg_policies
-   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 62
+   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 64
   AND NOT EXISTS (
     SELECT 1
     FROM expected_tables e

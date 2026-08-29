@@ -10,10 +10,46 @@ import {
   assertDepartmentChangeAllowed,
   assertDepartmentUsable,
 } from "./gate-pass.authorization.js";
-import { TRANSITIONS, GATE_PASS_STATUS } from "./gate-pass.constants.js";
+import {
+  TRANSITIONS,
+  GATE_PASS_STATUS,
+  EVIDENCE_KIND,
+  EVIDENCE_FILE_TYPE,
+  MAX_EVIDENCE_PHOTOS_PER_GATE_PASS,
+} from "./gate-pass.constants.js";
 import { generateGatePassPdf } from "./gate-pass.pdf.js";
+import { generateGatePassCompletionPdf } from "./gate-pass.completion-pdf.js";
 import * as repo from "./gate-pass.repository.js";
+import { resolveDriverForGatePass, resolveVehicleForGatePass } from "../fleet/fleet.service.js";
+import { logServerError } from "../../shared/logging/safe-logger.js";
 import config from "../../config/env.js";
+
+// Turns a Driver/Vehicle master selection into the immutable text the Gate
+// Pass itself stores.
+//
+// This is the whole point of keeping driver_name / driver_phone /
+// vehicle_registration as columns on gate_passes: the master row is
+// provenance ("which record was picked"), the copied text is history. A
+// Driver later renamed, or a Vehicle re-registered, therefore cannot rewrite
+// what an already-issued Gate Pass says went out of the gate.
+async function applyFleetSelection(actor, input) {
+  if (!input.driverId && !input.vehicleId) return input;
+
+  const resolved = { ...input };
+
+  if (input.driverId) {
+    const driver = await resolveDriverForGatePass(actor, input.driverId);
+    resolved.driverName = driver.name;
+    resolved.driverPhone = driver.phone;
+  }
+
+  if (input.vehicleId) {
+    const vehicle = await resolveVehicleForGatePass(actor, input.vehicleId);
+    resolved.vehicleRegistration = vehicle.registration_number;
+  }
+
+  return resolved;
+}
 
 function hashToken(rawToken) {
   return crypto.createHash("sha256").update(rawToken).digest("hex");
@@ -55,11 +91,12 @@ export async function createGatePass(actor, input) {
   // cross-department row to clean up afterward.
   const departmentId = resolveCreateDepartmentId(actor, input.issuingDepartmentId);
   await assertDepartmentUsable(actor, departmentId);
+  const resolved = await applyFleetSelection(actor, input);
 
   return withTransaction(async (client) => {
     const gatePassNumber = await repo.nextGatePassNumber(client);
-    const id = await repo.insertDraft(client, gatePassNumber, actor.id, actor.siteId, departmentId, input);
-    await repo.insertItems(client, id, input.items);
+    const id = await repo.insertDraft(client, gatePassNumber, actor.id, actor.siteId, departmentId, resolved);
+    await repo.insertItems(client, id, resolved.items);
     await repo.insertAuditLog(client, {
       gatePassId: id,
       actorUserId: actor.id,
@@ -95,7 +132,7 @@ export async function updateDraft(actor, id, input) {
       await assertDepartmentUsable(actor, input.issuingDepartmentId);
     }
 
-    await repo.updateDraftFields(client, id, input);
+    await repo.updateDraftFields(client, id, await applyFleetSelection(actor, input));
 
     if (input.items) {
       await repo.replaceItems(client, id, input.items);
@@ -372,6 +409,130 @@ async function processApprovalPdfJob(item) {
 
 registerSystemJobHandler("GENERATE_APPROVAL_PDF", processApprovalPdfJob);
 
+// Outbox job handler for GENERATE_COMPLETION_PDF, enqueued inside the same
+// transaction that completes the Gate Pass (see recordReturn).
+//
+// Same discipline as the approval job, for the same reasons: idempotent by
+// re-deriving "already done?" from a committed COMPLETED_PDF row rather than
+// from anything about its own prior attempts, and compensating for a
+// non-transactional object upload if the transaction that would reference it
+// does not survive.
+//
+// Completion is already committed before this ever runs, so nothing here can
+// roll it back: a render failure, a storage failure, an unreachable WhatsApp
+// provider or an unconfirmed send all leave the Gate Pass COMPLETED and only
+// affect this retryable job.
+async function processCompletionPdfJob(item) {
+  const gatePassId = item.entity_id;
+  const outcome = { status: "SENT" };
+  let newlyUploadedStorageKey = null;
+
+  try {
+    await withTransaction(async (client) => {
+      const gatePass = await repo.lockDetailById(client, gatePassId);
+
+      if (!gatePass) return;
+
+      if (gatePass.status !== GATE_PASS_STATUS.COMPLETED) {
+        // Nothing to close out. Terminal rather than retried forever.
+        outcome.status = "VOID";
+        return;
+      }
+
+      const existing = await repo.findLatestCompletionPdf(gatePassId, client);
+      let storageKey = existing?.storage_key;
+
+      if (!storageKey) {
+        const [items, evidenceRows] = await Promise.all([
+          repo.findItemsByGatePassId(gatePassId),
+          repo.listEvidenceFilesForRender(gatePassId, client),
+        ]);
+
+        // Photo bytes are read back out of storage here rather than being
+        // carried through the outbox payload — an outbox row must stay small
+        // and must never become a second copy of the evidence.
+        const evidence = [];
+        for (const row of evidenceRows) {
+          try {
+            evidence.push({ ...row, buffer: await storageService.read(row.storage_key) });
+          } catch (error) {
+            // A missing object must not block closing out the Gate Pass; the
+            // document reports the rest of the evidence truthfully.
+            logServerError(error, undefined, { operation: "gate-pass.completion-pdf.read", gatePassId });
+          }
+        }
+
+        const pdfBuffer = await generateGatePassCompletionPdf(gatePass, items, evidence);
+        const version = await repo.nextCompletionPdfVersion(gatePassId, client);
+        const saved = await storageService.save(pdfBuffer, {
+          gatePassId,
+          category: "completion-pdf",
+          extension: "pdf",
+        });
+        storageKey = saved.storageKey;
+        newlyUploadedStorageKey = saved.storageKey;
+
+        await repo.insertFile(client, {
+          gatePassId,
+          fileType: "COMPLETED_PDF",
+          storageKey: saved.storageKey,
+          mimeType: "application/pdf",
+          sizeBytes: saved.sizeBytes,
+          checksumSha256: saved.checksumSha256,
+          version,
+          createdByUserId: item.payload.completedByUserId,
+        });
+      }
+
+      await enqueue(client, [
+        {
+          channel: "WHATSAPP",
+          eventType: "GATE_PASS_COMPLETED",
+          entityType: "GATE_PASS",
+          entityId: gatePassId,
+          recipientPhone: gatePass.driver_phone,
+          recipientSiteId: gatePass.site_id,
+          idempotencyKey: `whatsapp-completion:${gatePassId}`,
+          payload: {
+            storageKey,
+            filename: `${gatePass.gate_pass_number}-completion.pdf`,
+            caption: `Gate Pass ${gatePass.gate_pass_number} completed.`,
+          },
+        },
+      ]);
+    });
+
+    newlyUploadedStorageKey = null;
+  } catch (error) {
+    if (newlyUploadedStorageKey) {
+      await storageService.remove(newlyUploadedStorageKey);
+    }
+    throw error;
+  }
+
+  return outcome;
+}
+
+registerSystemJobHandler("GENERATE_COMPLETION_PDF", processCompletionPdfJob);
+
+export { processCompletionPdfJob };
+
+export async function getCompletionPdf(actor, gatePassId) {
+  const gatePass = await repo.findById(gatePassId);
+
+  if (!gatePass || !canReadGateEvidence(actor, gatePass)) {
+    throw new NotFoundError("Gate Pass not found.");
+  }
+
+  const file = await repo.findLatestCompletionPdf(gatePassId);
+
+  if (!file) {
+    throw new NotFoundError("No completion document is available yet.");
+  }
+
+  return { buffer: await storageService.read(file.storage_key), mimeType: file.mime_type };
+}
+
 // Exposed for tests: lets a test invoke finalization directly (e.g.
 // concurrently with a real cancel request) instead of only via the
 // registry/poll loop.
@@ -433,12 +594,160 @@ export async function getGuardDashboard(actor) {
   return repo.guardDashboard(actor.id, actor.siteId);
 }
 
-export async function recordExit(actor, id, { odometer, photo }) {
+// Stores a batch of evidence photos for one event and returns the file id of
+// the FIRST one, which exit/return then write into their primary photo
+// column (the column the status-coherence CHECK requires to be non-null).
+//
+// Callers pass every storage key they created into `uploaded` so the
+// compensating cleanup in their catch block can remove all of them if the
+// transaction does not survive — the same discipline the single-photo path
+// already used, extended to a batch.
+async function storeEvidenceBatch(client, { gatePassId, photos, fileType, actorId, note, uploaded, category }) {
+  const existing = await repo.countEvidenceFiles(client, gatePassId);
+  if (existing + photos.length > MAX_EVIDENCE_PHOTOS_PER_GATE_PASS) {
+    throw new ValidationError(
+      `A Gate Pass can hold at most ${MAX_EVIDENCE_PHOTOS_PER_GATE_PASS} evidence photos.`,
+    );
+  }
+
+  const fileIds = [];
+  let version = await repo.nextEvidenceVersion(client, gatePassId, fileType);
+
+  for (const photo of photos) {
+    const saved = await storageService.save(photo.buffer, {
+      gatePassId,
+      category,
+      extension: photo.extension,
+    });
+    uploaded.push(saved.storageKey);
+
+    fileIds.push(
+      await repo.insertFile(client, {
+        gatePassId,
+        fileType,
+        storageKey: saved.storageKey,
+        mimeType: photo.mimeType,
+        sizeBytes: saved.sizeBytes,
+        checksumSha256: saved.checksumSha256,
+        version,
+        createdByUserId: actorId,
+        evidenceNote: note ?? null,
+      }),
+    );
+
+    version += 1;
+  }
+
+  return fileIds[0];
+}
+
+// Additional gate evidence captured outside the exit/return transitions.
+//
+// The INBOUND_ADDITIONAL kind exists for the case the gate actually hits:
+// something comes back that was never on the approved pass. That photo is
+// accepted as evidence in its own right — it is never appended to the
+// approved item list and never re-opens an approved Gate Pass, so approved
+// history stays exactly as it was approved.
+export async function addEvidence(actor, id, { kind, note, photos }) {
+  const fileType = EVIDENCE_FILE_TYPE[kind];
+  if (!fileType) throw new ValidationError("Unknown evidence kind.");
+
+  if (!photos?.length) throw new ValidationError("At least one photo is required.");
+
+  const outbound = kind === EVIDENCE_KIND.OUTBOUND;
+  if (!actor.permissions.has(outbound ? "gate_pass.exit" : "gate_pass.return")) {
+    throw new ForbiddenError();
+  }
+
+  if (kind === EVIDENCE_KIND.INBOUND_ADDITIONAL && !note) {
+    throw new ValidationError("Describe what this additional inbound evidence shows.");
+  }
+
+  const uploaded = [];
+
+  try {
+    return await withTransaction(async (client) => {
+      const gatePass = await repo.lockById(client, id);
+
+      if (!gatePass || gatePass.site_id !== actor.siteId) {
+        throw new NotFoundError("Gate Pass not found.");
+      }
+
+      // Evidence attaches to a pass that has actually been through the gate.
+      // A DRAFT/PENDING/REJECTED/CANCELLED pass has no gate event to
+      // document, and COMPLETED stays open for late-arriving inbound
+      // evidence rather than forcing a Guard to reopen a closed record.
+      const allowed = outbound
+        ? [GATE_PASS_STATUS.VEHICLE_OUTSIDE, GATE_PASS_STATUS.COMPLETED]
+        : [GATE_PASS_STATUS.VEHICLE_OUTSIDE, GATE_PASS_STATUS.COMPLETED];
+
+      if (!allowed.includes(gatePass.status)) {
+        throw new ConflictError(
+          `Cannot attach gate evidence to a Gate Pass currently in ${gatePass.status} state.`,
+        );
+      }
+
+      const fileId = await storeEvidenceBatch(client, {
+        gatePassId: id,
+        photos,
+        fileType,
+        actorId: actor.id,
+        note: note ?? null,
+        uploaded,
+        category: outbound ? "departure" : "return",
+      });
+
+      await repo.insertAuditLog(client, {
+        gatePassId: id,
+        actorUserId: actor.id,
+        action: "EVIDENCE",
+        previousStatus: gatePass.status,
+        newStatus: gatePass.status,
+        metadata: { kind, photoCount: photos.length, ...(note ? { note } : {}) },
+      });
+
+      return { fileId, count: photos.length };
+    });
+  } catch (error) {
+    for (const key of uploaded) {
+      await storageService.remove(key);
+    }
+    throw error;
+  }
+}
+
+// A Guard holds none of the view_own/view_site reporting permissions, but
+// must be able to see the evidence they and their colleagues captured at the
+// same gate. Site is still absolute for them, exactly as it is everywhere
+// else in this module.
+export function canReadGateEvidence(actor, gatePass) {
+  if (isWithinGatePassScope(actor, gatePass)) return true;
+
+  const isGuard = ["gate_pass.verify", "gate_pass.exit", "gate_pass.return"].some((code) =>
+    actor.permissions.has(code),
+  );
+
+  return isGuard && gatePass.site_id === actor.siteId;
+}
+
+export async function listEvidence(actor, id) {
+  const gatePass = await repo.findById(id);
+
+  if (!gatePass || !canReadGateEvidence(actor, gatePass)) {
+    throw new NotFoundError("Gate Pass not found.");
+  }
+
+  return repo.listEvidenceFiles(id);
+}
+
+export async function recordExit(actor, id, { odometer, photo, photos }) {
   if (!actor.permissions.has("gate_pass.exit")) {
     throw new ForbiddenError();
   }
 
-  if (!photo) {
+  const evidence = photos?.length ? photos : photo ? [photo] : [];
+
+  if (!evidence.length) {
     throw new ValidationError("A departure photo is required.");
   }
 
@@ -447,7 +756,7 @@ export async function recordExit(actor, id, { odometer, photo }) {
   // nothing will ever reference. If the write to disk succeeds but the
   // transaction that was going to reference it doesn't, the compensating
   // remove() below cleans it up rather than leaking it.
-  let storageKey;
+  const uploaded = [];
 
   try {
     await withTransaction(async (client) => {
@@ -463,22 +772,13 @@ export async function recordExit(actor, id, { odometer, photo }) {
         );
       }
 
-      const saved = await storageService.save(photo.buffer, {
+      const photoFileId = await storeEvidenceBatch(client, {
         gatePassId: id,
-        category: "departure",
-        extension: photo.extension,
-      });
-      storageKey = saved.storageKey;
-
-      const photoFileId = await repo.insertFile(client, {
-        gatePassId: id,
+        photos: evidence,
         fileType: "DEPARTURE_PHOTO",
-        storageKey: saved.storageKey,
-        mimeType: photo.mimeType,
-        sizeBytes: saved.sizeBytes,
-        checksumSha256: saved.checksumSha256,
-        version: 1,
-        createdByUserId: actor.id,
+        actorId: actor.id,
+        uploaded,
+        category: "departure",
       });
 
       await repo.markExited(client, id, { odometer, byUserId: actor.id, photoFileId });
@@ -489,30 +789,32 @@ export async function recordExit(actor, id, { odometer, photo }) {
         action: "EXIT",
         previousStatus: GATE_PASS_STATUS.APPROVED,
         newStatus: GATE_PASS_STATUS.VEHICLE_OUTSIDE,
-        metadata: { odometer },
+        metadata: { odometer, photoCount: evidence.length },
       });
     });
   } catch (error) {
-    if (storageKey) {
-      await storageService.remove(storageKey);
+    for (const key of uploaded) {
+      await storageService.remove(key);
     }
     throw error;
   }
 }
 
-export async function recordReturn(actor, id, { odometer, photo, remarks }) {
+export async function recordReturn(actor, id, { odometer, photo, photos, remarks }) {
   if (!actor.permissions.has("gate_pass.return")) {
     throw new ForbiddenError();
   }
 
-  if (!photo) {
+  const evidence = photos?.length ? photos : photo ? [photo] : [];
+
+  if (!evidence.length) {
     throw new ValidationError("A return photo is required.");
   }
 
   // Same ordering as recordExit: validate under the row lock first, write
   // to disk only once the transition is known-good, and compensate with a
   // remove() if the transaction fails after the write anyway.
-  let storageKey;
+  const uploaded = [];
 
   try {
     await withTransaction(async (client) => {
@@ -532,22 +834,13 @@ export async function recordReturn(actor, id, { odometer, photo, remarks }) {
         throw new ValidationError("Return odometer cannot be lower than departure odometer.");
       }
 
-      const saved = await storageService.save(photo.buffer, {
+      const photoFileId = await storeEvidenceBatch(client, {
         gatePassId: id,
-        category: "return",
-        extension: photo.extension,
-      });
-      storageKey = saved.storageKey;
-
-      const photoFileId = await repo.insertFile(client, {
-        gatePassId: id,
+        photos: evidence,
         fileType: "RETURN_PHOTO",
-        storageKey: saved.storageKey,
-        mimeType: photo.mimeType,
-        sizeBytes: saved.sizeBytes,
-        checksumSha256: saved.checksumSha256,
-        version: 1,
-        createdByUserId: actor.id,
+        actorId: actor.id,
+        uploaded,
+        category: "return",
       });
 
       await repo.markReturned(client, id, { odometer, byUserId: actor.id, photoFileId, remarks });
@@ -558,12 +851,27 @@ export async function recordReturn(actor, id, { odometer, photo, remarks }) {
         action: "RETURN",
         previousStatus: GATE_PASS_STATUS.VEHICLE_OUTSIDE,
         newStatus: GATE_PASS_STATUS.COMPLETED,
-        metadata: { odometer },
+        metadata: { odometer, photoCount: evidence.length },
       });
+
+      // Completion commits first; the PDF and its WhatsApp delivery are a
+      // durable follow-up job. A render, storage or provider failure can
+      // therefore never roll back or block the Gate Pass being completed.
+      await enqueue(client, [
+        {
+          channel: "SYSTEM",
+          eventType: "GENERATE_COMPLETION_PDF",
+          entityType: "GATE_PASS",
+          entityId: id,
+          recipientSiteId: gatePass.site_id,
+          idempotencyKey: `generate-completion-pdf:${id}`,
+          payload: { completedByUserId: actor.id },
+        },
+      ]);
     });
   } catch (error) {
-    if (storageKey) {
-      await storageService.remove(storageKey);
+    for (const key of uploaded) {
+      await storageService.remove(key);
     }
     throw error;
   }
@@ -572,7 +880,12 @@ export async function recordReturn(actor, id, { odometer, photo, remarks }) {
 export async function getAuthorizedFile(actor, gatePassId, fileId) {
   const gatePass = await repo.findById(gatePassId);
 
-  if (!gatePass || !isWithinGatePassScope(actor, gatePass)) {
+  // Guards may read back the evidence captured at their own gate; everyone
+  // else needs the ordinary reporting scope. IDOR protection is the second
+  // check below: a file id is only ever served when it actually belongs to
+  // the Gate Pass whose scope was just verified, so guessing a file id from
+  // another record yields "not found", never its bytes.
+  if (!gatePass || !canReadGateEvidence(actor, gatePass)) {
     throw new NotFoundError("File not found.");
   }
 

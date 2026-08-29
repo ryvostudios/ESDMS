@@ -2,8 +2,9 @@ import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import * as service from "./gate-pass.service.js";
 import { toGuardDto } from "./gate-pass.serializers.js";
-import { extractPhoto } from "./gate-pass.upload.js";
+import { extractPhoto, extractPhotos } from "./gate-pass.upload.js";
 import {
+  addEvidenceSchema,
   exitActionSchema,
   returnActionSchema,
   guardSearchQuerySchema,
@@ -66,24 +67,46 @@ export const verify = asyncHandler(async (req, res) => {
 
 export const exit = asyncHandler(async (req, res) => {
   const { odometer } = parseBody(exitActionSchema, req.body);
-  const photo = extractPhoto(req);
+  const photos = extractPhotos(req);
 
-  if (!photo) {
+  if (!photos.length) {
     throw new ValidationError("A departure photo is required.");
   }
 
-  await service.recordExit(req.user, req.params.id, { odometer, photo });
-  res.status(200).json({ success: true, data: { id: req.params.id, status: "VEHICLE_OUTSIDE" } });
+  await service.recordExit(req.user, req.params.id, { odometer, photos });
+  res.status(200).json({
+    success: true,
+    data: { id: req.params.id, status: "VEHICLE_OUTSIDE", photoCount: photos.length },
+  });
 });
 
 export const returnVehicle = asyncHandler(async (req, res) => {
   const { odometer, remarks } = parseBody(returnActionSchema, req.body);
-  const photo = extractPhoto(req);
+  const photos = extractPhotos(req);
 
-  if (!photo) {
+  if (!photos.length) {
     throw new ValidationError("A return photo is required.");
   }
 
-  await service.recordReturn(req.user, req.params.id, { odometer, photo, remarks });
-  res.status(200).json({ success: true, data: { id: req.params.id, status: "COMPLETED" } });
+  await service.recordReturn(req.user, req.params.id, { odometer, photos, remarks });
+  res.status(200).json({
+    success: true,
+    data: { id: req.params.id, status: "COMPLETED", photoCount: photos.length },
+  });
+});
+
+export const addEvidence = asyncHandler(async (req, res) => {
+  const { kind, note } = parseBody(addEvidenceSchema, req.body);
+  const photos = extractPhotos(req);
+
+  if (!photos.length) {
+    throw new ValidationError("At least one photo is required.");
+  }
+
+  const result = await service.addEvidence(req.user, req.params.id, { kind, note: note || null, photos });
+  res.status(201).json({ success: true, data: { id: req.params.id, ...result } });
+});
+
+export const listEvidence = asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: await service.listEvidence(req.user, req.params.id) });
 });

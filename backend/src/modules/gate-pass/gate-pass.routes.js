@@ -45,12 +45,33 @@ router.post("/:id/reject", requirePermission("gate_pass.reject"), controller.rej
 router.post("/:id/cancel", requirePermission("gate_pass.cancel"), controller.cancel);
 router.get("/:id/pdf", requirePermission("gate_pass.view_own", "gate_pass.view_site"), controller.downloadPdf);
 router.get(
+  "/:id/completion-pdf",
+  requirePermission("gate_pass.view_own", "gate_pass.view_site", "gate_pass.verify", "gate_pass.exit", "gate_pass.return"),
+  controller.downloadCompletionPdf,
+);
+router.get(
   "/:id/files/:fileId",
-  requirePermission("gate_pass.view_own", "gate_pass.view_site"),
+  requirePermission("gate_pass.view_own", "gate_pass.view_site", "gate_pass.verify", "gate_pass.exit", "gate_pass.return"),
   controller.downloadFile,
 );
 
 router.post("/:id/exit", requirePermission("gate_pass.exit"), evidencePhotoUpload, guardController.exit);
 router.post("/:id/return", requirePermission("gate_pass.return"), evidencePhotoUpload, guardController.returnVehicle);
+
+// Additional gate evidence, captured outside the exit/return transitions —
+// including inbound evidence of something that was never on the approved
+// pass. Gated on the Guard's own exit/return authority, never on the
+// reporting permissions, and scope-checked again in the service.
+router.post(
+  "/:id/evidence",
+  requirePermission("gate_pass.exit", "gate_pass.return"),
+  evidencePhotoUpload,
+  guardController.addEvidence,
+);
+router.get(
+  "/:id/evidence",
+  requirePermission("gate_pass.view_own", "gate_pass.view_site", "gate_pass.verify", "gate_pass.exit", "gate_pass.return"),
+  guardController.listEvidence,
+);
 
 export default router;

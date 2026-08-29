@@ -49,4 +49,26 @@ export const TRANSITIONS = {
 };
 
 export const MAX_EVIDENCE_PHOTO_BYTES = 5 * 1024 * 1024;
+// Per request. A Guard photographing several angles is normal; an unbounded
+// count is not — this caps one request's storage and PDF cost without
+// capping how many photos a Gate Pass can accumulate over its life.
+export const MAX_EVIDENCE_PHOTOS_PER_REQUEST = 10;
+// Total per Gate Pass, across every request, so a completion PDF stays
+// practical to render and to deliver over WhatsApp.
+export const MAX_EVIDENCE_PHOTOS_PER_GATE_PASS = 40;
+
+export const EVIDENCE_KIND = {
+  OUTBOUND: "OUTBOUND",
+  INBOUND: "INBOUND",
+  // Evidence of something that was never on the approved pass. Recorded as
+  // gate evidence in its own right; it is never added to the approved item
+  // list and never reported as an approved outbound item.
+  INBOUND_ADDITIONAL: "INBOUND_ADDITIONAL",
+};
+
+export const EVIDENCE_FILE_TYPE = {
+  [EVIDENCE_KIND.OUTBOUND]: "DEPARTURE_PHOTO",
+  [EVIDENCE_KIND.INBOUND]: "RETURN_PHOTO",
+  [EVIDENCE_KIND.INBOUND_ADDITIONAL]: "RETURN_ADDITIONAL_PHOTO",
+};
 export const ALLOWED_PHOTO_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];

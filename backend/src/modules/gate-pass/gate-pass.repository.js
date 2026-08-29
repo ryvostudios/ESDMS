@@ -13,13 +13,14 @@ const DETAIL_COLUMNS = `
   gp.departure_photo_file_id,
   gp.return_odometer, gp.return_at, gp.return_by_user_id, ru.full_name AS return_by_name, gp.return_remarks,
   gp.return_photo_file_id,
-  gp.distance_km, gp.created_at, gp.updated_at
+  gp.distance_km, gp.created_at, gp.updated_at, gp.driver_id, gp.vehicle_id, st.name AS site_name
 `;
 
 const DETAIL_FROM = `
   FROM gate_passes gp
   JOIN departments d ON d.id = gp.issuing_department_id
   JOIN users cu ON cu.id = gp.created_by_user_id
+  JOIN sites st ON st.id = gp.site_id
   LEFT JOIN users au ON au.id = gp.approved_by_user_id
   LEFT JOIN users du ON du.id = gp.departure_by_user_id
   LEFT JOIN users ru ON ru.id = gp.return_by_user_id
@@ -52,8 +53,9 @@ export async function insertDraft(client, gatePassNumber, actorId, siteId, depar
     `INSERT INTO gate_passes
        (gate_pass_number, issuing_department_id, requested_by, destination,
         driver_name, driver_phone, vehicle_registration, job_order_id, purpose,
-        expected_return_date, remarks, created_by_user_id, site_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        expected_return_date, remarks, created_by_user_id, site_id,
+        driver_id, vehicle_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      RETURNING id`,
     [
       gatePassNumber,
@@ -69,6 +71,8 @@ export async function insertDraft(client, gatePassNumber, actorId, siteId, depar
       input.remarks || null,
       actorId,
       siteId,
+      input.driverId || null,
+      input.vehicleId || null,
     ],
   );
 
@@ -101,6 +105,8 @@ export async function updateDraftFields(client, gatePassId, input) {
     ["driver_name", input.driverName],
     ["driver_phone", input.driverPhone],
     ["vehicle_registration", input.vehicleRegistration],
+    ["driver_id", input.driverId],
+    ["vehicle_id", input.vehicleId],
     ["job_order_id", input.jobOrderId],
     ["purpose", input.purpose],
     ["expected_return_date", input.expectedReturnDate],
@@ -230,16 +236,96 @@ export async function markReturned(client, id, { odometer, byUserId, photoFileId
   );
 }
 
-export async function insertFile(client, { gatePassId, fileType, storageKey, mimeType, sizeBytes, checksumSha256, version, createdByUserId }) {
+export async function insertFile(client, { gatePassId, fileType, storageKey, mimeType, sizeBytes, checksumSha256, version, createdByUserId, evidenceNote }) {
   const result = await client.query(
     `INSERT INTO gate_pass_files
-       (gate_pass_id, file_type, storage_key, mime_type, size_bytes, checksum_sha256, version, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (gate_pass_id, file_type, storage_key, mime_type, size_bytes, checksum_sha256, version, created_by_user_id, evidence_note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
-    [gatePassId, fileType, storageKey, mimeType, sizeBytes, checksumSha256, version, createdByUserId],
+    [gatePassId, fileType, storageKey, mimeType, sizeBytes, checksumSha256, version, createdByUserId, evidenceNote ?? null],
   );
 
   return result.rows[0].id;
+}
+
+const EVIDENCE_TYPES = "('DEPARTURE_PHOTO', 'RETURN_PHOTO', 'RETURN_ADDITIONAL_PHOTO')";
+
+// Metadata only — never bytes. Bytes are served one at a time through the
+// authenticated, scope-checked /files/:fileId route so a listing can never
+// become a bulk export of evidence.
+export async function listEvidenceFiles(gatePassId, executor = pool) {
+  const result = await executor.query(
+    `SELECT f.id, f.file_type, f.mime_type, f.size_bytes, f.evidence_note, f.created_at,
+            u.full_name AS captured_by_name
+     FROM gate_pass_files f
+     JOIN users u ON u.id = f.created_by_user_id
+     WHERE f.gate_pass_id = $1 AND f.file_type IN ${EVIDENCE_TYPES}
+     ORDER BY f.created_at, f.id`,
+    [gatePassId],
+  );
+  return result.rows;
+}
+
+// Internal variant that includes storage_key, for the completion-PDF job
+// which must actually read the bytes back. Kept separate from
+// listEvidenceFiles so no API response can ever accidentally serialise a
+// storage key — the only way to obtain bytes stays the authenticated,
+// scope-checked per-file route.
+export async function listEvidenceFilesForRender(gatePassId, executor = pool) {
+  const result = await executor.query(
+    `SELECT f.id, f.file_type, f.storage_key, f.mime_type, f.evidence_note, f.created_at,
+            u.full_name AS captured_by_name
+     FROM gate_pass_files f
+     JOIN users u ON u.id = f.created_by_user_id
+     WHERE f.gate_pass_id = $1 AND f.file_type IN ${EVIDENCE_TYPES}
+     ORDER BY f.created_at, f.id`,
+    [gatePassId],
+  );
+  return result.rows;
+}
+
+// gate_pass_files carries UNIQUE (gate_pass_id, file_type, version). That
+// constraint predates multi-photo evidence and is worth keeping — it is what
+// stops two rows silently claiming to be the same file. So `version` now
+// means "the nth photo of this type on this Gate Pass" rather than being
+// pinned at 1. Callers hold the gate_passes row lock while inserting a batch,
+// so the read-then-insert cannot interleave with another Guard's upload.
+export async function nextEvidenceVersion(client, gatePassId, fileType) {
+  const result = await client.query(
+    `SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+     FROM gate_pass_files WHERE gate_pass_id = $1 AND file_type = $2`,
+    [gatePassId, fileType],
+  );
+  return result.rows[0].next_version;
+}
+
+export async function countEvidenceFiles(client, gatePassId) {
+  const result = await client.query(
+    `SELECT COUNT(*)::int AS total FROM gate_pass_files
+     WHERE gate_pass_id = $1 AND file_type IN ${EVIDENCE_TYPES}`,
+    [gatePassId],
+  );
+  return result.rows[0].total;
+}
+
+export async function findLatestCompletionPdf(gatePassId, client = pool) {
+  const result = await client.query(
+    `SELECT id, storage_key, mime_type, version
+     FROM gate_pass_files
+     WHERE gate_pass_id = $1 AND file_type = 'COMPLETED_PDF'
+     ORDER BY version DESC LIMIT 1`,
+    [gatePassId],
+  );
+  return result.rows[0] || null;
+}
+
+export async function nextCompletionPdfVersion(gatePassId, client = pool) {
+  const result = await client.query(
+    `SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+     FROM gate_pass_files WHERE gate_pass_id = $1 AND file_type = 'COMPLETED_PDF'`,
+    [gatePassId],
+  );
+  return result.rows[0].next_version;
 }
 
 export async function findFileById(fileId) {

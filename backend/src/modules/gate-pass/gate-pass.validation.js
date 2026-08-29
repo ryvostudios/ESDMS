@@ -13,23 +13,48 @@ const itemSchema = z.object({
   unit: z.string().trim().max(30).optional().nullable(),
 });
 
-export const createGatePassSchema = z.object({
+// Driver and Vehicle may be given either as a master-data selection
+// (driverId / vehicleId) or as free text. Selecting a master row is
+// preferred and, when present, the server derives the stored name/phone/
+// registration from it — see gate-pass.service.js applyFleetSelection. The
+// free-text path is deliberately kept: a one-off visitor vehicle at the gate
+// must not require creating permanent master data first.
+const gatePassBaseShape = {
   issuingDepartmentId: uuid,
   requestedBy: z.string().trim().min(1).max(150),
   destination: z.string().trim().min(1).max(200),
-  driverName: z.string().trim().min(1).max(150),
-  driverPhone: z.string().trim().min(5).max(30),
-  vehicleRegistration: z.string().trim().min(1).max(30),
+  driverId: uuid.nullable().optional(),
+  vehicleId: uuid.nullable().optional(),
+  driverName: z.string().trim().min(1).max(150).optional(),
+  driverPhone: z.string().trim().min(5).max(30).optional(),
+  vehicleRegistration: z.string().trim().min(1).max(30).optional(),
   jobOrderId: z.string().trim().max(50).optional().nullable(),
   purpose: z.enum(GATE_PASS_PURPOSES),
   expectedReturnDate: z.string().date().optional().nullable(),
   remarks: z.string().trim().max(1000).optional().nullable(),
   items: z.array(itemSchema).min(1).max(50),
+};
+
+export const createGatePassSchema = z.object(gatePassBaseShape).superRefine((value, ctx) => {
+  if (!value.driverId && (!value.driverName || !value.driverPhone)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["driverId"],
+      message: "Select a driver, or provide a driver name and phone.",
+    });
+  }
+  if (!value.vehicleId && !value.vehicleRegistration) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["vehicleId"],
+      message: "Select a vehicle, or provide a vehicle registration.",
+    });
+  }
 });
 
-export const updateDraftSchema = createGatePassSchema.partial().extend({
-  items: z.array(itemSchema).min(1).max(50).optional(),
-});
+// A draft edit sends only what changed, so the create-time "driver present
+// somehow" rule cannot apply here — the stored row already satisfies it.
+export const updateDraftSchema = z.object(gatePassBaseShape).partial();
 
 export const reasonSchema = z.object({
   reason: z.string().trim().min(1).max(500),
@@ -57,6 +82,11 @@ export const guardSearchQuerySchema = z.object({
 
 export const guardVerifySchema = z.object({
   token: z.string().trim().min(1).max(200),
+});
+
+export const addEvidenceSchema = z.object({
+  kind: z.enum(["OUTBOUND", "INBOUND", "INBOUND_ADDITIONAL"]),
+  note: z.string().trim().min(1).max(300).optional().nullable(),
 });
 
 export const uuidParam = uuid;

@@ -59,17 +59,32 @@ export async function apiRequest(baseUrl, method, path, { token, body, isForm } 
   return { status: response.status, body: payload, raw: response };
 }
 
+// 1x1 transparent PNG
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
 export function buildPhotoForm(fields) {
   const form = new FormData();
   for (const [key, value] of Object.entries(fields)) {
     form.append(key, String(value));
   }
-  // 1x1 transparent PNG
-  const pngBytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "base64",
-  );
-  form.append("photo", new Blob([pngBytes], { type: "image/png" }), "evidence.png");
+  form.append("photo", new Blob([PNG_BYTES], { type: "image/png" }), "evidence.png");
+
+  return form;
+}
+
+// The multi-capture form: several photos under the "photos" field, which is
+// what a Guard photographing more than one angle actually sends.
+export function buildMultiPhotoForm(fields, count = 2) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, String(value));
+  }
+  for (let index = 0; index < count; index += 1) {
+    form.append("photos", new Blob([PNG_BYTES], { type: "image/png" }), `evidence-${index}.png`);
+  }
 
   return form;
 }
