@@ -20,7 +20,8 @@ This is the authoritative lifecycle map for management surfaces. “Inverse” m
 | Employee Document | Upload / request | Supersede with a new version; cancel pending request | Uploaded evidence/history is retained; no casual destructive delete. |
 | Gate Pass | Create Draft | Cancel where lifecycle permits | Approved/used history and evidence are retained. |
 | Receipt / audit / history | Record | No removal allowed | Append-only or protected historical record. |
-| Driver | Add / edit | Deactivate / reactivate | No hard delete after Gate Pass use; Gate Pass keeps a snapshot. |
-| Vehicle | Add / edit | Deactivate / reactivate | No hard delete after Gate Pass use; Gate Pass keeps a snapshot. |
+| Driver | Add / edit | Deactivate / reactivate | No hard delete after Gate Pass use — enforced by ON DELETE RESTRICT, not only by the absence of a delete route. A Gate Pass keeps an immutable name/phone snapshot, so renaming a Driver never rewrites issued history. |
+| Vehicle | Add / edit | Deactivate / reactivate | No hard delete after Gate Pass use — enforced by ON DELETE RESTRICT. A Gate Pass keeps an immutable registration snapshot. Registration is unique per site, case-insensitively. |
+| Gate evidence photo | Capture (outbound / inbound) | No removal allowed | Append-only gate evidence. Inbound evidence of something never listed on the approved pass is recorded under its own type with a mandatory description; it is never added to the approved item list and never reopens approved history. |
 
 Company Item reactivation deliberately does not reactivate department catalog relationships. Each department relationship is restored separately so a global operation cannot silently republish materials into new Demand pickers.
