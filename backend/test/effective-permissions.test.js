@@ -67,6 +67,10 @@ test("a user with no overrides has exactly their role's permissions", async () =
       "demand.edit",
       "demand.submit",
       "demand.view",
+      // A Team Lead raises Gate Passes, so they may SELECT an existing Driver
+      // or Vehicle. Creating master data is driver.manage / vehicle.manage,
+      // which they deliberately do not hold.
+      "driver.view",
       "gate_pass.create",
       "gate_pass.edit_draft",
       "gate_pass.submit",
@@ -78,6 +82,7 @@ test("a user with no overrides has exactly their role's permissions", async () =
       "receiving.confirm",
       "receiving.receive",
       "receiving.view",
+      "vehicle.view",
     ],
   );
 });
