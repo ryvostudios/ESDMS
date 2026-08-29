@@ -153,13 +153,13 @@ export async function deleteDraft(client, id) {
   return result.rows[0] || null;
 }
 
-export async function findById(id) {
-  const result = await pool.query(`SELECT ${DETAIL_COLUMNS} ${DETAIL_FROM} WHERE md.id = $1`, [id]);
+export async function findById(id, executor = pool) {
+  const result = await executor.query(`SELECT ${DETAIL_COLUMNS} ${DETAIL_FROM} WHERE md.id = $1`, [id]);
   return result.rows[0] || null;
 }
 
-export async function findLinesByDemandId(demandId) {
-  const result = await pool.query(
+export async function findLinesByDemandId(demandId, executor = pool) {
+  const result = await executor.query(
     `SELECT id, line_no, catalog_entry_id, item_name_snapshot, uom_code_snapshot, uom_name_snapshot,
             requested_quantity, note,
             carry_forward_source_type, carry_forward_source_id, carry_forward_quantity
@@ -170,8 +170,8 @@ export async function findLinesByDemandId(demandId) {
   return result.rows;
 }
 
-export async function findAuditLogByDemandId(demandId) {
-  const result = await pool.query(
+export async function findAuditLogByDemandId(demandId, executor = pool) {
+  const result = await executor.query(
     `SELECT al.id, al.action, al.previous_status, al.new_status, al.metadata, al.created_at,
             al.actor_user_id, u.full_name AS actor_name
      FROM material_demand_audit_log al
@@ -229,8 +229,8 @@ export async function findApproval(
   return result.rows[0] || null;
 }
 
-export async function findApprovalsByDemandId(demandId) {
-  const result = await pool.query(
+export async function findApprovalsByDemandId(demandId, executor = pool) {
+  const result = await executor.query(
     `SELECT a.id, a.revision, a.approval_stage, a.approval_type, a.pricing_id,
             a.disposition_fingerprint, a.decision, a.reason, a.created_at,
             a.actor_user_id, u.full_name AS actor_name
@@ -317,8 +317,8 @@ export async function listForScope({ siteId, departmentId }, { status, search, p
 
 // The IPO generated from this Demand, if any. Operational identity only —
 // never the approved value, which stays behind the price gate.
-export async function findIpoSummaryByDemandId(demandId) {
-  const result = await pool.query(
+export async function findIpoSummaryByDemandId(demandId, executor = pool) {
+  const result = await executor.query(
     `SELECT id, ipo_number, status, generated_at, completed_at, cancelled_at
      FROM ipos WHERE demand_id = $1
      ORDER BY demand_revision DESC LIMIT 1`,

@@ -140,38 +140,50 @@ export async function updateDraft(actor, id, input) {
 }
 
 export async function getDemandDetail(actor, id) {
-  const demand = await repo.findById(id);
+  // One Demand detail is SEVEN reads. Fanning them out across the pool with
+  // Promise.all meant a single request checked out up to five clients at
+  // once, so two concurrent detail requests could consume a max=10 pool and
+  // a third would wait and then fail with a pool connect timeout — a 500
+  // that looks like a database fault but is really this request's own
+  // footprint. Reads run on ONE checked-out client instead: a request costs
+  // exactly one connection regardless of how many queries it makes, and
+  // concurrency is bounded by the pool, not multiplied against it.
+  const client = await pool.connect();
 
-  if (!demand) {
-    throw new NotFoundError("Demand not found.");
+  try {
+    const demand = await repo.findById(id, client);
+
+    if (!demand) {
+      throw new NotFoundError("Demand not found.");
+    }
+
+    assertDemandViewable(actor, demand);
+
+    const lines = await repo.findLinesByDemandId(id, client);
+    const auditLog = await repo.findAuditLogByDemandId(id, client);
+    const storedApprovals = await repo.findApprovalsByDemandId(id, client);
+    const storedDispositions = await findDispositionsByDemandId(id, client);
+    const ipo = await repo.findIpoSummaryByDemandId(id, client);
+    const carryForwardAllocations = await findAllocationsForDemand(client, id);
+
+    const canSeeFinancialReasons =
+      actor.permissions.has(PRICE_VIEW_PERMISSION) || actor.permissions.has("procurement.pricing");
+    const approvals = storedApprovals.map((approval) =>
+      approval.approval_stage === APPROVAL_STAGE.FINAL && !canSeeFinancialReasons
+        ? { ...approval, reason: null }
+        : approval,
+    );
+
+    // The department that raised the Demand must be able to see that a line
+    // was excluded and under which category, so it can decide whether to carry
+    // it forward — but the free-text financial explanation stays behind the
+    // price gate, exactly like a FINAL rejection reason.
+    const dispositions = redactDispositions(storedDispositions, actor);
+
+    return { demand, lines, auditLog, approvals, dispositions, ipo, carryForwardAllocations };
+  } finally {
+    client.release();
   }
-
-  assertDemandViewable(actor, demand);
-
-  const [lines, auditLog, storedApprovals, storedDispositions, ipo] = await Promise.all([
-    repo.findLinesByDemandId(id),
-    repo.findAuditLogByDemandId(id),
-    repo.findApprovalsByDemandId(id),
-    findDispositionsByDemandId(id),
-    repo.findIpoSummaryByDemandId(id),
-  ]);
-  const carryForwardAllocations = await findAllocationsForDemand(pool, id);
-
-  const canSeeFinancialReasons =
-    actor.permissions.has(PRICE_VIEW_PERMISSION) || actor.permissions.has("procurement.pricing");
-  const approvals = storedApprovals.map((approval) =>
-    approval.approval_stage === APPROVAL_STAGE.FINAL && !canSeeFinancialReasons
-      ? { ...approval, reason: null }
-      : approval,
-  );
-
-  // The department that raised the Demand must be able to see that a line
-  // was excluded and under which category, so it can decide whether to carry
-  // it forward — but the free-text financial explanation stays behind the
-  // price gate, exactly like a FINAL rejection reason.
-  const dispositions = redactDispositions(storedDispositions, actor);
-
-  return { demand, lines, auditLog, approvals, dispositions, ipo, carryForwardAllocations };
 }
 
 export async function listDemands(actor, filters) {

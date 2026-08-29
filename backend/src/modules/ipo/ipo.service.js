@@ -226,37 +226,46 @@ export async function listIpos(actor, query) {
 
 export async function getIpoDetail(actor, id) {
   assertCanViewIpo(actor);
-  const ipo = await repo.findIpoById(pool, id);
-  if (!ipo) throw new NotFoundError("IPO not found.");
-  assertIpoVisible(actor, ipo);
 
-  const includeCommercial = canSeeCommercialData(actor);
-  const [lines, auditLog, chain, commercials, purchaseEvents] = await Promise.all([
-    repo.findIpoLines(pool, id, { includeCommercial }),
-    findAuditByIpoId(pool, id),
-    repo.findChainForIpo(pool, id),
-    includeCommercial ? repo.findIpoCommercials(pool, id) : Promise.resolve(null),
-    includeCommercial ? repo.findPurchaseEvents(pool, id) : Promise.resolve([]),
-  ]);
+  // Same bounded-footprint rule as getDemandDetail: these six reads run on
+  // ONE checked-out client rather than fanning out across the pool, so a
+  // single detail request can never consume five connections and starve
+  // concurrent requests into a pool connect timeout.
+  const client = await pool.connect();
 
-  // One call returns the whole traceable chain — IPO, its lines, its Delivery
-  // Challans, every receipt and the ordered audit stream — so the history view
-  // never has to stitch four endpoints together.
-  return {
-    ipo: redactCancellation(
-      includeCommercial ? { ...ipo, estimated_total: commercials.estimated_total } : ipo,
-      includeCommercial,
-    ),
-    lines,
-    auditLog,
-    // Every partial purchase, at the price actually paid, in order — so a
-    // line bought twice at different prices reads as two real transactions
-    // rather than one averaged fiction.
-    purchaseEvents,
-    deliveryChallans: chain.deliveryChallans,
-    receipts: chain.receipts,
-    includesCommercialData: includeCommercial,
-  };
+  try {
+    const ipo = await repo.findIpoById(client, id);
+    if (!ipo) throw new NotFoundError("IPO not found.");
+    assertIpoVisible(actor, ipo);
+
+    const includeCommercial = canSeeCommercialData(actor);
+    const lines = await repo.findIpoLines(client, id, { includeCommercial });
+    const auditLog = await findAuditByIpoId(client, id);
+    const chain = await repo.findChainForIpo(client, id);
+    const commercials = includeCommercial ? await repo.findIpoCommercials(client, id) : null;
+    const purchaseEvents = includeCommercial ? await repo.findPurchaseEvents(client, id) : [];
+
+    // One call returns the whole traceable chain — IPO, its lines, its Delivery
+    // Challans, every receipt and the ordered audit stream — so the history view
+    // never has to stitch four endpoints together.
+    return {
+      ipo: redactCancellation(
+        includeCommercial ? { ...ipo, estimated_total: commercials.estimated_total } : ipo,
+        includeCommercial,
+      ),
+      lines,
+      auditLog,
+      // Every partial purchase, at the price actually paid, in order — so a
+      // line bought twice at different prices reads as two real transactions
+      // rather than one averaged fiction.
+      purchaseEvents,
+      deliveryChallans: chain.deliveryChallans,
+      receipts: chain.receipts,
+      includesCommercialData: includeCommercial,
+    };
+  } finally {
+    client.release();
+  }
 }
 
 // Previous Purchase Price for a set of physical items. Derived only from

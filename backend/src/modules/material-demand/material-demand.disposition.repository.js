@@ -84,8 +84,8 @@ export async function upsertDisposition(
 
 // Every line-level disposition recorded for a Demand, across every Pricing
 // version, for the history/traceability view.
-export async function findDispositionsByDemandId(demandId) {
-  const result = await pool.query(
+export async function findDispositionsByDemandId(demandId, executor = pool) {
+  const result = await executor.query(
     `SELECT d.id, d.pricing_id, p.version AS pricing_version, d.demand_line_id,
             d.disposition, d.exclusion_category, d.reason,
             d.requested_quantity_snapshot, d.estimated_unit_price_snapshot,
