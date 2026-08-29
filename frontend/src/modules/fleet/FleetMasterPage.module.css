@@ -1,0 +1,142 @@
+/* Mirrors MaterialCatalogPage.module.css: one table for desktop, one card
+   list for narrow viewports. The table is display:none until 720px rather
+   than being made to scroll sideways, so a phone never has to pan the page
+   horizontally to reach the Actions column. */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+/* A bare checkbox is a ~13px tap target. The whole label is the control, with
+   enough padding to be hit reliably with a thumb at the gate. */
+.inactiveToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.inactiveToggle input {
+  width: 18px;
+  height: 18px;
+}
+
+.table {
+  display: none;
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  font-size: var(--text-sm);
+}
+
+.table th {
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+  color: var(--color-text);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.actionCell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* 960px, not the 720px MaterialCatalogPage uses: a Driver row carries seven
+   columns (name, phone, company, type, licence, status, actions) and still
+   overflows a 768px tablet viewport at 720. The card layout therefore covers
+   phones AND tablets, and the table appears only where it genuinely fits. */
+@media (min-width: 960px) {
+  .table {
+    display: table;
+  }
+
+  .cardList {
+    display: none;
+  }
+}
+
+.cardList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cardHeader .name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cardMeta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.cardMeta span {
+  overflow-wrap: anywhere;
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

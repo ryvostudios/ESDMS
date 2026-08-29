@@ -10,6 +10,7 @@ import { LoadingState, ErrorState, EmptyState } from "../../shared/components/St
 import { useAuth } from "../../core/auth/AuthContext.jsx";
 import { apiErrorMessage } from "../../shared/utilities/api-error-message.js";
 import { DRIVER_CONFIG, VEHICLE_CONFIG } from "./fleet-configs.js";
+import styles from "./FleetMasterPage.module.css";
 
 // One page component drives both Driver and Vehicle. They are the same
 // screen — a searchable site-scoped master list with add/edit and a
@@ -158,15 +159,19 @@ export function FleetMasterPage({ config }) {
         actions={canManage ? <Button onClick={() => setAdding(true)}>Add {config.key === "driver" ? "Driver" : "Vehicle"}</Button> : null}
       />
 
-      <SearchField value={search} onChange={setSearch} placeholder={`Search ${config.title.toLowerCase()}…`} />
-      <label>
-        <input
-          type="checkbox"
-          checked={includeInactive}
-          onChange={(event) => setIncludeInactive(event.target.checked)}
-        />{" "}
-        Show inactive
-      </label>
+      <div className={styles.filters}>
+        <div className={styles.search}>
+          <SearchField value={search} onChange={setSearch} placeholder={`Search ${config.title.toLowerCase()}…`} />
+        </div>
+        <label className={styles.inactiveToggle}>
+          <input
+            type="checkbox"
+            checked={includeInactive}
+            onChange={(event) => setIncludeInactive(event.target.checked)}
+          />
+          Show inactive
+        </label>
+      </div>
 
       {actionError && <p role="alert">{actionError}</p>}
 
@@ -175,42 +180,77 @@ export function FleetMasterPage({ config }) {
       {status === "ready" && rows.length === 0 && <EmptyState title="Nothing yet" />}
 
       {status === "ready" && rows.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              {config.columns.map((column) => (
-                <th key={column.header}>{column.header}</th>
-              ))}
-              <th>Status</th>
-              {canManage && <th>Actions</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}>
+        <>
+          <table className={styles.table}>
+            <thead>
+              <tr>
                 {config.columns.map((column) => (
-                  <td key={column.header}>{column.render(row)}</td>
+                  <th key={column.header}>{column.header}</th>
                 ))}
-                <td>
-                  <StatusBadge tone={row.is_active ? "success" : "neutral"} label={row.is_active ? "Active" : "Inactive"} />
-                </td>
-                {canManage && (
+                <th>Status</th>
+                {canManage && <th>Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  {config.columns.map((column) => (
+                    <td key={column.header}>{column.render(row)}</td>
+                  ))}
                   <td>
-                    <Button variant="ghost" onClick={() => setEditing(row)}>
+                    <StatusBadge tone={row.is_active ? "success" : "neutral"} label={row.is_active ? "Active" : "Inactive"} />
+                  </td>
+                  {canManage && (
+                    <td className={styles.actionCell}>
+                      <Button variant="ghost" onClick={() => setEditing(row)}>
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={() => setPendingLifecycle({ row, isActive: !row.is_active })}
+                      >
+                        {row.is_active ? "Deactivate" : "Reactivate"}
+                      </Button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Same rows, laid out for a phone. A Guard or site admin at the
+              gate must not have to pan the page sideways to reach Actions. */}
+          <ul className={styles.cardList}>
+            {rows.map((row) => (
+              <li key={row.id} className={styles.card}>
+                <div className={styles.cardHeader}>
+                  <span className={styles.name}>{config.label(row)}</span>
+                  <StatusBadge tone={row.is_active ? "success" : "neutral"} label={row.is_active ? "Active" : "Inactive"} />
+                </div>
+                <div className={styles.cardMeta}>
+                  {config.columns.slice(1).map((column) => (
+                    <span key={column.header}>
+                      {column.header}: {column.render(row)}
+                    </span>
+                  ))}
+                </div>
+                {canManage && (
+                  <div className={styles.cardActions}>
+                    <Button variant="secondary" onClick={() => setEditing(row)}>
                       Edit
                     </Button>
                     <Button
-                      variant="ghost"
+                      variant="secondary"
                       onClick={() => setPendingLifecycle({ row, isActive: !row.is_active })}
                     >
                       {row.is_active ? "Deactivate" : "Reactivate"}
                     </Button>
-                  </td>
+                  </div>
                 )}
-              </tr>
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </>
       )}
 
       {(adding || editing) && (
