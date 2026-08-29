@@ -34,6 +34,7 @@ import { DeliveryChallanDetailPage } from "../../modules/delivery-challan/pages/
 import { ReceivingQueuePage } from "../../modules/receiving/pages/ReceivingQueuePage.jsx";
 import { ReceiveDeliveryPage } from "../../modules/receiving/pages/ReceiveDeliveryPage.jsx";
 import { ReceiptDetailPage } from "../../modules/receiving/pages/ReceiptDetailPage.jsx";
+import { DriversPage, VehiclesPage } from "../../modules/fleet/FleetMasterPage.jsx";
 import { DiagnosticsPage } from "./DiagnosticsPage.jsx";
 import { NotFoundPage } from "./NotFoundPage.jsx";
 
@@ -207,6 +208,23 @@ export function AppRoutes() {
           element={
             <PermissionRoute permissions={["receiving.view"]}>
               <ReceiptDetailPage />
+            </PermissionRoute>
+          }
+        />
+
+        <Route
+          path="/fleet/drivers"
+          element={
+            <PermissionRoute permissions={["driver.view", "driver.manage"]}>
+              <DriversPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/fleet/vehicles"
+          element={
+            <PermissionRoute permissions={["vehicle.view", "vehicle.manage"]}>
+              <VehiclesPage />
             </PermissionRoute>
           }
         />

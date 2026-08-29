@@ -1,45 +1,61 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { CameraIcon, CloseIcon } from "../../../shared/icons.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
-import { ALLOWED_PHOTO_MIME_TYPES, MAX_EVIDENCE_PHOTO_BYTES } from "../constants.js";
+import { ALLOWED_PHOTO_MIME_TYPES, MAX_EVIDENCE_PHOTO_BYTES, MAX_EVIDENCE_PHOTOS } from "../constants.js";
 import styles from "./EvidencePhotoInput.module.css";
 
-export function EvidencePhotoInput({ value, onChange, disabled }) {
+// Captures a SET of evidence photos. A Guard routinely photographs several
+// angles of the same load, and forcing one photo per gate event meant the
+// rest simply went unrecorded.
+//
+// `value` is always an array of File. Object URLs are created once per file
+// and revoked when that file leaves the set (or on unmount), so a preview
+// URL never outlives the file it previews.
+export function EvidencePhotoInput({ value = [], onChange, disabled, inputId = "evidence-photo" }) {
   const inputRef = useRef(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
 
-  // Single place that owns previewUrl's lifetime: this runs its cleanup
-  // (revoking the *previous* URL) both when previewUrl changes to a new
-  // one — replacing a photo without explicitly removing it first — and on
-  // unmount, so a blob URL never outlives what it's a preview for.
+  // One preview URL per file in the current set. Derived from `value` rather
+  // than mirrored into state, so there is no second copy to fall out of sync
+  // when the parent clears the set (as it does after a successful upload).
+  const previews = useMemo(
+    () => value.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [value],
+  );
+
+  // Runs when `previews` is replaced AND on unmount, so a blob URL never
+  // outlives the render that created it.
   useEffect(() => {
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      for (const entry of previews) URL.revokeObjectURL(entry.url);
     };
-  }, [previewUrl]);
+  }, [previews]);
 
   function handleFileSelect(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const selected = Array.from(event.target.files ?? []);
+    if (!selected.length) return;
 
-    if (!ALLOWED_PHOTO_MIME_TYPES.includes(file.type)) {
-      onChange(null, "Photo must be JPEG, PNG, or WebP.");
+    if (selected.some((file) => !ALLOWED_PHOTO_MIME_TYPES.includes(file.type))) {
+      onChange(value, "Photos must be JPEG, PNG, or WebP.");
       return;
     }
 
-    if (file.size > MAX_EVIDENCE_PHOTO_BYTES) {
-      onChange(null, "Photo must be under 5 MB.");
+    if (selected.some((file) => file.size > MAX_EVIDENCE_PHOTO_BYTES)) {
+      onChange(value, "Each photo must be under 5 MB.");
       return;
     }
 
-    setPreviewUrl(URL.createObjectURL(file));
-    onChange(file, null);
+    if (value.length + selected.length > MAX_EVIDENCE_PHOTOS) {
+      onChange(value, `You can attach at most ${MAX_EVIDENCE_PHOTOS} photos at a time.`);
+      return;
+    }
+
+    onChange([...value, ...selected], null);
+    // Cleared so re-selecting the same file still fires a change event.
+    if (inputRef.current) inputRef.current.value = "";
   }
 
-  function handleRemove() {
-    setPreviewUrl(null);
-    onChange(null, null);
-    if (inputRef.current) inputRef.current.value = "";
+  function handleRemove(file) {
+    onChange(value.filter((candidate) => candidate !== file), null);
   }
 
   return (
@@ -50,29 +66,32 @@ export function EvidencePhotoInput({ value, onChange, disabled }) {
         type="file"
         accept="image/jpeg,image/png,image/webp"
         capture="environment"
+        multiple
         onChange={handleFileSelect}
         disabled={disabled}
-        id="evidence-photo"
+        id={inputId}
       />
 
-      {value && previewUrl ? (
-        <div className={styles.previewWrapper}>
-          <img src={previewUrl} alt="Evidence preview" className={styles.preview} />
+      {previews.map((entry, index) => (
+        <div key={entry.url} className={styles.previewWrapper}>
+          <img src={entry.url} alt={`Evidence preview ${index + 1}`} className={styles.preview} />
           <Button
             type="button"
             variant="secondary"
             className={styles.removeButton}
-            onClick={handleRemove}
+            onClick={() => handleRemove(entry.file)}
             disabled={disabled}
-            aria-label="Remove photo"
+            aria-label={`Remove photo ${index + 1}`}
           >
             <CloseIcon width={16} height={16} />
           </Button>
         </div>
-      ) : (
-        <label htmlFor="evidence-photo" className={styles.dropzone}>
+      ))}
+
+      {value.length < MAX_EVIDENCE_PHOTOS && (
+        <label htmlFor={inputId} className={styles.dropzone}>
           <CameraIcon width={28} height={28} />
-          Tap to take or choose a photo
+          {value.length ? "Add another photo" : "Tap to take or choose photos"}
         </label>
       )}
     </div>

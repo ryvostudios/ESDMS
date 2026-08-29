@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { useDepartments } from "../hooks/useDepartments.js";
+import { useFleetOptions } from "../hooks/useFleetOptions.js";
 import { GATE_PASS_PURPOSES } from "../constants.js";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
 import { FormField, Input, Textarea, Select } from "../../../shared/components/FormField.jsx";
@@ -15,6 +16,8 @@ function defaultValues() {
     issuingDepartmentId: "",
     requestedBy: "",
     destination: "",
+    driverId: "",
+    vehicleId: "",
     driverName: "",
     driverPhone: "",
     vehicleRegistration: "",
@@ -31,11 +34,18 @@ function validate(values, items) {
   if (!values.issuingDepartmentId) fieldErrors.issuingDepartmentId = "Department is required.";
   if (!values.requestedBy.trim()) fieldErrors.requestedBy = "Requested by is required.";
   if (!values.destination.trim()) fieldErrors.destination = "Destination is required.";
-  if (!values.driverName.trim()) fieldErrors.driverName = "Driver name is required.";
-  if (!values.driverPhone.trim() || values.driverPhone.trim().length < 5) {
-    fieldErrors.driverPhone = "A valid driver phone number is required.";
+  // Selecting a Driver/Vehicle from master data satisfies the requirement on
+  // its own — the server derives the stored name/phone/registration from the
+  // chosen row, so asking for them again would be asking twice.
+  if (!values.driverId) {
+    if (!values.driverName.trim()) fieldErrors.driverName = "Driver name is required.";
+    if (!values.driverPhone.trim() || values.driverPhone.trim().length < 5) {
+      fieldErrors.driverPhone = "A valid driver phone number is required.";
+    }
   }
-  if (!values.vehicleRegistration.trim()) fieldErrors.vehicleRegistration = "Vehicle registration is required.";
+  if (!values.vehicleId && !values.vehicleRegistration.trim()) {
+    fieldErrors.vehicleRegistration = "Vehicle registration is required.";
+  }
   if (!values.purpose) fieldErrors.purpose = "Purpose is required.";
 
   const itemErrors = items.map((item) => {
@@ -51,6 +61,7 @@ function validate(values, items) {
 }
 
 export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmit }) {
+  const { drivers, vehicles } = useFleetOptions(true);
   const { user, hasPermission } = useAuth();
   const { departments, status: departmentsStatus } = useDepartments();
 
@@ -108,6 +119,14 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
     try {
       await onSubmit({
         ...values,
+        driverId: values.driverId || null,
+        vehicleId: values.vehicleId || null,
+        // Omitted entirely when a master row was chosen: the server derives
+        // them from the selection, and sending stale text alongside an id
+        // would only invite the two to disagree.
+        driverName: values.driverId ? undefined : values.driverName,
+        driverPhone: values.driverId ? undefined : values.driverPhone,
+        vehicleRegistration: values.vehicleId ? undefined : values.vehicleRegistration,
         jobOrderId: values.jobOrderId.trim() || null,
         expectedReturnDate: values.expectedReturnDate || null,
         remarks: values.remarks.trim() || null,
@@ -189,6 +208,48 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
             </Select>
           </FormField>
 
+          <FormField
+            label="Driver"
+            htmlFor="driverId"
+            hint={drivers.length ? "Choose a saved driver, or enter details below." : undefined}
+          >
+            <Select
+              id="driverId"
+              value={values.driverId}
+              onChange={(event) => updateField("driverId", event.target.value)}
+              disabled={submitting || drivers.length === 0}
+            >
+              <option value="">Enter driver details manually…</option>
+              {drivers.map((driver) => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.name} — {driver.phone}
+                  {driver.company ? ` (${driver.company})` : ""}
+                </option>
+              ))}
+            </Select>
+          </FormField>
+
+          <FormField
+            label="Vehicle"
+            htmlFor="vehicleId"
+            hint={vehicles.length ? "Choose a saved vehicle, or enter a registration below." : undefined}
+          >
+            <Select
+              id="vehicleId"
+              value={values.vehicleId}
+              onChange={(event) => updateField("vehicleId", event.target.value)}
+              disabled={submitting || vehicles.length === 0}
+            >
+              <option value="">Enter vehicle registration manually…</option>
+              {vehicles.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.registration_number} — {vehicle.vehicle_type}
+                </option>
+              ))}
+            </Select>
+          </FormField>
+
+          {!values.driverId && (
           <FormField label="Driver Name" htmlFor="driverName" required error={fieldErrors.driverName}>
             <Input
               id="driverName"
@@ -198,7 +259,9 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
               disabled={submitting}
             />
           </FormField>
+          )}
 
+          {!values.driverId && (
           <FormField label="Driver Phone" htmlFor="driverPhone" required error={fieldErrors.driverPhone} hint="Used to send the approved pass via WhatsApp">
             <Input
               id="driverPhone"
@@ -209,7 +272,9 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
               disabled={submitting}
             />
           </FormField>
+          )}
 
+          {!values.vehicleId && (
           <FormField label="Vehicle Registration" htmlFor="vehicleRegistration" required error={fieldErrors.vehicleRegistration}>
             <Input
               id="vehicleRegistration"
@@ -219,6 +284,7 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
               disabled={submitting}
             />
           </FormField>
+          )}
 
           <FormField label="Job Order ID" htmlFor="jobOrderId" hint="Optional">
             <Input

@@ -8,6 +8,7 @@ import {
   rejectGatePass,
   cancelGatePass,
   downloadGatePassPdf,
+  downloadGatePassCompletionPdf,
   downloadGatePassFile,
 } from "../api.js";
 import { GatePassStatusBadge } from "../components/GatePassStatusBadge.jsx";
@@ -54,6 +55,7 @@ export function GatePassDetailPage() {
 
   const [activeDialog, setActiveDialog] = useState(null);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [completionPdfLoading, setCompletionPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState(null);
   const [pollAttempts, setPollAttempts] = useState(0);
   const [evidenceLoadingId, setEvidenceLoadingId] = useState(null);
@@ -140,6 +142,26 @@ export function GatePassDetailPage() {
     }
   }
 
+  // The closure document, distinct from the approval PDF: real exit/return
+  // times plus the outbound and inbound evidence sections. Offered only once
+  // the pass is COMPLETED, and it may briefly 404 while the durable
+  // generation job is still running — completion never waits on it.
+  async function handleDownloadCompletionPdf() {
+    setCompletionPdfLoading(true);
+    setPdfError(null);
+
+    try {
+      const blob = await downloadGatePassCompletionPdf(id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (downloadError) {
+      setPdfError(downloadError.message || "The completion document is not ready yet.");
+    } finally {
+      setCompletionPdfLoading(false);
+    }
+  }
+
   async function handleViewEvidence(fileId) {
     setEvidenceLoadingId(fileId);
     setEvidenceError(null);
@@ -170,6 +192,11 @@ export function GatePassDetailPage() {
           {canEdit && (
             <Button variant="secondary" onClick={() => navigate(`/gate-passes/${id}/edit`)}>
               Edit
+            </Button>
+          )}
+          {gatePass.status === "COMPLETED" && (
+            <Button variant="secondary" onClick={handleDownloadCompletionPdf} loading={completionPdfLoading}>
+              Completion Record
             </Button>
           )}
           {canDownloadPdf && (

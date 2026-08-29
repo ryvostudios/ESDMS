@@ -8,7 +8,7 @@ export function GateActionForm({ mode, minOdometer, onSubmit }) {
   const isReturn = mode === "RETURN";
 
   const [odometer, setOdometer] = useState("");
-  const [photo, setPhoto] = useState(null);
+  const [photos, setPhotos] = useState([]);
   const [remarks, setRemarks] = useState("");
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
@@ -27,8 +27,8 @@ export function GateActionForm({ mode, minOdometer, onSubmit }) {
       nextErrors.odometer = `Must be at least ${minOdometer} (departure reading).`;
     }
 
-    if (!photo) {
-      nextErrors.photo = "A photo is required.";
+    if (!photos.length) {
+      nextErrors.photo = "At least one photo is required.";
     }
 
     setErrors(nextErrors);
@@ -41,7 +41,7 @@ export function GateActionForm({ mode, minOdometer, onSubmit }) {
     setSubmitting(true);
 
     try {
-      await onSubmit({ odometer: odometerValue, photo, remarks: remarks.trim() || undefined });
+      await onSubmit({ odometer: odometerValue, photos, remarks: remarks.trim() || undefined });
     } catch (error) {
       setFormError(error.message || "Unable to complete this action. Please try again.");
       setSubmitting(false);
@@ -73,11 +73,16 @@ export function GateActionForm({ mode, minOdometer, onSubmit }) {
         />
       </FormField>
 
-      <FormField label={isReturn ? "Return Photo" : "Departure Photo"} required error={errors.photo}>
+      <FormField
+        label={isReturn ? "Return Photos" : "Departure Photos"}
+        required
+        error={errors.photo}
+        hint="Capture as many angles as you need."
+      >
         <EvidencePhotoInput
-          value={photo}
-          onChange={(file, error) => {
-            setPhoto(file);
+          value={photos}
+          onChange={(files, error) => {
+            setPhotos(files);
             setErrors((prev) => ({ ...prev, photo: error || undefined }));
           }}
           disabled={submitting}

@@ -66,6 +66,18 @@ export const NAV_ITEMS = [
     permission: ["ipo.view", "procurement.view_prices", "procurement.purchase", "procurement.export"],
   },
   {
+    label: "Drivers",
+    to: "/fleet/drivers",
+    icon: TruckIcon,
+    permission: ["driver.view", "driver.manage"],
+  },
+  {
+    label: "Vehicles",
+    to: "/fleet/vehicles",
+    icon: TruckIcon,
+    permission: ["vehicle.view", "vehicle.manage"],
+  },
+  {
     label: "Workforce Config",
     to: "/workforce/config",
     icon: ClipboardCheckIcon,

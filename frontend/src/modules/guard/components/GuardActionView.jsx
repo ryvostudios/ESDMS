@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { GuardPassCard } from "./GuardPassCard.jsx";
 import { GateActionForm } from "./GateActionForm.jsx";
+import { AdditionalEvidenceForm } from "./AdditionalEvidenceForm.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { recordExit, recordReturn } from "../api.js";
 import styles from "./GuardActionView.module.css";
@@ -10,12 +11,12 @@ export function GuardActionView({ gatePass, allowedAction, reason }) {
   const navigate = useNavigate();
   const [completed, setCompleted] = useState(null);
 
-  async function handleSubmit({ odometer, photo, remarks }) {
+  async function handleSubmit({ odometer, photos, remarks }) {
     if (allowedAction === "EXIT") {
-      await recordExit(gatePass.id, { odometer, photo });
+      await recordExit(gatePass.id, { odometer, photos });
       setCompleted("EXIT");
     } else if (allowedAction === "RETURN") {
-      await recordReturn(gatePass.id, { odometer, photo, remarks });
+      await recordReturn(gatePass.id, { odometer, photos, remarks });
       setCompleted("RETURN");
     }
   }
@@ -30,6 +31,7 @@ export function GuardActionView({ gatePass, allowedAction, reason }) {
           </p>
           <Button onClick={() => navigate("/guard")}>Back to Gate</Button>
         </div>
+        {completed === "RETURN" && <AdditionalEvidenceForm gatePassId={gatePass.id} />}
       </div>
     );
   }
@@ -46,6 +48,7 @@ export function GuardActionView({ gatePass, allowedAction, reason }) {
       ) : (
         <p className={styles.blocked}>{reason || "No action is available for this Gate Pass right now."}</p>
       )}
+      {gatePass.status === "COMPLETED" && <AdditionalEvidenceForm gatePassId={gatePass.id} />}
     </div>
   );
 }
