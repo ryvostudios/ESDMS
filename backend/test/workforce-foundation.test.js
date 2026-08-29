@@ -119,6 +119,74 @@ async function createTestEmployee(overrides = {}) {
   return apiRequest(server.baseUrl, "POST", "/api/v1/employees", { token: hrToken, body });
 }
 
+test("Administration Department and Team Lead Position never assign application authority", async () => {
+  let administration = await pool.query(
+    "SELECT id FROM departments WHERE site_id = $1 AND lower(name) = 'administration' LIMIT 1",
+    [users.mainSite],
+  );
+  if (!administration.rows[0]) {
+    const createdDepartment = await apiRequest(server.baseUrl, "POST", "/api/v1/departments", {
+      token: hrToken,
+      body: { name: "Administration" },
+    });
+    assert.equal(createdDepartment.status, 201, JSON.stringify(createdDepartment.body));
+    administration = { rows: [{ id: createdDepartment.body.data.id }] };
+  }
+
+  const position = await apiRequest(server.baseUrl, "POST", "/api/v1/positions", {
+    token: hrToken,
+    body: { code: unique("TEAM-LEAD"), name: `Team Lead ${unique("")}` },
+  });
+  assert.equal(position.status, 201, JSON.stringify(position.body));
+
+  const employee = await createTestEmployee({
+    departmentId: administration.rows[0].id,
+    positionId: position.body.data.id,
+  });
+  assert.equal(employee.status, 201, JSON.stringify(employee.body));
+  const login = await apiRequest(server.baseUrl, "POST", `/api/v1/employees/${employee.body.data.id}/login`, {
+    token: hrToken,
+    body: { email: `${unique("administration-team-lead")}@test.eset.local` },
+  });
+  assert.equal(login.status, 201, JSON.stringify(login.body));
+
+  const beforeGovernance = await pool.query(
+    `SELECT r.name AS role, ea.department_id, ea.position_id
+     FROM employees e
+     JOIN users u ON u.id = e.user_id
+     JOIN roles r ON r.id = u.role_id
+     JOIN LATERAL (
+       SELECT department_id, position_id FROM employment_assignments
+       WHERE employee_id = e.id AND effective_date <= CURRENT_DATE
+       ORDER BY effective_date DESC, created_at DESC LIMIT 1
+     ) ea ON true
+     WHERE e.id = $1`,
+    [employee.body.data.id],
+  );
+  assert.equal(beforeGovernance.rows[0].role, "EMPLOYEE", "org labels grant no application role");
+
+  const roleChange = await apiRequest(server.baseUrl, "PATCH", `/api/v1/users/${login.body.data.userId}/role`, {
+    token: ceoToken,
+    body: { role: "TEAM_LEAD" },
+  });
+  assert.equal(roleChange.status, 200, JSON.stringify(roleChange.body));
+
+  const afterGovernance = await pool.query(
+    `SELECT r.name AS role, ea.department_id, ea.position_id
+     FROM employees e JOIN users u ON u.id = e.user_id JOIN roles r ON r.id = u.role_id
+     JOIN LATERAL (
+       SELECT department_id, position_id FROM employment_assignments
+       WHERE employee_id = e.id AND effective_date <= CURRENT_DATE
+       ORDER BY effective_date DESC, created_at DESC LIMIT 1
+     ) ea ON true WHERE e.id = $1`,
+    [employee.body.data.id],
+  );
+  assert.equal(afterGovernance.rows[0].role, "TEAM_LEAD");
+  assert.notEqual(afterGovernance.rows[0].role, "ADMIN");
+  assert.equal(afterGovernance.rows[0].department_id, administration.rows[0].id);
+  assert.equal(afterGovernance.rows[0].position_id, position.body.data.id);
+});
+
 test("HR can create an Employee; the record is independent of any login account", async () => {
   const created = await createTestEmployee();
   assert.equal(created.status, 201, JSON.stringify(created.body));

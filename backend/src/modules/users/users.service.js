@@ -18,6 +18,11 @@ import {
   deleteOverride,
   lockUserById,
   replacePasswordAndBumpSession,
+  listCapabilityBundles,
+  listBundleAssignmentsForUser,
+  findCapabilityBundleByCode,
+  insertBundleAssignment,
+  deleteBundleAssignment,
 } from "./users.repository.js";
 import { getUserProfileById } from "../../shared/users/user-profile.repository.js";
 import {
@@ -262,6 +267,10 @@ export async function getPermissionOverview(actor, targetUserId) {
   // implementation of the same rule.
   const profile = await getUserProfileById(targetUserId);
   const overrides = await listOverridesForUser(targetUserId);
+  const [availableBundles, assignedBundles] = await Promise.all([
+    listCapabilityBundles(),
+    listBundleAssignmentsForUser(targetUserId),
+  ]);
 
   return {
     userId: target.id,
@@ -273,6 +282,18 @@ export async function getPermissionOverview(actor, targetUserId) {
       reason: row.reason,
       grantedBy: { id: row.granted_by_user_id, fullName: row.granted_by_full_name },
       createdAt: row.created_at,
+    })),
+    availableBundles: availableBundles.map((row) => ({
+      code: row.code,
+      displayName: row.display_name,
+      description: row.description,
+      permissionCodes: row.permission_codes,
+    })),
+    assignedBundles: assignedBundles.map((row) => ({
+      code: row.code,
+      displayName: row.display_name,
+      assignedAt: row.assigned_at,
+      assignedBy: { id: row.assigned_by_user_id, fullName: row.assigned_by_full_name },
     })),
   };
 }
@@ -338,5 +359,47 @@ export async function removePermissionOverride(actor, targetUserId, permissionCo
     });
 
     return { userId: target.id, permissionCode };
+  });
+}
+
+export async function assignCapabilityBundle(actor, targetUserId, bundleCode) {
+  const target = await assertOverridable(actor, targetUserId);
+  const bundle = await findCapabilityBundleByCode(bundleCode);
+  if (!bundle || !bundle.is_active) throw new ValidationError("Unknown or inactive capability bundle.");
+
+  return withTransaction(async (client) => {
+    const assigned = await insertBundleAssignment(client, {
+      userId: target.id,
+      bundleId: bundle.id,
+      assignedByUserId: actor.id,
+    });
+    if (!assigned) throw new ConflictError("This capability bundle is already assigned.");
+
+    await recordGovernanceAudit(client, {
+      actorUserId: actor.id,
+      targetUserId: target.id,
+      action: "CAPABILITY_BUNDLE_ASSIGNED",
+      metadata: { bundleCode: bundle.code },
+    });
+    return { userId: target.id, bundleCode: bundle.code };
+  });
+}
+
+export async function removeCapabilityBundle(actor, targetUserId, bundleCode) {
+  const target = await assertOverridable(actor, targetUserId);
+  const bundle = await findCapabilityBundleByCode(bundleCode);
+  if (!bundle) throw new ValidationError("Unknown capability bundle.");
+
+  return withTransaction(async (client) => {
+    const removed = await deleteBundleAssignment(client, target.id, bundle.id);
+    if (!removed) throw new NotFoundError("This capability bundle is not assigned.");
+
+    await recordGovernanceAudit(client, {
+      actorUserId: actor.id,
+      targetUserId: target.id,
+      action: "CAPABILITY_BUNDLE_REMOVED",
+      metadata: { bundleCode: bundle.code },
+    });
+    return { userId: target.id, bundleCode: bundle.code };
   });
 }

@@ -116,6 +116,12 @@ const PROCUREMENT_DOCUMENT_TABLES = ["procurement_documents"];
 // 1787423000000_carry-forward-allocation.js.
 const CARRY_FORWARD_TABLES = ["carry_forward_allocations"];
 
+const CAPABILITY_BUNDLE_TABLES = [
+  "permission_bundles",
+  "permission_bundle_permissions",
+  "user_permission_bundle_assignments",
+];
+
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
   "user_permission_overrides",
@@ -131,6 +137,7 @@ const RUNTIME_APPLICATION_TABLES = [
   ...LINE_DISPOSITION_TABLES,
   ...PROCUREMENT_DOCUMENT_TABLES,
   ...CARRY_FORWARD_TABLES,
+  ...CAPABILITY_BUNDLE_TABLES,
 ];
 const RUNTIME_ALL_TABLES = [...RUNTIME_APPLICATION_TABLES, "pgmigrations"];
 const BROWSER_ROLES = ["anon", "authenticated"];
@@ -464,9 +471,11 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
 
   const explicitGrant = sql.match(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE([\s\S]*?)TO esdms_runtime;/i)?.[1];
   assert.ok(explicitGrant, "expected one explicit runtime table grant");
-  for (const table of RUNTIME_APPLICATION_TABLES) {
+  for (const table of RUNTIME_APPLICATION_TABLES.filter((name) => !CAPABILITY_BUNDLE_TABLES.includes(name))) {
     assert.match(explicitGrant, new RegExp(`public\\.${table}\\b`));
   }
+  assert.match(sql, /GRANT SELECT ON TABLE\s+public\.permission_bundles,\s+public\.permission_bundle_permissions\s+TO esdms_runtime/is);
+  assert.match(sql, /GRANT SELECT, INSERT, DELETE ON TABLE\s+public\.user_permission_bundle_assignments\s+TO esdms_runtime/is);
   assert.doesNotMatch(explicitGrant, /pgmigrations/);
 
   assert.match(sql, /ALTER TABLE public\.pgmigrations ENABLE ROW LEVEL SECURITY/);
@@ -531,7 +540,12 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
       [...RUNTIME_APPLICATION_TABLES].sort(),
     );
     for (const row of directTablePrivileges.rows) {
-      assert.deepEqual(row.privileges, ["DELETE", "INSERT", "SELECT", "UPDATE"]);
+      const expected = row.table_name === "user_permission_bundle_assignments"
+        ? ["DELETE", "INSERT", "SELECT"]
+        : ["permission_bundles", "permission_bundle_permissions"].includes(row.table_name)
+          ? ["SELECT"]
+          : ["DELETE", "INSERT", "SELECT", "UPDATE"];
+      assert.deepEqual(row.privileges, expected, `${row.table_name} has only its reviewed runtime privileges`);
     }
 
     const pgmigrationsPrivileges = await pool.query(

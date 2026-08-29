@@ -148,7 +148,7 @@ export function ReceiveDeliveryPage() {
               <li key={receipt.id}>
                 <Link to={`/receiving/receipts/${receipt.id}`}>
                   <span>
-                    {receipt.receipt_type === "ADMIN_FALLBACK" ? "Admin custody" : "Received"} by{" "}
+                    {receipt.receipt_type === "ADMIN_FALLBACK" ? "Site Administrator custody" : "Received"} by{" "}
                     {receipt.received_by_name} · {formatDateTime(receipt.received_at)}
                   </span>
                   <StatusBadge
@@ -192,7 +192,7 @@ export function ReceiveDeliveryPage() {
                 onChange={(event) => setFallback(event.target.checked)}
               />
               <span>
-                Receive as temporary Admin custody — nobody from the department is available. The department
+                Receive as temporary Site Administrator custody — nobody from the department is available. The department
                 will be asked to acknowledge the handover afterwards.
               </span>
             </label>

@@ -94,6 +94,13 @@ async function selectUserProfiles(executor, userId = null) {
            SELECT 1 FROM user_permission_overrides o
            WHERE o.user_id = u.id AND o.permission_id = p.id AND o.effect = 'GRANT'
          )
+         OR EXISTS (
+           SELECT 1
+           FROM user_permission_bundle_assignments uba
+           JOIN permission_bundles b ON b.id = uba.bundle_id AND b.is_active
+           JOIN permission_bundle_permissions bp ON bp.bundle_id = b.id
+           WHERE uba.user_id = u.id AND bp.permission_id = p.id
+         )
        )
        AND NOT EXISTS (
          SELECT 1 FROM user_permission_overrides o

@@ -1,5 +1,7 @@
 export function formatEnumLabel(value) {
   if (!value) return "";
+  if (value === "CEO") return "CEO";
+  if (value === "ADMIN") return "Site Administrator";
   return value
     .toLowerCase()
     .split("_")

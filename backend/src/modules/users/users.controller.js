@@ -1,7 +1,7 @@
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import * as service from "./users.service.js";
-import { createUserSchema, changeRoleSchema, permissionOverrideSchema } from "./users.validation.js";
+import { createUserSchema, changeRoleSchema, permissionOverrideSchema, capabilityBundleCodeSchema } from "./users.validation.js";
 
 function parseBody(schema, body) {
   const parsed = schema.safeParse(body);
@@ -83,6 +83,18 @@ export const setPermission = asyncHandler(async (req, res) => {
 
 export const removePermission = asyncHandler(async (req, res) => {
   const result = await service.removePermissionOverride(req.user, req.params.id, req.params.code);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const assignBundle = asyncHandler(async (req, res) => {
+  const bundleCode = parseBody(capabilityBundleCodeSchema, req.params.code);
+  const result = await service.assignCapabilityBundle(req.user, req.params.id, bundleCode);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const removeBundle = asyncHandler(async (req, res) => {
+  const bundleCode = parseBody(capabilityBundleCodeSchema, req.params.code);
+  const result = await service.removeCapabilityBundle(req.user, req.params.id, bundleCode);
   res.status(200).json({ success: true, data: result });
 });
 

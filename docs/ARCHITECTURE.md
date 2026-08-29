@@ -230,7 +230,7 @@ commercial tables.
 Checkpoints 6-8 extend the same modular-monolith pattern with four more
 bounded modules — `ipo/` (the approved purchasing document, its numbering
 and purchasing progress), `delivery-challan/` (operational delivery),
-`receiving/` (physical receipt, temporary Admin custody, handover,
+`receiving/` (physical receipt, temporary Site Administrator custody, handover,
 confirmation) and `reports/procurement-reports.*` (permission-aware Excel
 export) — plus shared, single-implementation infrastructure in
 `shared/documents/` (configurable numbering, PDF layout primitives, stored

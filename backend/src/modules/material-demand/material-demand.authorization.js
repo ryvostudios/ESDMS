@@ -18,6 +18,7 @@ import { APPROVAL_PERMISSION } from "./material-demand.constants.js";
 //     every site.
 
 export const ALL_DEPARTMENTS_PERMISSION = "demand.all_departments";
+export const PROCUREMENT_SITE_SCOPE_PERMISSION = "procurement.site_scope";
 
 function isAllDepartmentsActor(actor) {
   return departmentScope.isAllDepartmentsActor(actor, ALL_DEPARTMENTS_PERMISSION);
@@ -25,6 +26,10 @@ function isAllDepartmentsActor(actor) {
 
 export function hasReviewAuthority(actor) {
   return actor.permissions.has(APPROVAL_PERMISSION.MANAGEMENT_REVIEW) || actor.permissions.has(APPROVAL_PERMISSION.FORMAL_APPROVAL);
+}
+
+function hasSiteWideDemandAuthority(actor) {
+  return hasReviewAuthority(actor) || actor.permissions.has(PROCUREMENT_SITE_SCOPE_PERMISSION);
 }
 
 export const resolveDemandDepartmentId = (actor, requestedDepartmentId) =>
@@ -54,7 +59,7 @@ export function assertReviewActionAllowed(actor, demand) {
 export function assertDemandViewable(actor, demand) {
   if (isAllDepartmentsActor(actor)) return;
 
-  if (hasReviewAuthority(actor) && actor.siteId === demand.site_id) return;
+  if (hasSiteWideDemandAuthority(actor) && actor.siteId === demand.site_id) return;
 
   departmentScope.assertDepartmentRecordManageable(actor, demand.department_id, ALL_DEPARTMENTS_PERMISSION);
 }
@@ -75,7 +80,7 @@ export function resolveDemandListScope(actor, requestedDepartmentId) {
     return { tier: "ALL", siteId: null, departmentId: requestedDepartmentId || null };
   }
 
-  if (hasReviewAuthority(actor)) {
+  if (hasSiteWideDemandAuthority(actor)) {
     return { tier: "SITE", siteId: actor.siteId, departmentId: requestedDepartmentId || null };
   }
 

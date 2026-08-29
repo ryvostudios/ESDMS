@@ -132,3 +132,58 @@ export async function deleteOverride(client, userId, permissionId) {
 
   return result.rowCount > 0;
 }
+
+export async function listCapabilityBundles(executor = pool) {
+  const result = await executor.query(
+    `SELECT b.id, b.code, b.display_name, b.description, b.is_active,
+            COALESCE(array_agg(p.code ORDER BY p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permission_codes
+     FROM permission_bundles b
+     LEFT JOIN permission_bundle_permissions bp ON bp.bundle_id = b.id
+     LEFT JOIN permissions p ON p.id = bp.permission_id
+     WHERE b.is_active
+     GROUP BY b.id
+     ORDER BY b.display_name`,
+  );
+  return result.rows;
+}
+
+export async function listBundleAssignmentsForUser(userId, executor = pool) {
+  const result = await executor.query(
+    `SELECT b.code, b.display_name, a.assigned_at,
+            a.assigned_by_user_id, u.full_name AS assigned_by_full_name
+     FROM user_permission_bundle_assignments a
+     JOIN permission_bundles b ON b.id = a.bundle_id
+     JOIN users u ON u.id = a.assigned_by_user_id
+     WHERE a.user_id = $1
+     ORDER BY b.display_name`,
+    [userId],
+  );
+  return result.rows;
+}
+
+export async function findCapabilityBundleByCode(code, executor = pool) {
+  const result = await executor.query(
+    "SELECT id, code, display_name, is_active FROM permission_bundles WHERE code = $1",
+    [code],
+  );
+  return result.rows[0] || null;
+}
+
+export async function insertBundleAssignment(client, { userId, bundleId, assignedByUserId }) {
+  const result = await client.query(
+    `INSERT INTO user_permission_bundle_assignments (user_id, bundle_id, assigned_by_user_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, bundle_id) DO NOTHING
+     RETURNING user_id`,
+    [userId, bundleId, assignedByUserId],
+  );
+  return result.rowCount > 0;
+}
+
+export async function deleteBundleAssignment(client, userId, bundleId) {
+  const result = await client.query(
+    "DELETE FROM user_permission_bundle_assignments WHERE user_id = $1 AND bundle_id = $2",
+    [userId, bundleId],
+  );
+  return result.rowCount > 0;
+}

@@ -26,7 +26,7 @@ test("GET /health/ready is a readiness check that actually queries the database"
   assert.equal(status, 200);
   assert.equal(body.data.status, "ready");
   assert.equal(body.data.schemaCompatible, true);
-  assert.equal(body.data.expectedMigration, "1787425000000_schema-readiness-diagnostics");
+  assert.equal(body.data.expectedMigration, "1787426000000_governance-capability-bundles");
   assert.ok(body.data.appliedMigrationCount >= body.data.expectedMigrationCount);
   assert.match(body.data.backendRevision, /^[A-Za-z0-9._-]+$/);
 });

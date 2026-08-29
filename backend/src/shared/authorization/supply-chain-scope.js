@@ -20,11 +20,10 @@ import { NotFoundError } from "../errors/app-error.js";
 // receiving.receive never crosses a department boundary either.
 export const ALL_DEPARTMENTS_PERMISSION = "demand.all_departments";
 
-// Capabilities whose HOLDER genuinely carries cross-department RESPONSIBILITY
-// at their site — Procurement actually pricing, buying and cutting challans
-// for every department, and management actually reviewing and approving their
-// work. Each of these is an authority to ACT on other departments' records,
-// which is what makes site-wide reach the correct scope for it.
+// Scope is explicit for Procurement: action capabilities answer WHAT an actor
+// may do, while procurement.site_scope answers WHERE. This lets Governance
+// deny or remove site reach without also rewriting every operational grant.
+// Review/approval remain intrinsically site-wide management authorities.
 //
 // Two capabilities are deliberately NOT here, for the same underlying reason:
 // neither is an authority to act on another department's records.
@@ -46,9 +45,7 @@ export const ALL_DEPARTMENTS_PERMISSION = "demand.all_departments";
 // The invariant both cases protect: a capability grants scope only when it is
 // an authority to act across departments.
 const SITE_WIDE_PERMISSIONS = [
-  "procurement.pricing",
-  "procurement.purchase",
-  "dc.manage",
+  "procurement.site_scope",
   "demand.review",
   "demand.approve",
 ];

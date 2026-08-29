@@ -19,6 +19,8 @@ router.post("/:id/deactivate", requirePermission("users.deactivate"), controller
 router.get("/:id/permissions", requirePermission("permission_overrides.view"), controller.getPermissions);
 router.put("/:id/permissions/:code", requirePermission("permission_overrides.manage"), controller.setPermission);
 router.delete("/:id/permissions/:code", requirePermission("permission_overrides.manage"), controller.removePermission);
+router.put("/:id/bundles/:code", requirePermission("permission_overrides.manage"), controller.assignBundle);
+router.delete("/:id/bundles/:code", requirePermission("permission_overrides.manage"), controller.removeBundle);
 
 router.post(
   "/:id/regenerate-temp-password",

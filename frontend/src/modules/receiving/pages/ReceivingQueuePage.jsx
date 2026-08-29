@@ -70,7 +70,7 @@ export function ReceivingQueuePage() {
                         <strong>{receipt.dc_number}</strong>
                         <span>
                           {receipt.receipt_type === "ADMIN_FALLBACK"
-                            ? `Temporary Admin custody · ${receipt.received_by_name}`
+                            ? `Temporary Site Administrator custody · ${receipt.received_by_name}`
                             : `Received by ${receipt.received_by_name}`}{" "}
                           · {formatDateTime(receipt.received_at)}
                         </span>

@@ -8,6 +8,7 @@ import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDia
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { KpiCard } from "../../../shared/components/KpiCard.jsx";
 import { UsersIcon } from "../../../shared/icons.jsx";
+import { formatEnumLabel } from "../../../shared/utilities/format.js";
 import styles from "./GovernancePage.module.css";
 import * as api from "../api.js";
 
@@ -23,6 +24,7 @@ export function GovernancePage() {
   const [regenOpen, setRegenOpen] = useState(false);
   const [tempPassword, setTempPassword] = useState(null);
   const [deactivateOpen, setDeactivateOpen] = useState(false);
+  const [pendingBundleAction, setPendingBundleAction] = useState(null);
 
   const load = () =>
     api
@@ -68,6 +70,15 @@ export function GovernancePage() {
     } catch (e) {
       setError(e.message);
     }
+  }
+
+  async function applyBundleAction() {
+    const action = pendingBundleAction;
+    if (!action) return;
+    if (action.type === "assign") await api.assignUserBundle(selected.id, action.bundle.code);
+    else await api.removeUserBundle(selected.id, action.bundle.code);
+    setPendingBundleAction(null);
+    await selectUser(selected);
   }
 
   async function setActive(value) {
@@ -146,7 +157,7 @@ export function GovernancePage() {
                       </span>
                     </button>
                   </td>
-                  <td>{user.role}</td>
+                  <td>{formatEnumLabel(user.role)}</td>
                   <td>
                     <StatusBadge tone={user.isActive ? "success" : "neutral"} label={user.isActive ? "Active" : "Inactive"} />
                   </td>
@@ -169,7 +180,7 @@ export function GovernancePage() {
                   </span>
                   <span className={styles.userCardMeta}>
                     <span>{user.email}</span>
-                    <span>{user.role}</span>
+                    <span>{formatEnumLabel(user.role)}</span>
                   </span>
                 </button>
               </li>
@@ -184,7 +195,7 @@ export function GovernancePage() {
             <>
               <div className={styles.selectedHeader}>
                 <h2 className={styles.selectedName}>{selected.fullName}</h2>
-                <span className={styles.selectedMeta}>{selected.role}</span>
+                <span className={styles.selectedMeta}>{formatEnumLabel(selected.role)}</span>
                 <StatusBadge tone={selected.isActive ? "success" : "neutral"} label={selected.isActive ? "Active" : "Inactive"} />
               </div>
 
@@ -207,13 +218,13 @@ export function GovernancePage() {
                           }
                         }}
                       >
-                        <option>EMPLOYEE</option>
-                        <option>HR</option>
-                        {hasPermission("users.manage_um") && <option>UPPER_MANAGEMENT</option>}
-                        <option>ADMIN</option>
-                        <option>SITE_MANAGER</option>
-                        <option>TEAM_LEAD</option>
-                        <option>GATE_GUARD</option>
+                        <option value="EMPLOYEE">Employee</option>
+                        <option value="HR">HR</option>
+                        {hasPermission("users.manage_um") && <option value="UPPER_MANAGEMENT">Upper Management</option>}
+                        <option value="ADMIN">Site Administrator</option>
+                        <option value="SITE_MANAGER">Site Manager</option>
+                        <option value="TEAM_LEAD">Team Lead</option>
+                        <option value="GATE_GUARD">Gate Guard</option>
                       </Select>
                     </FormField>
                   </div>
@@ -224,6 +235,34 @@ export function GovernancePage() {
 
               {overview && (
                 <div className={styles.actionGroup}>
+                  <h3 className={styles.actionGroupTitle}>Capability bundles</h3>
+                  <p className={styles.emptySelection}>
+                    Bundles are application authority, separate from Department and Position. Explicit DENY overrides still win.
+                  </p>
+                  <ul className={styles.overrideList}>
+                    {overview.availableBundles.map((bundle) => {
+                      const assigned = overview.assignedBundles.some((entry) => entry.code === bundle.code);
+                      return (
+                        <li key={bundle.code} className={styles.overrideRow}>
+                          <span>
+                            <span className={styles.overrideCode}>{bundle.displayName}</span>
+                            <span className={styles.emptySelection}>{bundle.description}</span>
+                            <span className={styles.emptySelection}>{bundle.permissionCodes.join(" · ")}</span>
+                          </span>
+                          <StatusBadge tone={assigned ? "success" : "neutral"} label={assigned ? "Assigned" : "Not assigned"} />
+                          {canTargetSelected && hasPermission("permission_overrides.manage") && (
+                            <Button
+                              variant={assigned ? "secondary" : "primary"}
+                              onClick={() => setPendingBundleAction({ type: assigned ? "remove" : "assign", bundle })}
+                            >
+                              {assigned ? `Remove ${bundle.displayName}` : `Assign ${bundle.displayName}`}
+                            </Button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+
                   <h3 className={styles.actionGroupTitle}>Permission overrides</h3>
 
                   <p className={styles.detailLabel}>Effective permissions</p>
@@ -272,6 +311,18 @@ export function GovernancePage() {
                   )}
                 </div>
               )}
+
+              <ConfirmActionDialog
+                open={Boolean(pendingBundleAction)}
+                onClose={() => setPendingBundleAction(null)}
+                title={`${pendingBundleAction?.type === "remove" ? "Remove" : "Assign"} ${pendingBundleAction?.bundle.displayName || "capability bundle"}?`}
+                message={pendingBundleAction?.type === "remove"
+                  ? "This removes only authority supplied by this bundle. Unrelated explicit grants and role permissions are preserved."
+                  : "This grants the listed application capabilities. Department and Position remain unchanged."}
+                confirmLabel={pendingBundleAction?.type === "remove" ? "Remove bundle" : "Assign bundle"}
+                variant={pendingBundleAction?.type === "remove" ? "danger" : "primary"}
+                onConfirm={applyBundleAction}
+              />
 
               {(canToggleSelected || (canTargetSelected && hasPermission("users.regenerate_temp_password"))) && (
                 <div className={styles.actionGroup}>

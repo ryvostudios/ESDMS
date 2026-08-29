@@ -275,12 +275,22 @@ invariants are centralized in one place,
   `PRIVILEGE_ESCALATION_ATTEMPT` in `governance_audit_log` **before** the
   `403` is returned — a denied privileged request is never invisible.
 
-Effective permissions (`role permissions + individual grants - individual
-denials`, explicit denial always winning) are computed once, in
+Effective permissions (`role permissions + individual grants + active named
+bundles - individual denials`, explicit denial always winning) are computed once, in
 `getUserProfileById` (§8.2's `user_permission_overrides` table), and reused
 unchanged by both `authenticate.js` (every request) and the governance
 endpoints' own permission-overview response — there is no second,
 potentially-diverging implementation of the rule.
+
+Organization data never grants authority. In particular, an Administration
+Department and a Team Lead Position are ordinary Workforce records and have no
+foreign key or inference path to the `ADMIN`/`TEAM_LEAD` application roles.
+The stable `ADMIN` code is displayed as **Site Administrator**. Procurement
+Staff and Formal / Financial Approver are provenance-bearing named bundles,
+not roles or Departments. Procurement record reach comes only from the
+separate `procurement.site_scope` capability; `procurement.view_prices` can
+reveal fields on an already-visible record but cannot widen site/department
+scope.
 
 **No session_version bump on role/permission/deactivation change.**
 `authenticate.js` already calls `getUserProfileById` fresh on every request —
@@ -838,7 +848,7 @@ identifies one semantic receipt operation in the same way: the same Delivery
 Challan with the same receipt payload replays to the same receipt, while reuse
 against a different challan — or with a materially different payload — is
 rejected. The payload compared is the physical fact recorded: the custody type
-(an ordinary department receipt and temporary Admin custody are different
+(an ordinary department receipt and temporary Site Administrator custody are different
 facts), the physical receiver, the exact set of Delivery Challan lines, and each
 line's received quantity, discrepancy quantity and discrepancy type. Free-text
 wording is deliberately excluded — a reworded note changes nothing about what

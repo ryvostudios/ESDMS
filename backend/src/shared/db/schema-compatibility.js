@@ -1,5 +1,5 @@
-export const EXPECTED_MIGRATION = "1787425000000_schema-readiness-diagnostics";
-export const EXPECTED_MIGRATION_COUNT = 36;
+export const EXPECTED_MIGRATION = "1787426000000_governance-capability-bundles";
+export const EXPECTED_MIGRATION_COUNT = 37;
 
 // This is deliberately detection-only. A migration ledger entry is not proof
 // that its load-bearing objects still exist, so readiness verifies both.
@@ -37,7 +37,11 @@ export async function inspectSchemaCompatibility(executor) {
        to_regprocedure('public.material_demands_forbid_draft_rollback()') IS NOT NULL
          AS rollback_function_present,
        to_regprocedure('public.material_demands_set_draft_delete_eligible()') IS NOT NULL
-         AS eligibility_function_present
+         AS eligibility_function_present,
+       to_regclass('public.permission_bundles') IS NOT NULL AS permission_bundles_present,
+       to_regclass('public.permission_bundle_permissions') IS NOT NULL AS bundle_permissions_present,
+       to_regclass('public.user_permission_bundle_assignments') IS NOT NULL AS bundle_assignments_present,
+       EXISTS (SELECT 1 FROM permissions WHERE code = 'procurement.site_scope') AS procurement_scope_present
      FROM migration_state`,
     [EXPECTED_MIGRATION],
   );
@@ -50,7 +54,11 @@ export async function inspectSchemaCompatibility(executor) {
       state.rollback_trigger_present &&
       state.eligibility_trigger_present &&
       state.rollback_function_present &&
-      state.eligibility_function_present,
+      state.eligibility_function_present &&
+      state.permission_bundles_present &&
+      state.bundle_permissions_present &&
+      state.bundle_assignments_present &&
+      state.procurement_scope_present,
   );
 
   return {

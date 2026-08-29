@@ -99,7 +99,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM esdms_runtime;
 
 -- The current schema uses UUIDs and an ordinary counter table, so the API
--- needs no sequence privileges. Exactly these 59 application tables receive
+-- needs no sequence privileges. These existing application tables receive
 -- DML access; public.pgmigrations is deliberately excluded.
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.company_items,
@@ -161,6 +161,17 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.units_of_measure,
   public.user_permission_overrides,
   public.users
+TO esdms_runtime;
+
+-- Capability definitions are migration-owned reference data. Runtime may
+-- read them but never rewrite bundle membership. Assignment provenance is
+-- append/remove only; there is no unaudited UPDATE path.
+GRANT SELECT ON TABLE
+  public.permission_bundles,
+  public.permission_bundle_permissions
+TO esdms_runtime;
+GRANT SELECT, INSERT, DELETE ON TABLE
+  public.user_permission_bundle_assignments
 TO esdms_runtime;
 
 -- Supabase browser-facing roles are not an application authorization path.
@@ -274,6 +285,8 @@ ALTER TABLE public.procurement_audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.procurement_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notification_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.permission_bundles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.permission_bundle_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pgmigrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.positions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY;
@@ -283,6 +296,7 @@ ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.temporary_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.units_of_measure ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_permission_overrides ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_permission_bundle_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 
 -- Converge each application table to exactly one known runtime policy. Drop
@@ -343,6 +357,8 @@ BEGIN
     'procurement_audit_log',
     'procurement_documents',
     'permissions',
+    'permission_bundles',
+    'permission_bundle_permissions',
     'positions',
     'role_permissions',
     'roles',
@@ -351,6 +367,7 @@ BEGIN
     'temporary_assignments',
     'units_of_measure',
     'user_permission_overrides',
+    'user_permission_bundle_assignments',
     'users'
   ]
   LOOP
@@ -472,6 +489,15 @@ expected_tables(table_name) AS (
 dml_privileges(privilege_type) AS (
   VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')
 ),
+expected_privileges(table_name, privilege_type) AS (
+  SELECT e.table_name, p.privilege_type FROM expected_tables e CROSS JOIN dml_privileges p
+  UNION ALL VALUES
+    ('permission_bundles', 'SELECT'),
+    ('permission_bundle_permissions', 'SELECT'),
+    ('user_permission_bundle_assignments', 'SELECT'),
+    ('user_permission_bundle_assignments', 'INSERT'),
+    ('user_permission_bundle_assignments', 'DELETE')
+),
 all_table_privileges(privilege_type) AS (
   VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')
 ),
@@ -485,10 +511,9 @@ public_relations AS (
 SELECT
   NOT EXISTS (
     SELECT 1
-    FROM expected_tables e
-    CROSS JOIN dml_privileges p
+    FROM expected_privileges e
     JOIN public_relations r ON r.relname = e.table_name
-    WHERE NOT has_table_privilege('esdms_runtime', r.oid, p.privilege_type)
+    WHERE NOT has_table_privilege('esdms_runtime', r.oid, e.privilege_type)
   )
   AND NOT EXISTS (
     SELECT 1
@@ -496,8 +521,10 @@ SELECT
     CROSS JOIN all_table_privileges p
     WHERE has_table_privilege('esdms_runtime', r.oid, p.privilege_type)
       AND (
-        NOT EXISTS (SELECT 1 FROM expected_tables e WHERE e.table_name = r.relname)
-        OR NOT EXISTS (SELECT 1 FROM dml_privileges d WHERE d.privilege_type = p.privilege_type)
+        NOT EXISTS (
+          SELECT 1 FROM expected_privileges e
+          WHERE e.table_name = r.relname AND e.privilege_type = p.privilege_type
+        )
       )
   ) AS runtime_table_boundary_valid
 \gset
@@ -514,7 +541,7 @@ FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REF
   AS privileges(privilege_type)
 ORDER BY privilege_type;
 
--- 5. RLS enabled on all 60 expected tables.
+-- 5. RLS enabled on all 63 expected tables.
 SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -534,14 +561,16 @@ WHERE n.nspname = 'public'
     'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines',
     'material_demand_number_counters', 'material_demands',
     'material_receipt_lines', 'material_receipts',
-    'notification_outbox', 'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
+    'notification_outbox', 'permission_bundles', 'permission_bundle_permissions',
+    'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
     'procurement_documents',
     'role_permissions', 'roles', 'rotation_policies', 'sites',
-    'temporary_assignments', 'units_of_measure', 'user_permission_overrides', 'users'
+    'temporary_assignments', 'units_of_measure', 'user_permission_bundle_assignments',
+    'user_permission_overrides', 'users'
   )
 ORDER BY c.relname;
 
-SELECT count(*) = 60 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
+SELECT count(*) = 63 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
@@ -560,15 +589,17 @@ WHERE n.nspname = 'public'
     'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines',
     'material_demand_number_counters', 'material_demands',
     'material_receipt_lines', 'material_receipts',
-    'notification_outbox', 'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
+    'notification_outbox', 'permission_bundles', 'permission_bundle_permissions',
+    'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
     'procurement_documents',
     'role_permissions', 'roles', 'rotation_policies', 'sites',
-    'temporary_assignments', 'units_of_measure', 'user_permission_overrides', 'users'
+    'temporary_assignments', 'units_of_measure', 'user_permission_bundle_assignments',
+    'user_permission_overrides', 'users'
   )
 \gset
 \if :all_expected_rls_enabled
 \else
-  \warn 'ERROR: RLS is not enabled on all 60 expected public tables.'
+  \warn 'ERROR: RLS is not enabled on all 63 expected public tables.'
   DO $abort$ BEGIN RAISE EXCEPTION 'RLS verification failed'; END $abort$;
 \endif
 
@@ -631,6 +662,8 @@ WITH expected_tables(table_name) AS (
     ('procurement_audit_log'),
     ('procurement_documents'),
     ('permissions'),
+    ('permission_bundles'),
+    ('permission_bundle_permissions'),
     ('positions'),
     ('role_permissions'),
     ('roles'),
@@ -639,11 +672,12 @@ WITH expected_tables(table_name) AS (
     ('temporary_assignments'),
     ('units_of_measure'),
     ('user_permission_overrides'),
+    ('user_permission_bundle_assignments'),
     ('users')
 )
 SELECT
   (SELECT count(*) FROM pg_policies
-   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 59
+   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 62
   AND NOT EXISTS (
     SELECT 1
     FROM expected_tables e

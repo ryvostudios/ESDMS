@@ -255,7 +255,7 @@ export function IpoDetailPage() {
                     <strong>{receipt.dc_number}</strong>
                     <span>
                       {receipt.receipt_type === "ADMIN_FALLBACK"
-                        ? `Temporary Admin custody by ${receipt.received_by_name}`
+                        ? `Temporary Site Administrator custody by ${receipt.received_by_name}`
                         : `Received by ${receipt.received_by_name}`}
                       {receipt.physical_receiver_name ? ` (physically: ${receipt.physical_receiver_name})` : ""} ·{" "}
                       {formatDateTime(receipt.received_at)}

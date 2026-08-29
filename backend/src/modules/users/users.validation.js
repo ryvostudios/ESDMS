@@ -20,3 +20,5 @@ export const permissionOverrideSchema = z.object({
   effect: z.enum(["GRANT", "DENY"]),
   reason: z.string().trim().max(500).optional(),
 });
+
+export const capabilityBundleCodeSchema = z.enum(["PROCUREMENT_STAFF", "FORMAL_APPROVER"]);

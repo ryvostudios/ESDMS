@@ -369,7 +369,7 @@ export async function recordReceipt(actor, dcId, input) {
           payload: {
             dcNumber: dc.dc_number,
             departmentId: dc.department_id,
-            message: `Delivery Challan ${dc.dc_number} was received into temporary Admin custody and is awaiting department handover.`,
+            message: `Delivery Challan ${dc.dc_number} was received into temporary Site Administrator custody and is awaiting department handover.`,
             deepLink: `/receiving/receipts/${receipt.id}`,
           },
         })),
@@ -471,7 +471,7 @@ export async function acknowledgeHandover(actor, receiptId) {
     assertOwnDepartmentRecord(actor, receipt);
 
     if (receipt.receipt_type !== RECEIPT_TYPE.ADMIN_FALLBACK) {
-      throw new ConflictError("Only a temporary Admin custody receipt requires a department handover.");
+      throw new ConflictError("Only a temporary Site Administrator custody receipt requires a department handover.");
     }
     // A replayed acknowledgement is a successful no-op; the database also
     // refuses to rewrite a completed handover.
@@ -503,7 +503,7 @@ export async function acknowledgeHandover(actor, receiptId) {
         payload: {
           dcNumber: preview.dc_number,
           departmentId: receipt.department_id,
-          message: `Temporary Admin custody of ${preview.dc_number} has been handed over to the department. Please confirm completion.`,
+          message: `Temporary Site Administrator custody of ${preview.dc_number} has been handed over to the department. Please confirm completion.`,
           deepLink: `/receiving/receipts/${receiptId}`,
         },
       })),

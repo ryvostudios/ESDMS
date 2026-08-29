@@ -1,4 +1,4 @@
-import { describe, test, expect } from "vitest";
+import { describe, expect, test } from "vitest";
 import { formatEnumLabel } from "./format.js";
 
 describe("formatEnumLabel", () => {
@@ -11,5 +11,11 @@ describe("formatEnumLabel", () => {
   test("returns an empty string for a missing value", () => {
     expect(formatEnumLabel(undefined)).toBe("");
     expect(formatEnumLabel("")).toBe("");
+  });
+
+  test("uses unambiguous application authority labels", () => {
+    expect(formatEnumLabel("ADMIN")).toBe("Site Administrator");
+    expect(formatEnumLabel("CEO")).toBe("CEO");
+    expect(formatEnumLabel("TEAM_LEAD")).toBe("Team Lead");
   });
 });

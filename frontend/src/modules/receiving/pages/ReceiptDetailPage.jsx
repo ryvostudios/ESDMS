@@ -80,7 +80,7 @@ export function ReceiptDetailPage() {
         <dl className={styles.detailGrid}>
           <div>
             <dt>Type</dt>
-            <dd>{receipt.receipt_type === "ADMIN_FALLBACK" ? "Temporary Admin custody" : "Department receipt"}</dd>
+            <dd>{receipt.receipt_type === "ADMIN_FALLBACK" ? "Temporary Site Administrator custody" : "Department receipt"}</dd>
           </div>
           <div>
             <dt>Recorded by</dt>

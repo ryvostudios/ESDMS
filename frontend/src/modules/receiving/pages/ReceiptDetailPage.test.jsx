@@ -123,7 +123,7 @@ describe("ReceiptDetailPage", () => {
     );
     await renderPage();
 
-    expect(screen.getByText("Temporary Admin custody")).toBeTruthy();
+    expect(screen.getByText("Temporary Site Administrator custody")).toBeTruthy();
     expect(screen.getByText("Test Admin")).toBeTruthy();
     expect(screen.getByText("Site Storekeeper")).toBeTruthy();
     expect(screen.getByText("Test Employee")).toBeTruthy();

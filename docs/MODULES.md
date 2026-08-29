@@ -236,7 +236,7 @@ inside the final-approval transaction (exactly-once by a database unique
 constraint), numbered through the configurable
 `document_number_settings`/`document_number_counters` surface in the
 authentic `ESET/2026/32` format, and locked by immutability triggers.
-Checkpoint 7 (Receiving, Admin fallback custody/handover, Team Lead closure)
+Checkpoint 7 (Receiving, Site Administrator fallback custody/handover, Team Lead closure)
 — backend module `backend/src/modules/receiving/`, frontend module
 `frontend/src/modules/receiving/`, migration
 `1787419000000_material-receiving.js`. Checkpoint 8 (line-level budget
@@ -261,16 +261,16 @@ transfer exists (§4, and `docs/PROCUREMENT_RECEIVING_SPEC.md` §24).
 Material receiving is part of the Procurement & Material Receiving V1
 scope above (§5) — see `docs/PROCUREMENT_RECEIVING_SPEC.md` §19-§24 for
 the full authoritative specification (department-member receiving, the
-Admin fallback-custodian path, and the explicit "no Inventory balance in
+Site Administrator fallback-custodian path, and the explicit "no Inventory balance in
 V1" rule).
 
 Material receiving is separate from Gate Pass verification. Material/item
 verification is not a Guard responsibility, and receiving does not depend
 on the Gate Guard.
 
-Receiving involves the relevant department's own staff first, with Admin
+Receiving involves the relevant department's own staff first, with a Site Administrator
 as a temporary fallback custodian only when nobody from the relevant
-department is available on site — not Admin, Site Manager, or Team Lead
+department is available on site — not Site Administrator, Site Manager, or Team Lead
 as universal receivers.
 
 Current status:

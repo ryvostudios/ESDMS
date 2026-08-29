@@ -127,6 +127,8 @@ export const listUsers = () => apiClient.get("/users");
 export const getUserPermissions = (id) => apiClient.get(`/users/${id}/permissions`);
 export const setUserPermission = (id, code, body) => apiClient.put(`/users/${id}/permissions/${encodeURIComponent(code)}`, body);
 export const removeUserPermission = (id, code) => apiClient.del(`/users/${id}/permissions/${encodeURIComponent(code)}`);
+export const assignUserBundle = (id, code) => apiClient.put(`/users/${id}/bundles/${encodeURIComponent(code)}`, {});
+export const removeUserBundle = (id, code) => apiClient.del(`/users/${id}/bundles/${encodeURIComponent(code)}`);
 export const changeUserRole = (id, role) => apiClient.patch(`/users/${id}/role`, { role });
 export const activateUser = (id) => apiClient.post(`/users/${id}/activate`, {});
 export const deactivateUser = (id) => apiClient.post(`/users/${id}/deactivate`, {});

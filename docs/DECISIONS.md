@@ -2835,3 +2835,25 @@ GROUP remains an external production-validation item: the architecture is in
 place and the destination is configurable per department, but group delivery
 depends on the provider and business account actually supporting that
 destination, which cannot be verified from this codebase.
+
+## Organization authority and capability bundles
+
+`ADMIN` remains the stable internal role code, but every user-facing surface
+labels it **Site Administrator**. Administration is an ordinary Department;
+Department and Position rows have no relationship to application roles or
+permissions. An Administration employee in a Team Lead position receives no
+authority until Governance explicitly assigns an application role.
+
+Procurement is an application function, not a Department or role. Governance
+stores named bundle assignment provenance separately from individual
+permission overrides. `PROCUREMENT_STAFF` grants the minimum operational set
+(`demand.view`, `procurement.site_scope`, pricing, purchasing, IPO view, and
+Delivery Challan view/manage), excluding `demand.approve` and `ipo.cancel`.
+`FORMAL_APPROVER` grants only `demand.approve` and stays separate.
+
+`procurement.site_scope` is the explicit site-wide record scope. Price
+visibility remains field visibility only and never widens scope. Effective
+permission precedence is role + explicit GRANT + active bundle, then explicit
+DENY; removing a bundle deletes only its assignment and therefore preserves
+unrelated grants and role permissions. Every assignment/removal is confirmed,
+transactional, and append-only-audited.
