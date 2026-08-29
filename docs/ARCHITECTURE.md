@@ -319,11 +319,16 @@ VITE_BUILD_REVISION=
 It must not contain backend secrets.
 
 Liveness (`GET /api/v1/health`) reports only that the process can answer.
-Readiness (`GET /api/v1/health/ready`) also verifies the migration ledger and
-the physical load-bearing schema required by that backend revision. It reports
-only non-secret revision/migration identifiers and compatibility booleans; it
-never repairs drift. `/diagnostics` compares the stamped frontend revision with
-the backend and database compatibility state without adding noise to normal UI.
+Readiness (`GET /api/v1/health/ready`) verifies the migration ledger, physical
+load-bearing schema, and the database serving boundary required by that backend
+revision. In production the check runs through the API's `esdms_runtime`
+connection and requires current least-privilege provisioning: safe role
+attributes, schema usage without create, reviewed table/function access, no
+sequence or migration-ledger access, no ownership, and the expected RLS
+policies. It reports only non-secret revision/version identifiers and
+compatibility booleans; it never repairs drift. `/diagnostics` compares the
+stamped frontend revision with the backend and database compatibility state
+without adding noise to normal UI.
 
 ---
 

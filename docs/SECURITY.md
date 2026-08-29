@@ -348,7 +348,7 @@ objects as well as `pgmigrations`, so a forged or stale ledger cannot make a
 drifted database ready. It exposes no connection details, SQL, paths or errors.
 
 - `MIGRATION_DATABASE_URL` — an owner-level role, used only to run reviewed `node-pg-migrate` schema changes and the post-migration provisioning script. It is never configured on, or used by, the running API process.
-- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the explicitly reviewed application tables named in `scripts/provision-db-roles.sql` — that allowlist is the authoritative list, and it grows only when a migration adds a table and the script is updated to name it — plus `USAGE` on the `public` schema. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
+- `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only the explicitly reviewed table privileges named in `scripts/provision-db-roles.sql`: most application tables receive CRUD, capability-bundle definitions are read-only, and bundle assignments deliberately omit `UPDATE`. That allowlist is authoritative and grows only when a migration adds a reviewed runtime dependency. Runtime also receives `USAGE` on `public` and `EXECUTE` on only the two narrow readiness functions. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
 
@@ -405,7 +405,18 @@ The Workforce trigger functions (`employee_contracts_enforce_immutability`, `emp
 
 PostgreSQL default ACLs are owner-specific: defaults owned by `supabase_admin` apply to objects subsequently created by `supabase_admin`, not to ESDMS objects created by the `postgres` migration owner. ESDMS removes and verifies the relevant global/public defaults belonging to its current migration owner; it does not alter or claim ownership of unrelated Supabase-managed defaults.
 
-`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants its explicit table allowlist, and converges one `esdms_runtime_access` RLS policy on each application table it names. There is intentionally no runtime policy or privilege on `public.pgmigrations`. Run it as the migration owner after migrations using the exact invocation below:
+`scripts/provision-db-roles.sql` is the idempotent, post-migration environment-provisioning step. It reads `ESDMS_RUNTIME_PASSWORD` only after disabling psql query echoing, creates or rotates only the runtime login password, verifies dangerous role attributes instead of trying Supabase-incompatible `ALTER ROLE ... NOSUPERUSER/NOBYPASSRLS` operations, removes legacy broad/default grants owned by the migration role, hardens current and future public-function execution, grants its explicit table allowlist, and converges one `esdms_runtime_access` RLS policy on each runtime-accessible application table. There is intentionally no runtime policy or privilege on `public.pgmigrations`. The script records the reviewed provisioning version through a narrow `SECURITY INVOKER` function that is executable only by `esdms_runtime`; migrations cannot advance that marker by themselves.
+
+The authoritative managed-environment entry point is `npm run db:release`, with
+`MIGRATION_DATABASE_URL`, runtime `DATABASE_URL`, and
+`ESDMS_RUNTIME_PASSWORD` supplied through the deployment platform's secret
+environment. It executes, in order: migrations, this provisioning script, and
+`npm run db:verify-runtime`. The verifier connects as `esdms_runtime`, checks
+role/schema/table/function/sequence/ownership/RLS boundaries, executes the
+exact login/`/me` profile query with a non-matching UUID, and probes the fleet
+tables. It fails closed before application cutover.
+
+For audited break-glass/manual provisioning, the underlying invocation is:
 
 ```sh
 read -rs ESDMS_RUNTIME_PASSWORD
@@ -417,6 +428,13 @@ unset ESDMS_RUNTIME_PASSWORD
 `--no-psqlrc` is mandatory because a user's `.psqlrc` runs before the script and could otherwise inspect exported environment variables. The combination of `--no-psqlrc`, script-level `\set ECHO none` before `\getenv`, and psql's quoted-variable form (`:'runtime_password'`) prevents the normal provisioning command from echoing the runtime password while preserving injection-safe SQL quoting. Arbitrary psql wrappers or invocations that inspect the environment are outside this guarantee.
 
 Every new module/table requires a reviewed forward migration plus an explicit update to the runtime table allowlist and RLS policy provisioning. New directly callable database functions require an equally explicit reviewed grant. No migration-owner default privilege automatically exposes future tables, sequences, or functions to `esdms_runtime`, `anon`, or `authenticated`.
+
+Production readiness runs on the API's own runtime connection. It requires
+both physical/migration schema compatibility and current runtime provisioning,
+including the reviewed marker, critical grants, RLS policies, and the negative
+security boundaries above. Therefore `schemaCompatible=true` cannot by itself
+make `/api/v1/health/ready` healthy. The endpoint reports only non-secret
+versions and booleans and never repairs the database.
 
 ---
 

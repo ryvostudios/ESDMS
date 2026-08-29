@@ -11,6 +11,8 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "migrate:up": "node-pg-migrate up",
+    "db:release": "node scripts/release-db.js",
+    "db:verify-runtime": "node scripts/verify-runtime-db.js",
     "reset:operational-data": "node scripts/reset-operational-data.js",
     "migrate:down": "node-pg-migrate down",
     "migrate:up:prod": "node-pg-migrate up -d MIGRATION_DATABASE_URL",

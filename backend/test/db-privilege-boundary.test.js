@@ -4,8 +4,14 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import pg from "pg";
 import config from "../src/config/env.js";
 import pool from "../src/config/database.js";
+import { inspectRuntimeCompatibility } from "../src/shared/db/runtime-compatibility.js";
+import { USER_PROFILE_QUERY } from "../src/shared/users/user-profile.query.js";
+import { seedUsers, TEST_PASSWORD } from "./setup.js";
+
+const { Pool } = pg;
 
 const APPLICATION_TABLES = [
   "departments",
@@ -158,6 +164,7 @@ const functionMigrationPath = path.resolve(
   import.meta.dirname,
   "../migrations/1787402000000_public-function-execution-boundary.js",
 );
+const runtimeAuthSmokePath = path.resolve(import.meta.dirname, "fixtures/runtime-auth-smoke.mjs");
 
 function assertIsDisposableTestDatabase() {
   let databaseUrl;
@@ -253,6 +260,13 @@ function runSqlAsRuntime(databaseUrl, password, sql) {
     },
     encoding: "utf8",
   });
+}
+
+function runtimeDatabaseUrl(databaseUrl, password) {
+  const url = new URL(databaseUrl);
+  url.username = "esdms_runtime";
+  url.password = password;
+  return url.toString();
 }
 
 async function getFunctionExecution(functionName) {
@@ -463,8 +477,10 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
   assert.doesNotMatch(executableSql, /GRANT[^;]+ON\s+ALL\s+SEQUENCES\s+IN\s+SCHEMA\s+public/is);
   assert.doesNotMatch(executableSql, /ALTER\s+DEFAULT\s+PRIVILEGES[^;]+GRANT/is);
   const runtimeFunctionGrants = [...executableSql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+([^;]+)\s+TO\s+esdms_runtime/gi)];
-  assert.equal(runtimeFunctionGrants.length, 1, "only the readiness diagnostic function may be runtime-callable");
-  assert.match(runtimeFunctionGrants[0][1], /^public\.esdms_schema_migration_state\(text\)$/i);
+  assert.equal(runtimeFunctionGrants.length, 2, "only the two readiness diagnostic functions may be runtime-callable");
+  assert.ok(runtimeFunctionGrants.some((grant) => /^public\.esdms_schema_migration_state\(text\)$/i.test(grant[1])));
+  assert.ok(runtimeFunctionGrants.some((grant) => /^public\.esdms_runtime_provisioning_version\(\)$/i.test(grant[1])));
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.esdms_runtime_provisioning_version\(\) FROM PUBLIC/);
   assert.match(sql, /REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM esdms_runtime/);
   assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM esdms_runtime/);
   assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM esdms_runtime/);
@@ -617,6 +633,45 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
          AND grantee.rolname = 'esdms_runtime'`,
     );
     assert.equal(runtimeDefaults.rowCount, 0);
+
+    const runtimeUrl = runtimeDatabaseUrl(databaseUrl, runtimePassword);
+    const runtimePool = new Pool({ connectionString: runtimeUrl, max: 1 });
+    try {
+      const compatibility = await inspectRuntimeCompatibility(runtimePool, { requireRuntimeRole: true });
+      assert.equal(compatibility.runtimeProvisioningCompatible, true);
+
+      const exactProfileSql = USER_PROFILE_QUERY.replace(
+        /\$1/g,
+        "'00000000-0000-0000-0000-000000000000'::uuid",
+      );
+      const profileQuery = runSqlAsRuntime(databaseUrl, runtimePassword, exactProfileSql);
+      assert.equal(profileQuery.status, 0, "the exact login /me profile query must execute as esdms_runtime");
+      assert.equal(profileQuery.stderr, "");
+
+      await seedUsers();
+      const authSmoke = spawnSync(process.execPath, [runtimeAuthSmokePath], {
+        env: {
+          ...process.env,
+          DATABASE_URL: runtimeUrl,
+          ESDMS_RUNTIME_SMOKE_EMAIL: "ceo@test.eset.local",
+          ESDMS_RUNTIME_SMOKE_PASSWORD: TEST_PASSWORD,
+        },
+        encoding: "utf8",
+      });
+      assert.equal(authSmoke.status, 0, authSmoke.stderr || "runtime auth smoke failed");
+      assert.deepEqual(JSON.parse(authSmoke.stdout), {
+        loginStatus: 200,
+        meStatus: 200,
+        invalidLoginStatus: 401,
+        readinessStatus: 200,
+        schemaCompatible: true,
+        runtimeProvisioningCompatible: true,
+        appliedMigrationCount: 38,
+        latestAppliedMigration: "1787427000000_driver-vehicle-master-and-gate-evidence",
+      });
+    } finally {
+      await runtimePool.end();
+    }
   } finally {
     await cleanupRuntimeRole();
   }

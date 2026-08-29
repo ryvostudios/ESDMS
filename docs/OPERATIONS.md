@@ -1,5 +1,13 @@
 # Operations
 
+## Database release
+
+Use the one authoritative release sequence in `DEPLOYMENT.md`. Do not run only
+the migrations and then start the API: schema compatibility does not prove that
+the runtime role can serve requests. `npm run db:release` must complete before
+traffic is enabled, followed by `/api/v1/health/ready` and login/`/me` smoke
+checks.
+
 ## Safe non-production data reset
 
 `backend/scripts/reset-operational-data.js` clears operational/demo data so an
@@ -12,6 +20,7 @@ rewrite an audit log after it has run.
 cd backend
 DATABASE_URL=postgresql://localhost:5432/eset_dev \
 ESDMS_RESET_CONFIRM=eset_dev \
+ESDMS_ORIGINAL_CEO_EMAIL=ceo@company.example \
 npm run reset:operational-data
 ```
 
@@ -20,24 +29,27 @@ It refuses to run when:
 * `NODE_ENV=production`;
 * the database name or host looks like production (matches `prod`);
 * `ESDMS_RESET_CONFIRM` does not exactly equal the target database name;
-* no active CEO account exists to preserve — so it can never leave a database
-  with no way back in.
+* `ESDMS_ORIGINAL_CEO_EMAIL` is missing or does not identify the active CEO
+  role account created as this environment's permanent original CEO — so the
+  reset never relies on an age/name heuristic or leaves the database with no
+  way back in.
 
 Everything happens in one transaction, and the script verifies before
 committing that each table it claims to clear is empty and that the reference
-data, the single Site and the bootstrap login survived.
+data, the single Site and the configured permanent original CEO survived.
 
 **Preserved:** schema/migrations, roles, permissions, capability bundles,
-units of measure, document-number settings, one Site, one bootstrap CEO login.
+units of measure, document-number settings, one Site, and the configured
+permanent original CEO login (same id, email, password hash and authority).
 
-**Cleared:** every operational record — users other than the bootstrap CEO,
+**Cleared:** every operational record — users other than the original CEO,
 employees and assignments, departments, positions, workforce configuration
 catalogs, materials, Demands, pricing, IPOs, Delivery Challans, receipts, Gate
 Passes and their evidence, Drivers and Vehicles, leave/contracts/documents,
 governance and procurement audit rows, the notification outbox, and every
 document-number counter (so a rebuilt organization starts numbering at 1).
 
-After a reset, sign in as the bootstrap CEO and rebuild through the UI:
+After a reset, sign in as the original CEO and rebuild through the UI:
 Departments and Positions and Employment Types under Workforce Config,
 Employees under Employees (each can be given a login from its own page, which
 starts at EMPLOYEE role), then role and capability-bundle assignment under

@@ -229,10 +229,22 @@ ALTER DEFAULT PRIVILEGES
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
--- The sole runtime-callable public function returns only migration count/name
--- diagnostics. It is the narrow bridge that keeps pgmigrations owner-only
--- while allowing readiness to detect ledger/schema incompatibility.
+-- The two runtime-callable public functions return only non-sensitive release
+-- diagnostics. The provisioning version is deliberately replaced only by this
+-- post-migration script: current migrations plus a stale/omitted provisioning
+-- run must never satisfy readiness again.
 GRANT EXECUTE ON FUNCTION public.esdms_schema_migration_state(text) TO esdms_runtime;
+CREATE OR REPLACE FUNCTION public.esdms_runtime_provisioning_version()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $function$
+  SELECT '1787427000000_driver-vehicle-master-and-gate-evidence'::text;
+$function$;
+REVOKE ALL ON FUNCTION public.esdms_runtime_provisioning_version() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.esdms_runtime_provisioning_version() TO esdms_runtime;
 
 -- Keep RLS enabled on every public ESDMS table. FORCE RLS is intentionally not
 -- used: the migration owner must continue to run schema migrations, while the
@@ -405,6 +417,19 @@ SELECT
 FROM pg_roles
 WHERE rolname = 'esdms_runtime';
 
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM pg_auth_members m
+  JOIN pg_roles member_role ON member_role.oid = m.member
+  WHERE member_role.rolname = 'esdms_runtime'
+) AS runtime_membership_boundary_valid
+\gset
+\if :runtime_membership_boundary_valid
+\else
+  \warn 'ERROR: esdms_runtime unexpectedly inherits another database role.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'esdms_runtime role membership verification failed'; END $abort$;
+\endif
+
 -- 2. Schema privileges (USAGE true; CREATE false).
 SELECT
   has_schema_privilege('esdms_runtime', 'public', 'USAGE') AS has_usage,
@@ -549,148 +574,65 @@ FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REF
   AS privileges(privilege_type)
 ORDER BY privilege_type;
 
--- 5. RLS enabled on all 63 expected tables.
+-- 5. Every table the runtime can access, plus owner-only pgmigrations, keeps
+-- RLS enabled. Deriving this from effective grants avoids another stale count
+-- when a reviewed table is added to the explicit allowlist.
 SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
-  AND c.relname IN (
-        'carry_forward_allocations', 'company_items', 'delivery_challan_lines', 'delivery_challans',
-    'department_material_catalog',
-    'departments', 'document_number_counters', 'document_number_settings', 'employee_business_history',
-    'employee_compensation_records', 'employee_contract_number_counters', 'employee_contracts', 'employee_custom_field_values',
-    'employee_custom_fields', 'employee_document_requests', 'employee_document_types', 'employee_documents',
-    'employee_emergency_contacts', 'employee_personal_details', 'employee_profile_photos', 'employee_profile_sections',
-    'employee_rotation_ledger', 'employees', 'employment_assignments', 'employment_types',
-    'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items', 'gate_pass_number_counters',
-    'gate_passes', 'governance_audit_log', 'ipo_lines', 'ipo_purchase_events', 'ipos',
-    'leave_requests', 'leave_types',
-    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_line_dispositions',
-    'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines',
-    'material_demand_number_counters', 'material_demands',
-    'material_receipt_lines', 'material_receipts',
-    'notification_outbox', 'permission_bundles', 'permission_bundle_permissions',
-    'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
-    'procurement_documents',
-    'role_permissions', 'roles', 'rotation_policies', 'sites',
-    'temporary_assignments', 'units_of_measure', 'user_permission_bundle_assignments',
-    'user_permission_overrides', 'users'
+  AND c.relkind IN ('r', 'p')
+  AND (
+    c.relname = 'pgmigrations'
+    OR has_table_privilege('esdms_runtime', c.oid, 'SELECT')
+    OR has_table_privilege('esdms_runtime', c.oid, 'INSERT')
+    OR has_table_privilege('esdms_runtime', c.oid, 'UPDATE')
+    OR has_table_privilege('esdms_runtime', c.oid, 'DELETE')
   )
 ORDER BY c.relname;
 
-SELECT count(*) = 63 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
+SELECT count(*) > 1 AND bool_and(c.relrowsecurity) AS all_expected_rls_enabled
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
-  AND c.relname IN (
-        'carry_forward_allocations', 'company_items', 'delivery_challan_lines', 'delivery_challans',
-    'department_material_catalog',
-    'departments', 'document_number_counters', 'document_number_settings', 'employee_business_history',
-    'employee_compensation_records', 'employee_contract_number_counters', 'employee_contracts', 'employee_custom_field_values',
-    'employee_custom_fields', 'employee_document_requests', 'employee_document_types', 'employee_documents',
-    'employee_emergency_contacts', 'employee_personal_details', 'employee_profile_photos', 'employee_profile_sections',
-    'employee_rotation_ledger', 'employees', 'employment_assignments', 'employment_types',
-    'gate_pass_audit_log', 'gate_pass_files', 'gate_pass_items', 'gate_pass_number_counters',
-    'gate_passes', 'governance_audit_log', 'ipo_lines', 'ipo_purchase_events', 'ipos',
-    'leave_requests', 'leave_types',
-    'material_demand_approvals', 'material_demand_audit_log', 'material_demand_line_dispositions',
-    'material_demand_lines', 'material_demand_pricing', 'material_demand_pricing_lines',
-    'material_demand_number_counters', 'material_demands',
-    'material_receipt_lines', 'material_receipts',
-    'notification_outbox', 'permission_bundles', 'permission_bundle_permissions',
-    'permissions', 'pgmigrations', 'positions', 'procurement_audit_log',
-    'procurement_documents',
-    'role_permissions', 'roles', 'rotation_policies', 'sites',
-    'temporary_assignments', 'units_of_measure', 'user_permission_bundle_assignments',
-    'user_permission_overrides', 'users'
+  AND c.relkind IN ('r', 'p')
+  AND (
+    c.relname = 'pgmigrations'
+    OR has_table_privilege('esdms_runtime', c.oid, 'SELECT')
+    OR has_table_privilege('esdms_runtime', c.oid, 'INSERT')
+    OR has_table_privilege('esdms_runtime', c.oid, 'UPDATE')
+    OR has_table_privilege('esdms_runtime', c.oid, 'DELETE')
   )
 \gset
 \if :all_expected_rls_enabled
 \else
-  \warn 'ERROR: RLS is not enabled on all 63 expected public tables.'
+  \warn 'ERROR: RLS is not enabled on every runtime-accessible public table and pgmigrations.'
   DO $abort$ BEGIN RAISE EXCEPTION 'RLS verification failed'; END $abort$;
 \endif
 
--- 6-7. Exactly one desired policy per application table; none on pgmigrations.
+-- 6-7. Every runtime-accessible table has exactly the intended policy; none
+-- exists on pgmigrations. This follows the effective allowlist established and
+-- verified above instead of maintaining another copy of the table list.
 SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
 FROM pg_policies
 WHERE schemaname = 'public'
   AND policyname = 'esdms_runtime_access'
 ORDER BY tablename;
 
-WITH expected_tables(table_name) AS (
-  VALUES
-    ('company_items'),
-    ('department_material_catalog'),
-    ('carry_forward_allocations'),
-    ('delivery_challan_lines'),
-    ('delivery_challans'),
-    ('departments'),
-    ('drivers'),
-    ('document_number_counters'),
-    ('document_number_settings'),
-    ('employee_business_history'),
-    ('employee_compensation_records'),
-    ('employee_contract_number_counters'),
-    ('employee_contracts'),
-    ('employee_custom_field_values'),
-    ('employee_custom_fields'),
-    ('employee_document_requests'),
-    ('employee_document_types'),
-    ('employee_documents'),
-    ('employee_emergency_contacts'),
-    ('employee_personal_details'),
-    ('employee_profile_photos'),
-    ('employee_profile_sections'),
-    ('employee_rotation_ledger'),
-    ('employees'),
-    ('employment_assignments'),
-    ('employment_types'),
-    ('gate_pass_audit_log'),
-    ('gate_pass_files'),
-    ('gate_pass_items'),
-    ('gate_pass_number_counters'),
-    ('gate_passes'),
-    ('governance_audit_log'),
-    ('ipo_lines'),
-    ('ipo_purchase_events'),
-    ('ipos'),
-    ('leave_requests'),
-    ('leave_types'),
-    ('material_demand_approvals'),
-    ('material_demand_audit_log'),
-    ('material_demand_lines'),
-    ('material_demand_pricing'),
-    ('material_demand_pricing_lines'),
-    ('material_demand_number_counters'),
-    ('material_demand_line_dispositions'),
-    ('material_demands'),
-    ('material_receipt_lines'),
-    ('material_receipts'),
-    ('notification_outbox'),
-    ('procurement_audit_log'),
-    ('procurement_documents'),
-    ('permissions'),
-    ('permission_bundles'),
-    ('permission_bundle_permissions'),
-    ('positions'),
-    ('role_permissions'),
-    ('roles'),
-    ('rotation_policies'),
-    ('sites'),
-    ('temporary_assignments'),
-    ('units_of_measure'),
-    ('user_permission_overrides'),
-    ('user_permission_bundle_assignments'),
-    ('users'),
-    ('vehicles')
+WITH runtime_tables(table_name) AS (
+  SELECT DISTINCT c.relname
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) p(privilege_type)
+  WHERE n.nspname = 'public'
+    AND c.relkind IN ('r', 'p')
+    AND c.relname <> 'pgmigrations'
+    AND has_table_privilege('esdms_runtime', c.oid, p.privilege_type)
 )
 SELECT
-  (SELECT count(*) FROM pg_policies
-   WHERE schemaname = 'public' AND policyname = 'esdms_runtime_access') = 64
-  AND NOT EXISTS (
+  NOT EXISTS (
     SELECT 1
-    FROM expected_tables e
+    FROM runtime_tables e
     WHERE NOT EXISTS (
       SELECT 1
       FROM pg_policies p
@@ -715,6 +657,28 @@ SELECT
 \else
   \warn 'ERROR: esdms_runtime_access policy verification failed.'
   DO $abort$ BEGIN RAISE EXCEPTION 'runtime RLS policy verification failed'; END $abort$;
+\endif
+
+-- The runtime role must never own schema/database objects. Ownership would
+-- bypass ordinary grants and, for tables, RLS unless FORCE RLS were used.
+SELECT NOT EXISTS (
+  SELECT 1 FROM pg_class c
+  WHERE c.relowner = (SELECT oid FROM pg_roles WHERE rolname = 'esdms_runtime')
+  UNION ALL
+  SELECT 1 FROM pg_proc p
+  WHERE p.proowner = (SELECT oid FROM pg_roles WHERE rolname = 'esdms_runtime')
+  UNION ALL
+  SELECT 1 FROM pg_namespace n
+  WHERE n.nspowner = (SELECT oid FROM pg_roles WHERE rolname = 'esdms_runtime')
+  UNION ALL
+  SELECT 1 FROM pg_database d
+  WHERE d.datdba = (SELECT oid FROM pg_roles WHERE rolname = 'esdms_runtime')
+) AS runtime_ownership_boundary_valid
+\gset
+\if :runtime_ownership_boundary_valid
+\else
+  \warn 'ERROR: esdms_runtime unexpectedly owns a database object.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'runtime ownership boundary verification failed'; END $abort$;
 \endif
 
 -- 8-9. Supabase browser roles, when present, have zero effective privileges
@@ -864,6 +828,56 @@ SELECT
 \else
   \warn 'ERROR: PUBLIC or a browser role can execute a current public function.'
   DO $abort$ BEGIN RAISE EXCEPTION 'function execution boundary verification failed'; END $abort$;
+\endif
+
+-- Runtime may call only the two narrow readiness functions. Trigger functions
+-- remain executable through their table triggers without a direct grant.
+WITH expected_functions(function_name, identity_arguments) AS (
+  VALUES
+    ('esdms_schema_migration_state', 'expected_name text'),
+    ('esdms_runtime_provisioning_version', '')
+),
+public_functions AS (
+  SELECT p.oid, p.proname, pg_get_function_identity_arguments(p.oid) AS identity_arguments
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.prokind <> 'p'
+)
+SELECT
+  NOT EXISTS (
+    SELECT 1
+    FROM expected_functions e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public_functions f
+      WHERE f.proname = e.function_name
+        AND f.identity_arguments = e.identity_arguments
+        AND has_function_privilege('esdms_runtime', f.oid, 'EXECUTE')
+    )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public_functions f
+    WHERE has_function_privilege('esdms_runtime', f.oid, 'EXECUTE')
+      AND NOT EXISTS (
+        SELECT 1 FROM expected_functions e
+        WHERE e.function_name = f.proname AND e.identity_arguments = f.identity_arguments
+      )
+  ) AS runtime_function_boundary_valid
+\gset
+\if :runtime_function_boundary_valid
+\else
+  \warn 'ERROR: esdms_runtime has missing or unintended public function EXECUTE privileges.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'runtime function boundary verification failed'; END $abort$;
+\endif
+
+SELECT public.esdms_runtime_provisioning_version()
+       = '1787427000000_driver-vehicle-master-and-gate-evidence'
+       AS runtime_provisioning_version_valid
+\gset
+\if :runtime_provisioning_version_valid
+\else
+  \warn 'ERROR: runtime provisioning version marker is stale.'
+  DO $abort$ BEGIN RAISE EXCEPTION 'runtime provisioning version verification failed'; END $abort$;
 \endif
 
 -- Future functions created by this migration owner must not inherit EXECUTE

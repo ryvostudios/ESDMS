@@ -142,3 +142,20 @@ migrate and drop a freshly named local disposable database by default; use
 `npm run test:provided` only for an explicitly supplied safely named test DB. See
 `backend/scripts/provision-db-roles.sql` and `docs/SECURITY.md` §8 before
 ever pointing this at a production database.
+
+## Database Release
+
+Managed environments use the single post-review release command documented in
+`docs/DEPLOYMENT.md`:
+
+```bash
+cd backend
+npm run db:release
+```
+
+It requires separate migration-owner and `esdms_runtime` credentials, applies
+migrations, converges the checked-in least-privilege grants/RLS policies, and
+verifies the real runtime serving contract. A current migration ledger alone
+is not deployment readiness. The running API receives only `DATABASE_URL` for
+`esdms_runtime`; it must never receive `MIGRATION_DATABASE_URL` or
+`ESDMS_RUNTIME_PASSWORD`.

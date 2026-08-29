@@ -16,7 +16,7 @@
 //      name, so a copy-pasted command cannot hit the wrong database.
 //   4. Runs in ONE transaction: either the whole reset lands or none of it.
 //   5. Verifies afterwards that every table it claims to clear is actually
-//      empty, and that the preserved reference data and bootstrap login
+//      empty, and that the preserved reference data and original CEO login
 //      survived — then reports what it removed.
 //
 // Repeatable: running it twice is a no-op the second time.
@@ -115,7 +115,7 @@ const OPERATIONAL_TABLES_IN_DELETE_ORDER = [
 
 // Never touched: schema/migrations, the role and permission model, capability
 // bundles, units of measure, document-number settings, one Site, and the
-// bootstrap login.
+// permanent original CEO login.
 const PRESERVED_TABLES = [
   "pgmigrations",
   "roles",
@@ -195,33 +195,32 @@ async function countRows(client, tables) {
   return counts;
 }
 
-async function resolveBootstrapUser(client) {
-  // The oldest active CEO is the bootstrap login. Chosen by created_at rather
-  // than by email so the script needs no configuration to find it, and so
-  // re-running keeps the same account.
+async function resolveOriginalCeo(client, email) {
   const result = await client.query(
     `SELECT u.id, u.email, u.full_name, u.site_id
      FROM users u JOIN roles r ON r.id = u.role_id
-     WHERE r.name = 'CEO' AND u.is_active = true
-     ORDER BY u.created_at, u.id
-     LIMIT 1`,
+     WHERE r.name = 'CEO' AND u.is_active = true AND lower(u.email) = lower($1)`,
+    [email],
   );
   return result.rows[0] || null;
 }
 
 async function main() {
   const target = assertSafeTarget();
+  const originalCeoEmail = process.env.ESDMS_ORIGINAL_CEO_EMAIL?.trim();
+  if (!originalCeoEmail) {
+    throw new Error("Refusing to reset: ESDMS_ORIGINAL_CEO_EMAIL is required.");
+  }
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
 
   try {
     await client.query("BEGIN");
 
-    const bootstrap = await resolveBootstrapUser(client);
-    if (!bootstrap) {
+    const originalCeo = await resolveOriginalCeo(client, originalCeoEmail);
+    if (!originalCeo) {
       throw new Error(
-        "Refusing to reset: no active CEO account exists to preserve. "
-          + "Run scripts/create-ceo-user.js first, so there is still a way in afterwards.",
+        "Refusing to reset: the configured permanent original CEO is missing, inactive, or no longer a CEO.",
       );
     }
 
@@ -231,7 +230,7 @@ async function main() {
       await client.query(`ALTER TABLE public.${table} DISABLE TRIGGER USER`);
     }
 
-    // Every non-bootstrap user goes; the bootstrap CEO stays, detached from
+    // Every other user goes; the permanent original CEO stays, detached from
     // the department it is about to lose. (The employee side of the link
     // lives on employees.user_id, which is deleted with the employees.)
     await client.query("UPDATE users SET department_id = NULL");
@@ -240,10 +239,10 @@ async function main() {
       await client.query(`DELETE FROM public.${table}`);
     }
 
-    await client.query("DELETE FROM users WHERE id <> $1", [bootstrap.id]);
+    await client.query("DELETE FROM users WHERE id <> $1", [originalCeo.id]);
 
-    // Exactly one Site survives: the bootstrap CEO's own.
-    await client.query("DELETE FROM sites WHERE id <> $1", [bootstrap.site_id]);
+    // Exactly one Site survives: the permanent original CEO's own.
+    await client.query("DELETE FROM sites WHERE id <> $1", [originalCeo.site_id]);
 
     for (const table of TABLES_WITH_PROTECTIVE_TRIGGERS) {
       await client.query(`ALTER TABLE public.${table} ENABLE TRIGGER USER`);
@@ -264,9 +263,9 @@ async function main() {
     if (preserved.users !== 1) throw new Error(`Expected exactly one preserved user, found ${preserved.users}.`);
     if (preserved.sites !== 1) throw new Error(`Expected exactly one preserved site, found ${preserved.sites}.`);
 
-    const survivor = await resolveBootstrapUser(client);
-    if (!survivor || survivor.id !== bootstrap.id) {
-      throw new Error("Reset would have removed the bootstrap login.");
+    const survivor = await resolveOriginalCeo(client, originalCeoEmail);
+    if (!survivor || survivor.id !== originalCeo.id) {
+      throw new Error("Reset would have removed the permanent original CEO login.");
     }
 
     await client.query("COMMIT");
@@ -281,7 +280,7 @@ async function main() {
     console.log(
       `\nPreserved: schema/migrations, ${preserved.roles} roles, ${preserved.permissions} permissions, `
         + `${preserved.permission_bundles} capability bundles, ${preserved.units_of_measure} units of measure, `
-        + "1 site, and the bootstrap login "
+        + "1 site, and the permanent original CEO login "
         + `${survivor.email}.`,
     );
     console.log("\nSign in as that account and rebuild the organization through the UI.");

@@ -25,17 +25,23 @@ const targetUrl = (() => {
 
 let admin;
 let target;
+let originalCeoBefore;
 
 function runReset(env = {}) {
+  const childEnv = {
+    ...process.env,
+    DATABASE_URL: targetUrl,
+    ESDMS_RESET_CONFIRM: databaseName,
+    ESDMS_ORIGINAL_CEO_EMAIL: "bootstrap-ceo@test.eset.local",
+    ...env,
+  };
+  for (const [name, value] of Object.entries(childEnv)) {
+    if (value === undefined) delete childEnv[name];
+  }
   return spawnSync(process.execPath, ["scripts/reset-operational-data.js"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_URL: targetUrl,
-      ESDMS_RESET_CONFIRM: databaseName,
-      ...env,
-    },
+    env: childEnv,
   });
 }
 
@@ -59,7 +65,7 @@ before(async () => {
   target = new Client({ connectionString: targetUrl });
   await target.connect();
 
-  // A bootstrap CEO plus operational data spanning the protected tables — a
+  // The permanent original CEO plus operational data spanning the protected tables — a
   // Gate Pass carries a forbid-delete trigger and an append-only audit log,
   // which is exactly what a naive reset fails on.
   const site = await target.query("SELECT id FROM sites LIMIT 1");
@@ -73,6 +79,23 @@ before(async () => {
     [site.rows[0].id],
   );
   const ceoId = ceo.rows[0].id;
+  originalCeoBefore = (
+    await target.query(
+      `SELECT id, email, password_hash, full_name, role_id, is_active, site_id,
+              session_version, must_change_password
+       FROM users WHERE id = $1`,
+      [ceoId],
+    )
+  ).rows[0];
+
+  // This second CEO is deliberately older. A timestamp heuristic would keep
+  // the wrong identity; the reset must preserve the configured original CEO.
+  await target.query(
+    `INSERT INTO users (email, password_hash, full_name, role_id, site_id, created_at)
+     SELECT 'older-other-ceo@test.eset.local', 'x', 'Older Other CEO', r.id, $1, '2000-01-01T00:00:00Z'
+     FROM roles r WHERE r.name = 'CEO'`,
+    [site.rows[0].id],
+  );
 
   await target.query(
     `INSERT INTO users (email, password_hash, full_name, role_id, site_id, department_id)
@@ -125,12 +148,17 @@ test("the reset refuses production, an unconfirmed target, and a production-look
     }).stderr,
     /looks like a production target/,
   );
+  assert.match(runReset({ ESDMS_ORIGINAL_CEO_EMAIL: "" }).stderr, /ESDMS_ORIGINAL_CEO_EMAIL is required/);
+  assert.match(
+    runReset({ ESDMS_ORIGINAL_CEO_EMAIL: "not-the-original@test.eset.local" }).stderr,
+    /configured permanent original CEO is missing/,
+  );
 
   // A refused run must not have touched anything.
   assert.ok(count("gate_passes"), "refusals leave the data alone");
 });
 
-test("the reset clears operational data, preserves the security model, and keeps one bootstrap login", async () => {
+test("the reset clears operational data, preserves the security model, and keeps the permanent original CEO", async () => {
   assert.ok((await count("gate_passes")) > 0, "there is real data to clear");
 
   const result = runReset();
@@ -159,11 +187,15 @@ test("the reset clears operational data, preserves the security model, and keeps
   }
 
   const remainingUsers = await target.query(
-    "SELECT u.email, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id",
+    `SELECT u.id, u.email, u.password_hash, u.full_name, u.role_id, u.is_active,
+            u.site_id, u.session_version, u.must_change_password, r.name AS role
+     FROM users u JOIN roles r ON r.id = u.role_id`,
   );
-  assert.equal(remainingUsers.rowCount, 1, "exactly one bootstrap login remains");
+  assert.equal(remainingUsers.rowCount, 1, "exactly one permanent original CEO remains");
   assert.equal(remainingUsers.rows[0].role, "CEO");
   assert.equal(remainingUsers.rows[0].email, "bootstrap-ceo@test.eset.local");
+  const { role: _role, ...preservedCeo } = remainingUsers.rows[0];
+  assert.deepEqual(preservedCeo, originalCeoBefore, "identity, credentials, status, and authority must be unchanged");
   assert.equal(await count("sites"), 1, "exactly one Site remains");
 
   // The protective triggers are restored, not left disabled — the whole point
@@ -214,5 +246,5 @@ test("the reset is repeatable", async () => {
   const third = runReset();
   assert.equal(third.status, 0, third.stderr);
   assert.match(third.stdout, /Removed: nothing \(already reset\)\./);
-  assert.match(third.stdout, /bootstrap login/);
+  assert.match(third.stdout, /permanent original CEO login/);
 });

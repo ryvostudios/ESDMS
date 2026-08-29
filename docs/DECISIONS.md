@@ -2680,8 +2680,8 @@ Pass API. Both properties are asserted by test.
 
 Six migrations (`1787417000000`-`1787422000000`) add eleven application
 tables. All have RLS enabled, explicit runtime grants and a single runtime
-policy; the provisioning script's allowlist and its 57-table/58-RLS counts,
-and `test/db-privilege-boundary.test.js`, were updated together. Every
+policy; the provisioning script's explicit grant allowlist, dynamic RLS/policy
+verification, and `test/db-privilege-boundary.test.js` were updated together. Every
 foreign key has an indexed leading column, no money or quantity column uses
 a floating-point type, and every nullable column is a genuinely optional
 lifecycle field bound by a CHECK constraint. Each down migration refuses to
@@ -2857,3 +2857,26 @@ permission precedence is role + explicit GRANT + active bundle, then explicit
 DENY; removing a bundle deletes only its assignment and therefore preserves
 unrelated grants and role permissions. Every assignment/removal is confirmed,
 transactional, and append-only-audited.
+
+## 2026-08-30 — Runtime Provisioning Is Part of Database Release and Readiness
+
+**Decision:** A managed database release is one fail-closed operation:
+migrations, runtime role/RLS convergence, and an actual runtime-connection
+verification. `npm run db:release` is the authoritative entry point. The API
+does not run migrations at process startup and never receives the migration
+credential.
+
+**Reason:** A deployment reached all 38 migration ledger entries while the
+post-migration provisioning step had not been rerun for the capability-bundle
+and fleet tables. The schema check correctly described the schema but could not
+describe whether `esdms_runtime` could serve it; login and `/me` therefore
+failed with PostgreSQL `42501` despite `schemaCompatible=true`.
+
+**Consequences:** Provisioning now writes a narrow reviewed-version marker and
+verifies every runtime-accessible table's RLS policy dynamically. Readiness
+requires that marker and the negative privilege boundary as well as schema
+compatibility, and production additionally proves the active connection is
+`esdms_runtime`. The runtime verifier executes the exact shared profile query,
+so a missing grant on any login/profile dependency fails before cutover. A new
+migration that adds an application table must update the explicit grants; it
+cannot become ready merely by advancing `pgmigrations`.

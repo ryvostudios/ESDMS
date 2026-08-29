@@ -2,6 +2,10 @@ import { Router } from "express";
 import pool from "../config/database.js";
 import config from "../config/env.js";
 import { EXPECTED_MIGRATION, inspectSchemaCompatibility } from "../shared/db/schema-compatibility.js";
+import {
+  EXPECTED_RUNTIME_PROVISIONING,
+  inspectRuntimeCompatibility,
+} from "../shared/db/runtime-compatibility.js";
 
 const router = Router();
 
@@ -21,14 +25,20 @@ router.get("/", (req, res) => {
 // exposes the underlying DB error to the caller — only whether it's ready.
 router.get("/ready", async (req, res) => {
   try {
-    const compatibility = await inspectSchemaCompatibility(pool);
-    const ready = compatibility.schemaCompatible;
+    const [compatibility, runtimeCompatibility] = await Promise.all([
+      inspectSchemaCompatibility(pool),
+      inspectRuntimeCompatibility(pool, { requireRuntimeRole: config.isProduction }),
+    ]);
+    const ready = compatibility.schemaCompatible && runtimeCompatibility.runtimeProvisioningCompatible;
     res.status(ready ? 200 : 503).json({
       success: ready,
       data: {
         status: ready ? "ready" : "not_ready",
         backendRevision: config.buildRevision,
         ...compatibility,
+        expectedRuntimeProvisioning: runtimeCompatibility.expectedRuntimeProvisioning,
+        actualRuntimeProvisioning: runtimeCompatibility.actualRuntimeProvisioning,
+        runtimeProvisioningCompatible: runtimeCompatibility.runtimeProvisioningCompatible,
       },
     });
   } catch {
@@ -39,6 +49,9 @@ router.get("/ready", async (req, res) => {
         backendRevision: config.buildRevision,
         expectedMigration: EXPECTED_MIGRATION,
         schemaCompatible: false,
+        expectedRuntimeProvisioning: EXPECTED_RUNTIME_PROVISIONING,
+        actualRuntimeProvisioning: null,
+        runtimeProvisioningCompatible: false,
       },
     });
   }
