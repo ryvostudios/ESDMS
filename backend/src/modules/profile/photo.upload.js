@@ -1,5 +1,6 @@
 import multer from "multer";
 import { ValidationError } from "../../shared/errors/app-error.js";
+import { guardParsedBody } from "../../shared/http/text-safety.js";
 
 // Deliberately parallel to gate-pass.upload.js rather than a shared import
 // — see docs/DECISIONS.md on why Gate Pass code is not touched to enable
@@ -34,7 +35,7 @@ const upload = multer({
   },
 });
 
-export const profilePhotoUpload = upload.single("photo");
+export const profilePhotoUpload = guardParsedBody(upload.single("photo"));
 
 export function extractPhoto(req) {
   if (!req.file) throw new ValidationError("No photo file was provided.");

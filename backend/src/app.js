@@ -32,6 +32,7 @@ import procurementReportRoutes from "./modules/reports/procurement-reports.route
 import notificationRoutes from "./shared/notifications/notifications.routes.js";
 import { apiUnauthenticatedIpRateLimiter, apiAuthenticatedIpRateLimiter } from "./middleware/rate-limit.js";
 import { notFoundHandler, errorHandler } from "./middleware/error-handler.js";
+import { rejectUnsupportedText } from "./shared/http/text-safety.js";
 import { ForbiddenError } from "./shared/errors/app-error.js";
 
 const app = express();
@@ -64,6 +65,13 @@ app.disable("x-powered-by");
 // Parse all valid JSON values so endpoint validation, not the transport
 // parser, decides whether `null`/arrays/primitives are valid request bodies.
 app.use(express.json({ limit: "1mb", strict: false }));
+// Immediately after parsing, before any route: a NUL byte in any query value
+// or JSON string cannot be stored by PostgreSQL and used to surface as an
+// unclassifiable 500 on every list, search and create endpoint. Rejecting it
+// once here covers every current and future text field, rather than relying
+// on ~26 validation modules each remembering to. Multipart text fields are
+// covered where their upload middleware is defined (see text-safety.js).
+app.use(rejectUnsupportedText);
 // Coarse ceiling FIRST, unconditionally, for every request — no `skip`,
 // no dependency on token validity. Closes a bypass: a token with a valid
 // signature/expiry/issuer/audience but a revoked session_version or a

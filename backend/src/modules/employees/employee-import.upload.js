@@ -1,5 +1,6 @@
 import multer from "multer";
 import { ValidationError } from "../../shared/errors/app-error.js";
+import { guardParsedBody } from "../../shared/http/text-safety.js";
 
 export const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
@@ -14,7 +15,7 @@ const upload = multer({
   },
 });
 
-export const employeeImportUpload = upload.single("file");
+export const employeeImportUpload = guardParsedBody(upload.single("file"));
 
 export function extractEmployeeImport(req) {
   if (!req.file) throw new ValidationError("No import workbook was provided.");

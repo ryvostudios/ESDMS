@@ -1,5 +1,6 @@
 import multer from "multer";
 import { ValidationError } from "../../shared/errors/app-error.js";
+import { guardParsedBody } from "../../shared/http/text-safety.js";
 
 // Signature-based validation, same approach as gate-pass.upload.js and
 // profile/photo.upload.js — a client-supplied Content-Type is only ever a
@@ -42,7 +43,7 @@ const upload = multer({
   },
 });
 
-export const documentUpload = upload.single("file");
+export const documentUpload = guardParsedBody(upload.single("file"));
 
 // `allowedMimeTypes` is the specific document type's own configured
 // allowlist (workforce-config) — narrower than "every type this endpoint

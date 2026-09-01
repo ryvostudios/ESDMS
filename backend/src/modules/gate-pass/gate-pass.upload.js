@@ -5,6 +5,7 @@ import {
   MAX_EVIDENCE_PHOTOS_PER_REQUEST,
 } from "./gate-pass.constants.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
+import { guardParsedBody } from "../../shared/http/text-safety.js";
 
 const EXTENSION_BY_MIME = {
   "image/jpeg": "jpg",
@@ -53,10 +54,16 @@ const upload = multer({
 // (still used by the existing Guard exit/return form), "photos" carries the
 // multi-capture case. Accepting both means adding multi-photo support never
 // breaks a client that already works.
-export const evidencePhotoUpload = upload.fields([
-  { name: "photo", maxCount: 1 },
-  { name: "photos", maxCount: MAX_EVIDENCE_PHOTOS_PER_REQUEST },
-]);
+// guardParsedBody: multer parses the multipart text fields (kind, note,
+// odometer, remarks) long after the global text guard in app.js has run, so
+// the same single definition is re-applied to them here — automatically for
+// every route that uses this middleware.
+export const evidencePhotoUpload = guardParsedBody(
+  upload.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "photos", maxCount: MAX_EVIDENCE_PHOTOS_PER_REQUEST },
+  ]),
+);
 
 // Normalizes the multer file into the shape gate-pass.service expects,
 // deriving the extension from the verified MIME type — never from the

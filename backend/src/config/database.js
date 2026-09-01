@@ -1,4 +1,8 @@
 import pg from "pg";
+// Imported for its side effect, and before the Pool below, so a PostgreSQL
+// `date` is never converted through the host process timezone. See the module
+// for why that mattered.
+import "./date-types.js";
 import config from "./env.js";
 
 const { Pool } = pg;
