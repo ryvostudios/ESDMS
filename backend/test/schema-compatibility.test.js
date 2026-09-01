@@ -10,8 +10,8 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 39,
-  latest_applied: "1787428000000_gate-pass-lifecycle-integrity",
+  applied_count: 40,
+  latest_applied: "1787429000000_company-item-identity",
   expected_applied: true,
   required_column_present: true,
   rollback_trigger_present: true,
@@ -28,6 +28,7 @@ const HEALTHY_SCHEMA = {
   evidence_note_present: true,
   evidence_file_types_present: true,
   gate_pass_lifecycle_trigger_present: true,
+  company_item_identity_index_present: true,
 };
 
 const HEALTHY_ACCESS = {
@@ -93,6 +94,7 @@ test("schema compatibility requires migration ledger and physical load-bearing o
     "evidence_note_present",
     "evidence_file_types_present",
     "gate_pass_lifecycle_trigger_present",
+    "company_item_identity_index_present",
   ]) {
     const result = await inspectSchemaCompatibility(executorWith({ schema: { [missing]: false } }));
     assert.equal(result.schemaCompatible, false, `${missing} must be required`);
@@ -100,9 +102,9 @@ test("schema compatibility requires migration ledger and physical load-bearing o
     assert.ok(result.problems.length > 0, `${missing} must be reported`);
   }
 
-  const behind = await inspectSchemaCompatibility(executorWith({ schema: { applied_count: 38 } }));
+  const behind = await inspectSchemaCompatibility(executorWith({ schema: { applied_count: 39 } }));
   assert.equal(behind.schemaCompatible, false, "the complete expected migration level must be present");
-  assert.ok(behind.problems.some((problem) => problem.includes("migration level 38")));
+  assert.ok(behind.problems.some((problem) => problem.includes("migration level 39")));
 });
 
 test("a correct schema is NOT ready when the runtime role cannot use it", async () => {

@@ -9,6 +9,7 @@ import {
 import {
   listActiveUnitsOfMeasure,
   findCompanyItemById,
+  findCompanyItemByNormalizedName,
   searchCompanyItems,
   findSimilarCompanyItems,
   insertCompanyItem,
@@ -71,12 +72,31 @@ export async function createCatalogEntry(actor, input) {
         throw new ValidationError("Invalid company item.");
       }
     } else {
-      // Search-then-warn, not a hard block — matches the existing Employee
-      // duplicate-detection convention. The item is still created even if
-      // close matches exist; the caller decides.
-      possibleDuplicates = (await findSimilarCompanyItems(input.newItem.name, departmentId)).filter(
-        (row) => row.name.toLowerCase() !== input.newItem.name.trim().toLowerCase(),
-      );
+      // A Company Item is the GLOBAL physical identity, and previous-purchase
+      // price comparison keys on its exact id. An exact normalized match is
+      // therefore not a "possible duplicate" to warn about — it IS the same
+      // item, and creating a second identity for it permanently fragments
+      // that item's purchase history.
+      //
+      // This check previously existed inverted: the warning list explicitly
+      // FILTERED OUT exact-name matches, so the one case that had to be
+      // caught was the only one silently allowed.
+      const existing = await findCompanyItemByNormalizedName(input.newItem.name, client);
+      if (existing) {
+        throw new ConflictError(
+          existing.is_active
+            ? `"${existing.name}" already exists as a company item. Add that item to this department's catalog instead of creating a second one.`
+            : `"${existing.name}" already exists as an archived company item. Restore it instead of creating a second one, so its purchase history stays intact.`,
+        );
+      }
+
+      // Similar-but-different names stay a warning, never a block: two
+      // genuinely distinct materials may legitimately have similar names, and
+      // deciding they are the same physical thing is a business judgement
+      // (docs/INVERSE_ACTION_AUDIT.md). Only the exact normalized identity
+      // above is enforced.
+      possibleDuplicates = await findSimilarCompanyItems(input.newItem.name, departmentId);
+
       companyItem = await insertCompanyItem(client, {
         name: input.newItem.name,
         description: input.newItem.description,
@@ -123,6 +143,17 @@ export async function updateCompanyItem(actor, id, input) {
   return withTransaction(async (client) => {
     const item = await findCompanyItemById(id, client);
     if (!item) throw new NotFoundError("Company item not found.");
+
+    // A rename must not be able to collide two identities together. The
+    // database index is the authority either way; checking here turns what
+    // would be a unique-violation 500 into the same actionable conflict the
+    // create path gives.
+    if (input.name !== undefined) {
+      const existing = await findCompanyItemByNormalizedName(input.name, client);
+      if (existing && existing.id !== id) {
+        throw new ConflictError(`"${existing.name}" already exists as a company item.`);
+      }
+    }
 
     if (input.isActive === false && item.is_active && await hasActiveCatalogEntries(id, client)) {
       throw new ConflictError("Remove this material from every active department catalog before archiving the Company Item.");

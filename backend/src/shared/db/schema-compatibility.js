@@ -6,8 +6,8 @@ import {
 } from "./runtime-access-contract.js";
 import { probeUserProfileServing } from "../users/user-profile.repository.js";
 
-export const EXPECTED_MIGRATION = "1787428000000_gate-pass-lifecycle-integrity";
-export const EXPECTED_MIGRATION_COUNT = 39;
+export const EXPECTED_MIGRATION = "1787429000000_company-item-identity";
+export const EXPECTED_MIGRATION_COUNT = 40;
 
 // Readiness answers ONE question: can this instance actually serve traffic
 // right now, as the role it is actually connected as.
@@ -188,7 +188,11 @@ const SCHEMA_STATE_SQL = `
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relname = 'gate_passes'
         AND t.tgname = 'gate_passes_enforce_lifecycle' AND NOT t.tgisinternal
-    ) AS gate_pass_lifecycle_trigger_present
+    ) AS gate_pass_lifecycle_trigger_present,
+    EXISTS (
+      SELECT 1 FROM pg_indexes
+      WHERE schemaname = 'public' AND indexname = 'company_items_normalized_name_key'
+    ) AS company_item_identity_index_present
   FROM migration_state
 `;
 
@@ -215,6 +219,10 @@ const REQUIRED_SCHEMA_OBJECTS = [
   // this trigger the application still runs, but the guarantee that a
   // COMPLETED pass can never be rewound to DRAFT is silently gone.
   ["gate_pass_lifecycle_trigger_present", "trigger gate_passes_enforce_lifecycle"],
+  // Company Item global identity, which previous-purchase price comparison
+  // depends on. Without the index a second identity for the same physical
+  // item can be created again and silently fragment its purchase history.
+  ["company_item_identity_index_present", "index company_items_normalized_name_key"],
 ];
 
 function summarize(label, names, limit = 8) {

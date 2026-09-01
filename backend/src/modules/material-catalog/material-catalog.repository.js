@@ -79,6 +79,50 @@ export async function findSimilarCompanyItems(name, departmentId) {
   return result.rows;
 }
 
+// The one definition of Company Item identity, matching
+// company_items_normalized_name_key exactly (see
+// 1787429000000_company-item-identity.js). Trim, collapse internal
+// whitespace, lowercase — nothing broader: two genuinely different materials
+// may legitimately have similar names, and that case stays a warning.
+//
+// Written as SQL rather than normalized in JavaScript on purpose: the
+// database index is the authority, and a second implementation in another
+// language is exactly how the two drift apart.
+const NORMALIZED_NAME = "lower(regexp_replace(btrim($1), '\\s+', ' ', 'g'))";
+const NORMALIZED_COLUMN = "lower(regexp_replace(btrim(ci.name), '\\s+', ' ', 'g'))";
+
+// Returns the Company Item that already holds this exact normalized identity,
+// active or archived. Archived matters: the correct response to "this item
+// exists but is archived" is to restore it, never to create a second identity
+// for the same physical thing.
+export async function findCompanyItemByNormalizedName(name, executor = pool) {
+  const result = await executor.query(
+    `SELECT ci.id, ci.name, ci.description, ci.is_active
+     FROM company_items ci
+     WHERE ${NORMALIZED_COLUMN} = ${NORMALIZED_NAME}
+     LIMIT 1`,
+    [name],
+  );
+  return result.rows[0] || null;
+}
+
+// Read-only duplicate report. Exact normalized collisions only — the set the
+// identity index forbids going forward, which a release check can inspect
+// before enforcing it. Deliberately never merges anything.
+export async function listDuplicateCompanyItemIdentities(executor = pool) {
+  const result = await executor.query(
+    `SELECT ${NORMALIZED_COLUMN} AS normalized_name,
+            count(*)::int AS occurrences,
+            array_agg(ci.id ORDER BY ci.created_at) AS company_item_ids,
+            array_agg(ci.name ORDER BY ci.created_at) AS names
+     FROM company_items ci
+     GROUP BY 1
+     HAVING count(*) > 1
+     ORDER BY 1`,
+  );
+  return result.rows;
+}
+
 export async function insertCompanyItem(client, { name, description, createdByUserId }) {
   const result = await client.query(
     `INSERT INTO company_items (name, description, created_by_user_id)
