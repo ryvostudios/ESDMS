@@ -10,8 +10,8 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 40,
-  latest_applied: "1787429000000_company-item-identity",
+  applied_count: 41,
+  latest_applied: "1787430000000_formal-approver-price-visibility",
   expected_applied: true,
   required_column_present: true,
   rollback_trigger_present: true,
@@ -102,9 +102,9 @@ test("schema compatibility requires migration ledger and physical load-bearing o
     assert.ok(result.problems.length > 0, `${missing} must be reported`);
   }
 
-  const behind = await inspectSchemaCompatibility(executorWith({ schema: { applied_count: 39 } }));
+  const behind = await inspectSchemaCompatibility(executorWith({ schema: { applied_count: 40 } }));
   assert.equal(behind.schemaCompatible, false, "the complete expected migration level must be present");
-  assert.ok(behind.problems.some((problem) => problem.includes("migration level 39")));
+  assert.ok(behind.problems.some((problem) => problem.includes("migration level 40")));
 });
 
 test("a correct schema is NOT ready when the runtime role cannot use it", async () => {

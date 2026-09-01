@@ -8,7 +8,7 @@ import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { AuditTimeline } from "../components/AuditTimeline.jsx";
 import { ApprovalPanel } from "../components/ApprovalPanel.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
-import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState, EmptyState } from "../../../shared/components/StatePanel.jsx";
 import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
@@ -111,6 +111,12 @@ export function DemandDetailPage() {
       demand.status,
     ) &&
     hasPermission("procurement.view_prices", "procurement.pricing");
+
+  // Holds a final-gate decision permission, and the Demand is at that gate,
+  // but price visibility is missing — the combination that produced a silent
+  // dead end (see FinalApprovalPanel).
+  const awaitingFinalDecisionFromViewer =
+    demand.status === "PENDING_FINAL_APPROVAL" && hasPermission("demand.approve", "demand.review");
 
   const isPendingReview = demand.status === "PENDING_INITIAL_REVIEW";
   const initialApprovals = approvals.filter((approval) => (approval.approval_stage || "INITIAL") === "INITIAL");
@@ -277,6 +283,18 @@ export function DemandDetailPage() {
           {canViewSubmittedPrices && (
             <div className={styles.section}>
               <DemandPricingSection demandId={id} reloadDemand={reload} />
+            </div>
+          )}
+
+          {/* A final-decision holder without price visibility cannot open the
+              pricing section, so without this they saw a Demand waiting on
+              them and no indication of what was missing. */}
+          {!canViewSubmittedPrices && awaitingFinalDecisionFromViewer && (
+            <div className={styles.section}>
+              <EmptyState
+                title="Final approval is waiting on you"
+                message="This decision is about an amount, so it also needs price visibility. Ask Governance to grant procurement.view_prices, or assign the Formal / Financial Approver bundle."
+              />
             </div>
           )}
         </div>

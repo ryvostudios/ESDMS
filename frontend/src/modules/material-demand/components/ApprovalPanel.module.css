@@ -47,3 +47,10 @@
   display: flex;
   gap: var(--space-3);
 }
+
+.slotBlocked {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  max-width: 34ch;
+}

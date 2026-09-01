@@ -2849,7 +2849,15 @@ stores named bundle assignment provenance separately from individual
 permission overrides. `PROCUREMENT_STAFF` grants the minimum operational set
 (`demand.view`, `procurement.site_scope`, pricing, purchasing, IPO view, and
 Delivery Challan view/manage), excluding `demand.approve` and `ipo.cancel`.
-`FORMAL_APPROVER` grants only `demand.approve` and stays separate.
+`FORMAL_APPROVER` grants `demand.approve` plus `procurement.view_prices`, and
+stays separate from Procurement operations (no `procurement.pricing`, no
+`procurement.purchase`, no `ipo.cancel`, no `procurement.site_scope`). Price
+visibility is included because the final gate requires it — approving a priced
+Demand is a decision about an amount — and because a bundle whose holder
+cannot perform the action it is named for is a dead end, not a boundary. It
+remains field visibility only: `procurement.view_prices` is deliberately
+excluded from the site-wide scope sets, so the approver's record reach is
+unchanged and comes solely from `demand.approve`.
 
 `procurement.site_scope` is the explicit site-wide record scope. Price
 visibility remains field visibility only and never widens scope. Effective

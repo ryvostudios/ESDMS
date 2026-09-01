@@ -4,7 +4,7 @@ import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { APPROVAL_TYPE_LABEL } from "../constants.js";
 import styles from "./ApprovalPanel.module.css";
 
-function Slot({ type, approval, canAct, onApprove, onReject }) {
+function Slot({ type, approval, canAct, blockedReason, onApprove, onReject }) {
   return (
     <div className={styles.slot}>
       <span className={styles.slotLabel}>{APPROVAL_TYPE_LABEL[type]}</span>
@@ -31,6 +31,15 @@ function Slot({ type, approval, canAct, onApprove, onReject }) {
               </Button>
             </div>
           )}
+          {/* A holder of the decision permission who still cannot act must be
+              told why. Rendering nothing here is what turned a missing
+              capability into a silent dead end: the Demand sat waiting for a
+              decision the actor had no visible way to make. */}
+          {!canAct && blockedReason && (
+            <span className={styles.slotBlocked} role="note">
+              {blockedReason}
+            </span>
+          )}
         </>
       )}
     </div>
@@ -46,6 +55,8 @@ export function ApprovalPanel({
   title = "Initial Approval",
   canReview,
   canApprove,
+  reviewBlockedReason,
+  approvalBlockedReason,
   onReviewDecision,
   onApprovalDecision,
 }) {
@@ -60,6 +71,7 @@ export function ApprovalPanel({
         type="MANAGEMENT_REVIEW"
         approval={managementReview}
         canAct={canReview}
+        blockedReason={reviewBlockedReason}
         onApprove={() => onReviewDecision("APPROVED")}
         onReject={() => onReviewDecision("REJECTED")}
       />
@@ -67,6 +79,7 @@ export function ApprovalPanel({
         type="FORMAL_APPROVAL"
         approval={formalApproval}
         canAct={canApprove}
+        blockedReason={approvalBlockedReason}
         onApprove={() => onApprovalDecision("APPROVED")}
         onReject={() => onApprovalDecision("REJECTED")}
       />
