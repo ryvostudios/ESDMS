@@ -1,9 +1,8 @@
+#!/usr/bin/env node
 import "dotenv/config";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import pg from "pg";
-import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibility.js";
 
 // The database half of a release, as one idempotent command.
 //
@@ -24,15 +23,73 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 //   DATABASE_URL=...            # the restricted runtime login the API uses
 //   ESDMS_RUNTIME_PASSWORD=...  # set/rotated on esdms_runtime
 //   npm run db:release
+//
+// Every argument is validated BEFORE anything connects, and all subprocess
+// output is redacted, so a mistyped or conflated credential fails loudly
+// without ever reaching a database or a log.
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const provisioningScript = path.join(scriptDir, "provision-db-roles.sql");
+const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const provisioningScript = path.join(backendRoot, "scripts/provision-db-roles.sql");
 
-function run(command, args, { env, label }) {
+function required(name) {
+  const value = process.env[name];
+  if (!value?.trim()) throw new Error(`${name} is required.`);
+  return value;
+}
+
+function parseDatabaseUrl(name, raw) {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") throw new Error();
+    return parsed;
+  } catch {
+    throw new Error(`${name} must be a valid PostgreSQL URL.`);
+  }
+}
+
+// Managed providers hand out logins like "esdms_runtime.abcd1234"; the role
+// identity is the part before the first dot.
+function roleBaseName(username) {
+  return decodeURIComponent(username).split(".", 1)[0];
+}
+
+function sameDatabaseEndpoint(left, right) {
+  return left.hostname.toLowerCase() === right.hostname.toLowerCase()
+    && (left.port || "5432") === (right.port || "5432")
+    && decodeURIComponent(left.pathname) === decodeURIComponent(right.pathname);
+}
+
+function psqlEnvironment(adminUrl, runtimePassword) {
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(adminUrl.hostname);
+  return {
+    ...process.env,
+    PGHOST: adminUrl.hostname,
+    PGPORT: adminUrl.port || "5432",
+    PGDATABASE: decodeURIComponent(adminUrl.pathname.replace(/^\//, "")),
+    PGUSER: decodeURIComponent(adminUrl.username),
+    PGPASSWORD: decodeURIComponent(adminUrl.password),
+    PGSSLMODE: local ? "disable" : "verify-full",
+    ESDMS_RUNTIME_PASSWORD: runtimePassword,
+  };
+}
+
+function redact(text, secrets) {
+  return secrets.reduce((safe, secret) => (secret ? safe.split(secret).join("[redacted]") : safe), text);
+}
+
+function run(command, args, env, secrets, label) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: path.join(scriptDir, ".."), env, stdio: "inherit" });
+    const child = spawn(command, args, { cwd: backendRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", reject);
     child.on("exit", (code, signal) => {
+      const safeOut = redact(stdout, secrets);
+      const safeError = redact(stderr, secrets);
+      if (safeOut) process.stdout.write(safeOut);
+      if (safeError) process.stderr.write(safeError);
       if (code === 0) resolve();
       else reject(new Error(`${label} failed (${signal || `exit ${code}`}).`));
     });
@@ -44,56 +101,66 @@ function step(number, description) {
 }
 
 async function main() {
-  const migrationUrl = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
-  const runtimeUrl = process.env.DATABASE_URL;
+  const migrationDatabaseUrl = required("MIGRATION_DATABASE_URL");
+  const runtimeDatabaseUrl = required("DATABASE_URL");
+  const runtimePassword = required("ESDMS_RUNTIME_PASSWORD");
+  const migrationUrl = parseDatabaseUrl("MIGRATION_DATABASE_URL", migrationDatabaseUrl);
+  const runtimeUrl = parseDatabaseUrl("DATABASE_URL", runtimeDatabaseUrl);
 
-  if (!migrationUrl) {
-    throw new Error("MIGRATION_DATABASE_URL (or DATABASE_URL for local development) is required.");
+  // Separation of the two identities is the invariant this whole script
+  // exists to protect, so it is checked before anything connects.
+  if (roleBaseName(migrationUrl.username) === "esdms_runtime") {
+    throw new Error("MIGRATION_DATABASE_URL must not use esdms_runtime.");
   }
-  if (!runtimeUrl) {
-    throw new Error("DATABASE_URL is required — it is the runtime login this script verifies.");
+  if (roleBaseName(runtimeUrl.username) !== "esdms_runtime") {
+    throw new Error("DATABASE_URL must authenticate as esdms_runtime.");
   }
-  if (!process.env.ESDMS_RUNTIME_PASSWORD) {
-    throw new Error(
-      "ESDMS_RUNTIME_PASSWORD is required. Read it without echoing it into shell history:\n" +
-        "  read -rs ESDMS_RUNTIME_PASSWORD && export ESDMS_RUNTIME_PASSWORD",
-    );
+  if (!sameDatabaseEndpoint(migrationUrl, runtimeUrl)) {
+    throw new Error("MIGRATION_DATABASE_URL and DATABASE_URL must target the same database endpoint.");
   }
+  if (decodeURIComponent(runtimeUrl.password) !== runtimePassword) {
+    throw new Error("ESDMS_RUNTIME_PASSWORD must match the password in DATABASE_URL.");
+  }
+  if (runtimePassword.length < 16) {
+    throw new Error("ESDMS_RUNTIME_PASSWORD must be at least 16 characters.");
+  }
+
+  const secrets = [
+    migrationDatabaseUrl,
+    runtimeDatabaseUrl,
+    runtimePassword,
+    decodeURIComponent(migrationUrl.password),
+    decodeURIComponent(runtimeUrl.password),
+  ];
 
   step(1, "Applying schema migrations as the migration owner");
-  await run(process.execPath, ["node_modules/node-pg-migrate/bin/node-pg-migrate", "up"], {
-    env: { ...process.env, DATABASE_URL: migrationUrl },
-    label: "node-pg-migrate up",
-  });
+  await run(
+    process.execPath,
+    ["node_modules/node-pg-migrate/bin/node-pg-migrate", "up", "-d", "MIGRATION_DATABASE_URL"],
+    process.env,
+    secrets,
+    "node-pg-migrate up",
+  );
 
   step(2, "Provisioning runtime database privileges and row policies");
   // --no-psqlrc is part of the secret-handling boundary: a user's .psqlrc is
   // executed before the script and could otherwise inspect the environment.
-  await run("psql", ["--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--file", provisioningScript, migrationUrl], {
-    env: process.env,
-    label: "provision-db-roles.sql",
-  });
+  await run(
+    "psql",
+    ["--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--file", provisioningScript],
+    psqlEnvironment(migrationUrl, runtimePassword),
+    secrets,
+    "provision-db-roles.sql",
+  );
 
   step(3, "Verifying the runtime login can actually serve");
-  // Connects as the RUNTIME role, not the owner: verifying as the owner would
-  // pass regardless of whether step 2 did anything, which is the whole defect
-  // this step exists to catch.
-  const client = new pg.Client({ connectionString: runtimeUrl });
-  await client.connect();
-  try {
-    const result = await inspectSchemaCompatibility(client);
-    if (!result.ready) {
-      throw new Error(
-        `The runtime database role cannot serve after provisioning:\n  - ${result.problems.join("\n  - ")}`,
-      );
-    }
-    process.stdout.write(
-      `      migration level ${result.appliedMigrationCount} (${result.latestAppliedMigration})\n` +
-        "      runtime privileges, row policies and the authentication path all verified\n",
-    );
-  } finally {
-    await client.end();
-  }
+  await run(
+    process.execPath,
+    [path.join(backendRoot, "scripts/verify-runtime-db.js")],
+    { ...process.env, DATABASE_URL: runtimeDatabaseUrl },
+    secrets,
+    "verify-runtime-db.js",
+  );
 
   process.stdout.write(
     "\nDatabase release complete.\n" +

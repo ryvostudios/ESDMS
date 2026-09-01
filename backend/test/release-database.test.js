@@ -10,7 +10,7 @@ function runRelease({
   runtimeUrl = `postgresql://esdms_runtime:${runtimePassword}@127.0.0.1:9/esdms_test_release`,
   password = runtimePassword,
 } = {}) {
-  return spawnSync(process.execPath, ["scripts/release-db.js"], {
+  return spawnSync(process.execPath, ["scripts/release-database.js"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
