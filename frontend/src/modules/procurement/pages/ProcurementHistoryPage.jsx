@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiClient } from "../../../core/api/client.js";
+import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { buildQuery } from "../../../core/api/query.js";
 import { PageHeader } from "../../../shared/components/PageHeader.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
@@ -17,9 +18,11 @@ import styles from "./ProcurementHistoryPage.module.css";
 const PAGE_SIZE = 20;
 
 export function ProcurementHistoryPage() {
+  const { hasPermission } = useAuth();
   const [filters, setFilters] = useState({ status: "", from: "", to: "", reference: "" });
   const [page, setPage] = useState(1);
   const [catalog, setCatalog] = useState([]);
+  const [catalogError, setCatalogError] = useState(null);
   const [exportError, setExportError] = useState(null);
   const [exporting, setExporting] = useState(null);
 
@@ -30,20 +33,34 @@ export function ProcurementHistoryPage() {
     pageSize: PAGE_SIZE,
   });
 
+  // The history trace itself only needs IPO visibility, which is why this page
+  // is offered to Procurement Staff and department leads alike. The EXPORT
+  // catalog is separately gated on procurement.export, so asking for it
+  // without that capability produced a guaranteed 403 on every mount —
+  // swallowed silently, leaving the page quietly promising an export section
+  // it would never render. Ask only when the answer can be yes.
+  const canExport = hasPermission("procurement.export");
+
   const loadCatalog = useCallback(
     () =>
       apiClient
         .get("/reports/procurement/catalog")
-        .then((response) => setCatalog(response.data))
-        // A user without export authority simply has no export section; this
-        // is UX, and the endpoints refuse them independently.
-        .catch(() => setCatalog([])),
+        .then((response) => {
+          setCatalog(response.data);
+          setCatalogError(null);
+        })
+        // A genuine failure is now visible rather than indistinguishable from
+        // "you may not export".
+        .catch((error) => setCatalogError(error.message || "Unable to load the export catalog.")),
     [],
   );
 
   useEffect(() => {
+    // `catalog` already starts empty, so an unauthorized user needs no state
+    // change at all — just no request.
+    if (!canExport) return;
     loadCatalog();
-  }, [loadCatalog]);
+  }, [canExport, loadCatalog]);
 
   function update(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
@@ -99,11 +116,17 @@ export function ProcurementHistoryPage() {
         </FormField>
       </section>
 
-      {catalog.length > 0 && (
-        <section className={styles.exports} aria-labelledby="exports-title">
-          <h2 id="exports-title" className={styles.sectionTitle}>
-            Excel exports
-          </h2>
+      <section className={styles.exports} aria-labelledby="exports-title">
+        <h2 id="exports-title" className={styles.sectionTitle}>
+          Excel exports
+        </h2>
+        {!canExport ? (
+          <p className={styles.hint}>
+            Exporting this history needs the procurement.export capability, which your role does not currently
+            include. The history above is unaffected.
+          </p>
+        ) : (
+          <>
           <p className={styles.hint}>
             Exports apply the filters above and contain only the data you are authorized to see — a user without
             price permission never receives pricing columns.
@@ -125,8 +148,14 @@ export function ProcurementHistoryPage() {
               {exportError}
             </p>
           )}
-        </section>
-      )}
+          </>
+        )}
+        {catalogError && (
+          <p className={styles.error} role="alert">
+            {catalogError}
+          </p>
+        )}
+      </section>
 
       {status === "loading" && <LoadingState message="Loading history…" />}
       {status === "error" && <ErrorState message={error} onRetry={reload} />}

@@ -13,12 +13,24 @@ vi.mock("../../../core/api/client.js", () => ({
 }));
 vi.mock("../../../shared/utilities/download.js", () => ({ downloadBlob: vi.fn() }));
 
+const mockHasPermission = vi.hoisted(() => vi.fn());
+vi.mock("../../../core/auth/AuthContext.jsx", () => ({
+  useAuth: () => ({ hasPermission: (...args) => mockHasPermission(...args) }),
+}));
+
 afterEach(() => {
   cleanup();
   mockUseIpoList.mockReset();
   mockGet.mockReset();
   mockGetBlob.mockReset();
+  mockHasPermission.mockReset();
 });
+
+// The page is offered to anyone who can see IPO history; only the EXPORT
+// section needs procurement.export.
+function withExportAuthority(allowed = true) {
+  mockHasPermission.mockImplementation((code) => code !== "procurement.export" || allowed);
+}
 
 const ROWS = [
   {
@@ -49,6 +61,7 @@ async function renderPage() {
 describe("ProcurementHistoryPage", () => {
   test("offers only the export datasets the server says the user may take", async () => {
     readyList();
+    withExportAuthority(true);
     mockGet.mockResolvedValue({
       data: [
         { key: "demand-history", name: "Demand History", includesPricing: false },
@@ -63,17 +76,36 @@ describe("ProcurementHistoryPage", () => {
     expect(screen.queryByRole("button", { name: "Purchasing History" })).toBeNull();
   });
 
-  test("a user with no export authority sees no export section at all", async () => {
+  test("a user without export authority is told why, and no request is made for it", async () => {
+    // This page used to fetch the export catalog unconditionally, so a
+    // Procurement Staff user (who holds ipo.view but not procurement.export)
+    // triggered a guaranteed 403 on every mount, swallowed silently, leaving
+    // the page promising an export section it would never render.
     readyList();
-    mockGet.mockRejectedValue(new Error("Forbidden"));
+    withExportAuthority(false);
     await renderPage();
-    expect(screen.queryByRole("heading", { name: /excel exports/i })).toBeNull();
-    // History browsing itself still works.
+
+    expect(mockGet).not.toHaveBeenCalledWith("/reports/procurement/catalog");
+    expect(screen.getByRole("heading", { name: /excel exports/i })).toBeTruthy();
+    expect(screen.getByText(/procurement\.export capability/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Demand History" })).toBeNull();
+
+    // The history itself is unaffected, which is why the page stays offered.
     expect(screen.getByText("ESET/2026/32")).toBeTruthy();
+  });
+
+  test("a genuine catalog failure is surfaced, not mistaken for missing authority", async () => {
+    readyList();
+    withExportAuthority(true);
+    mockGet.mockRejectedValue(new Error("Export catalog unavailable"));
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/catalog unavailable/i));
   });
 
   test("filters are sent to the server as query parameters, not applied in the browser", async () => {
     readyList();
+    withExportAuthority(true);
     mockGet.mockResolvedValue({ data: [{ key: "ipo-history", name: "IPO History", includesPricing: true }] });
     mockGetBlob.mockResolvedValue(new Blob(["x"]));
     await renderPage();
@@ -95,6 +127,7 @@ describe("ProcurementHistoryPage", () => {
 
   test("surfaces a refused export instead of failing silently", async () => {
     readyList();
+    withExportAuthority(true);
     mockGet.mockResolvedValue({ data: [{ key: "procurement-history", name: "Purchasing History" }] });
     mockGetBlob.mockRejectedValue(new Error("This export contains commercial information you are not authorized to view."));
     await renderPage();
@@ -106,6 +139,7 @@ describe("ProcurementHistoryPage", () => {
   });
 
   test("renders loading, empty and error states for the history list", async () => {
+    withExportAuthority(true);
     mockGet.mockResolvedValue({ data: [] });
     mockUseIpoList.mockReturnValue({ rows: [], total: 0, status: "loading", error: null, reload: vi.fn() });
     await renderPage();
