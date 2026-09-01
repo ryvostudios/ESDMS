@@ -1,0 +1,109 @@
+# Render Blueprint — ESDMS STAGING
+#
+# Creates the two services in the topology docs/SECURITY.md §5.2 requires.
+# Nothing here is production: promotion is a separate, explicit decision.
+#
+# BEFORE this blueprint can produce a working environment, both services must
+# answer on the SAME registrable domain. The backend refuses to start otherwise
+# (validateProductionConfig in backend/src/config/env.js), because the session
+# cookie is HttpOnly/SameSite=Lax and would never be sent between two separate
+# *.onrender.com hostnames — onrender.com is a public suffix, so those are
+# cross-site. Two default platform hostnames are NOT a supported topology and
+# the refusal is deliberate; do not work around it by relaxing the cookie.
+#
+#   app-staging.<company-domain>  ->  this static site
+#   api-staging.<company-domain>  ->  this web service
+#
+# Every secret below is `sync: false`: Render prompts for it once, stores it in
+# the service, and it never enters Git. The database is NOT declared here on
+# purpose — it is created separately so that the migration identity and the
+# esdms_runtime identity stay distinct, and so DATABASE_URL given to the API is
+# only ever the restricted runtime login.
+#
+# Release order is not expressible in a blueprint; it is mandatory and lives in
+# docs/DEPLOYMENT.md. `npm run db:release` must complete BEFORE the API serves
+# traffic, or readiness will (correctly) refuse.
+
+services:
+  - type: web
+    name: esdms-api-staging
+    runtime: node
+    plan: starter
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    # The real check. Liveness (/api/v1/health) only proves the process is up;
+    # readiness proves the schema level, the runtime privilege boundary, the
+    # RLS/policy contract, the provisioning marker and that the authentication
+    # query actually executes. Do not point this at liveness to make a deploy
+    # go green.
+    healthCheckPath: /api/v1/health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_TIMEZONE
+        value: Asia/Karachi
+      # Render terminates TLS at a single proxy hop in front of the container.
+      - key: TRUST_PROXY_HOPS
+        value: 1
+      - key: BUILD_REVISION
+        fromService:
+          type: web
+          name: esdms-api-staging
+          property: commit
+      # The RESTRICTED runtime login only — esdms_runtime.
+      # Never the migration owner, never the project/postgres superuser.
+      # MIGRATION_DATABASE_URL is deliberately absent: it belongs to the
+      # release operator, never to the running API.
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      # Bare https origins, no trailing path. Must share a registrable domain.
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: APP_PUBLIC_URL
+        sync: false
+      # Gate Pass evidence and PDFs must outlive a deploy, and Render's
+      # container filesystem does not. Set `supabase` (with the three SUPABASE_*
+      # values) or, only for a single instance with a persistent disk,
+      # `local-single-instance-accepted-risk`.
+      - key: STORAGE_PROVIDER
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        sync: false
+      # Left unset -> the outbox runs in its safe non-delivery mode. Staging is
+      # not blocked on live WhatsApp credentials.
+      - key: WHATSAPP_ENABLED
+        value: false
+
+  - type: web
+    name: esdms-app-staging
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # https://api-staging.<company-domain>/api/v1
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_APP_TIMEZONE
+        value: Asia/Karachi
+      - key: VITE_BUILD_REVISION
+        fromService:
+          type: web
+          name: esdms-app-staging
+          property: commit
+    routes:
+      # Client-side routing: every non-asset path must serve the SPA shell,
+      # otherwise a refresh on /workforce/employees or a scanned Gate Pass QR
+      # landing on /guard/verify returns 404 from the static host.
+      - type: rewrite
+        source: /*
+        destination: /index.html
