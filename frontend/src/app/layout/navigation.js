@@ -53,6 +53,15 @@ export const NAV_ITEMS = [
     permission: ["ipo.view", "procurement.purchase", "procurement.view_prices"],
   },
   {
+    // The delivery document itself. Deliberately separate from Gate Pass:
+    // one is the commercial record, the other is vehicle movement.
+    label: "Delivery Challans",
+    to: "/delivery-challans",
+    icon: ClipboardCheckIcon,
+    end: true,
+    permission: ["dc.view", "dc.manage"],
+  },
+  {
     label: "Receiving",
     to: "/receiving",
     icon: ClipboardCheckIcon,

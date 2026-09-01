@@ -6,7 +6,9 @@ import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { LoadingState } from "../../../shared/components/StatePanel.jsx";
 import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
-import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
+import { Dialog } from "../../../shared/components/Dialog.jsx";
+import { FormField, Select, Textarea } from "../../../shared/components/FormField.jsx";
+import dialogStyles from "../../../shared/components/Dialog.module.css";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { downloadBlob } from "../../../shared/utilities/download.js";
 import { formatPkr } from "../../procurement/utilities/money.js";
@@ -16,6 +18,7 @@ import { createDeliveryChallan } from "../../delivery-challan/api.js";
 import { PurchasePanel } from "../components/PurchasePanel.jsx";
 import { CreateChallanDialog } from "../components/CreateChallanDialog.jsx";
 import {
+  CANCELLATION_CATEGORIES,
   DC_STATUS_TONE,
   IPO_STATUS_TONE,
   PURCHASE_STATUS_LABEL,
@@ -321,17 +324,20 @@ export function IpoDetailPage() {
           await reload();
         }}
       />
-      <ReasonActionDialog
-        open={dialog === "cancel"}
-        onClose={() => setDialog(null)}
-        title="Cancel this IPO?"
-        message="The IPO and its number are preserved permanently. Provide the reason for cancellation."
-        confirmLabel="Cancel IPO"
-        onConfirm={async (reason) => {
-          await cancelIpo(id, { reason });
-          await reload();
-        }}
-      />
+      {/* The backend has always accepted a cancellation CATEGORY alongside the
+          free-text reason, but nothing ever sent one, so ipos.cancellation_category
+          was NULL on every cancelled IPO and the reporting column was
+          permanently empty. Mounted only while open so the selection resets
+          between cancellations. Who may cancel is unchanged — still ipo.cancel. */}
+      {dialog === "cancel" && (
+        <CancelIpoDialog
+          onClose={() => setDialog(null)}
+          onConfirm={async ({ category, reason }) => {
+            await cancelIpo(id, { category, reason });
+            await reload();
+          }}
+        />
+      )}
       <CreateChallanDialog
         open={dialog === "challan"}
         onClose={() => setDialog(null)}
@@ -342,5 +348,82 @@ export function IpoDetailPage() {
         }}
       />
     </div>
+  );
+}
+
+// Cancellation records BOTH a structured category (for reporting) and the
+// free-text reason (for the audit trail). The category is optional in the API
+// contract, so a deployment that never captured one stays valid.
+function CancelIpoDialog({ onClose, onConfirm }) {
+  const [category, setCategory] = useState(CANCELLATION_CATEGORIES[0][0]);
+  const [reason, setReason] = useState("");
+  const [fieldError, setFieldError] = useState(null);
+  const [submitError, setSubmitError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleConfirm() {
+    if (submitting) return;
+    if (!reason.trim()) {
+      setFieldError("A reason is required.");
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onConfirm({ category, reason: reason.trim() });
+      onClose();
+    } catch (error) {
+      setSubmitError(error.message || "Unable to cancel this IPO.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} title="Cancel this IPO?" labelledBy="ipo-cancel-title">
+      <p className={dialogStyles.message}>
+        The IPO and its number are preserved permanently. Record why it was cancelled.
+      </p>
+      <FormField label="Category" htmlFor="ipo-cancel-category">
+        <Select
+          id="ipo-cancel-category"
+          value={category}
+          onChange={(event) => setCategory(event.target.value)}
+          disabled={submitting}
+        >
+          {CANCELLATION_CATEGORIES.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </Select>
+      </FormField>
+      <FormField label="Reason" htmlFor="ipo-cancel-reason" required error={fieldError}>
+        <Textarea
+          id="ipo-cancel-reason"
+          value={reason}
+          onChange={(event) => {
+            setReason(event.target.value);
+            if (fieldError) setFieldError(null);
+          }}
+          disabled={submitting}
+          rows={3}
+        />
+      </FormField>
+      {submitError && (
+        <p className={dialogStyles.errorMessage} role="alert">
+          {submitError}
+        </p>
+      )}
+      <div className={dialogStyles.actions}>
+        <Button variant="secondary" onClick={onClose} disabled={submitting}>
+          Keep IPO
+        </Button>
+        <Button variant="danger" onClick={handleConfirm} loading={submitting}>
+          Cancel IPO
+        </Button>
+      </div>
+    </Dialog>
   );
 }

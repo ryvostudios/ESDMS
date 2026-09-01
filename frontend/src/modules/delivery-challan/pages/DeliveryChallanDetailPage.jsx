@@ -7,6 +7,9 @@ import { LoadingState } from "../../../shared/components/StatePanel.jsx";
 import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
+import { Dialog } from "../../../shared/components/Dialog.jsx";
+import { FormField, Textarea } from "../../../shared/components/FormField.jsx";
+import dialogStyles from "../../../shared/components/Dialog.module.css";
 import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { downloadBlob } from "../../../shared/utilities/download.js";
 import { DC_STATUS_TONE } from "../../ipo/constants.js";
@@ -15,6 +18,7 @@ import {
   finalizeDeliveryChallan,
   getDeliveryChallan,
   getDeliveryChallanPdf,
+  updateDeliveryChallan,
 } from "../api.js";
 import styles from "../../ipo/pages/IpoDetailPage.module.css";
 
@@ -51,6 +55,11 @@ export function DeliveryChallanDetailPage() {
   const canManage = hasPermission("dc.manage");
   const isDraft = challan.status === "DRAFT";
   const isCancellable = canManage && ["DRAFT", "FINALIZED"].includes(challan.status);
+  // A DRAFT challan's note is editable until it is finalized — the backend
+  // has always allowed it (PATCH /delivery-challans/:id); nothing offered it.
+  // Lines are deliberately not edited here: changing what a challan carries
+  // is a re-issue decision, not a note correction.
+  const canEditDraft = canManage && isDraft;
 
   async function handleDownload() {
     setActionError(null);
@@ -76,6 +85,11 @@ export function DeliveryChallanDetailPage() {
           <Button variant="secondary" onClick={handleDownload}>
             Download Challan PDF
           </Button>
+          {canEditDraft && (
+            <Button variant="secondary" onClick={() => setDialog("edit")}>
+              Edit note
+            </Button>
+          )}
           {canManage && isDraft && <Button onClick={() => setDialog("finalize")}>Finalize</Button>}
           {isCancellable && (
             <Button variant="danger" onClick={() => setDialog("cancel")}>
@@ -169,6 +183,20 @@ export function DeliveryChallanDetailPage() {
         </p>
       </section>
 
+      {/* Mounted only while open, so its state starts from the current note
+          every time and a cancelled edit cannot leak into the next one — no
+          effect needed to re-seed it. */}
+      {dialog === "edit" && (
+        <DraftNoteDialog
+          initialNote={challan.note || ""}
+          onClose={() => setDialog(null)}
+          onSave={async (note) => {
+            await updateDeliveryChallan(id, { note });
+            await load();
+          }}
+        />
+      )}
+
       <ConfirmActionDialog
         open={dialog === "finalize"}
         onClose={() => setDialog(null)}
@@ -192,5 +220,53 @@ export function DeliveryChallanDetailPage() {
         }}
       />
     </div>
+  );
+}
+
+// Deliberately local and small. ReasonActionDialog exists for a *required*
+// reason behind a destructive action; a draft note is optional and the action
+// is an ordinary save, so bending that component with initialValue/required/
+// label props for one caller would make it worse for its actual purpose.
+function DraftNoteDialog({ initialNote, onClose, onSave }) {
+  const [note, setNote] = useState(initialNote);
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(note.trim() ? note.trim() : null);
+      onClose();
+    } catch (saveError) {
+      setError(saveError.message || "Unable to save the note.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} title="Edit draft note" labelledBy="dc-note-title">
+      <p className={dialogStyles.message}>
+        The note is printed on the Challan. It can only be changed while the Challan is still a draft.
+      </p>
+      <FormField label="Note" htmlFor="dc-note">
+        <Textarea id="dc-note" value={note} onChange={(event) => setNote(event.target.value)} disabled={saving} rows={3} />
+      </FormField>
+      {error && (
+        <p className={dialogStyles.errorMessage} role="alert">
+          {error}
+        </p>
+      )}
+      <div className={dialogStyles.actions}>
+        <Button variant="secondary" onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+        <Button onClick={handleSave} loading={saving}>
+          Save note
+        </Button>
+      </div>
+    </Dialog>
   );
 }

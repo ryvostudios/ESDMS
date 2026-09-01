@@ -134,3 +134,27 @@ export const changeUserRole = (id, role) => apiClient.patch(`/users/${id}/role`,
 export const activateUser = (id) => apiClient.post(`/users/${id}/activate`, {});
 export const deactivateUser = (id) => apiClient.post(`/users/${id}/deactivate`, {});
 export const regenerateTempPassword = (id) => apiClient.post(`/users/${id}/regenerate-temp-password`, {});
+
+// Business history: an append-only record of what happened to an Employee.
+// Entries are never deleted — CEO-only removal marks them removed and keeps
+// the row (the database trigger rejects anything else), which is why the list
+// distinguishes removed entries rather than hiding them.
+export const getEmployeeBusinessHistory = (id) => apiClient.get(`/employees/${id}/history`);
+export const getMyBusinessHistory = () => apiClient.get("/me/history");
+export const removeBusinessHistoryEntry = (id, entryId, body) =>
+  apiClient.post(`/employees/${id}/history/${entryId}/remove`, body);
+
+// Linking an Employee to an account that already exists, instead of creating a
+// second login for the same person.
+export const linkExistingUserToEmployee = (id, body) => apiClient.post(`/employees/${id}/login/link-existing`, body);
+
+// Every version ever uploaded for one document type. Superseded versions are
+// retained, never overwritten, so this is the only way to see the history.
+export const getEmployeeDocumentVersions = (id, documentTypeId) =>
+  apiClient.get(`/employees/${id}/documents/versions/${documentTypeId}`);
+export const getMyDocumentVersions = (documentTypeId) => apiClient.get(`/me/documents/versions/${documentTypeId}`);
+
+// A CURRENT contract's supported lifecycle endings. A finalized contract is
+// never rewritten; this records what became of it.
+export const transitionContract = (id, contractId, body) =>
+  apiClient.post(`/employees/${id}/contracts/${contractId}/transition`, body);

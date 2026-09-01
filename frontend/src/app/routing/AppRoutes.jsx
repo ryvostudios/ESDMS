@@ -30,6 +30,7 @@ import { PricingPage } from "../../modules/procurement/pages/PricingPage.jsx";
 import { ProcurementHistoryPage } from "../../modules/procurement/pages/ProcurementHistoryPage.jsx";
 import { IpoListPage } from "../../modules/ipo/pages/IpoListPage.jsx";
 import { IpoDetailPage } from "../../modules/ipo/pages/IpoDetailPage.jsx";
+import { DeliveryChallanListPage } from "../../modules/delivery-challan/pages/DeliveryChallanListPage.jsx";
 import { DeliveryChallanDetailPage } from "../../modules/delivery-challan/pages/DeliveryChallanDetailPage.jsx";
 import { ReceivingQueuePage } from "../../modules/receiving/pages/ReceivingQueuePage.jsx";
 import { ReceiveDeliveryPage } from "../../modules/receiving/pages/ReceiveDeliveryPage.jsx";
@@ -176,6 +177,14 @@ export function AppRoutes() {
           element={
             <PermissionRoute permissions={["ipo.view", "procurement.purchase", "procurement.view_prices"]}>
               <IpoDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/delivery-challans"
+          element={
+            <PermissionRoute permissions={["dc.view", "dc.manage"]}>
+              <DeliveryChallanListPage />
             </PermissionRoute>
           }
         />

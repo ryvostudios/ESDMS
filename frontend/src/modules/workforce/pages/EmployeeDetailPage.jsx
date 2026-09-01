@@ -4,12 +4,13 @@ import { ApiError } from "../../../core/api/client.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
 import { Button } from "../../../shared/components/Button.jsx";
 import { FormField, Input, Select } from "../../../shared/components/FormField.jsx";
-import { LoadingState } from "../../../shared/components/StatePanel.jsx";
+import { LoadingState, EmptyState } from "../../../shared/components/StatePanel.jsx";
 import { RecordErrorState } from "../../../shared/components/RecordErrorState.jsx";
 import { ConfirmActionDialog } from "../../../shared/components/ConfirmActionDialog.jsx";
 import { ReasonActionDialog } from "../../../shared/components/ReasonActionDialog.jsx";
 import { StatusBadge } from "../../../shared/components/StatusBadge.jsx";
 import { formatEnumLabel } from "../../../shared/utilities/format.js";
+import { formatDateTime } from "../../../shared/utilities/datetime.js";
 import { EMPLOYEE_STATUS_TONE } from "../constants.js";
 import * as api from "../api.js";
 import { ProfilePhoto } from "../components/ProfilePhoto.jsx";
@@ -27,7 +28,15 @@ const STATUS_TRANSITIONS = {
 const REASON_REQUIRED_STATUSES = new Set(["RESIGNED", "TERMINATED"]);
 const DESTRUCTIVE_STATUSES = new Set(["RESIGNED", "TERMINATED"]);
 
-const TABS = ["Overview", "Profile", "Assignments", "Compensation", "Contracts", "Documents", "Rotation", "Leave"];
+const TABS = ["Overview", "Profile", "Assignments", "Compensation", "Contracts", "Documents", "Rotation", "Leave", "History"];
+
+// The endings a CURRENT contract supports. A finalized contract is never
+// rewritten — this records what happened to it.
+const CONTRACT_TRANSITIONS = [
+  ["SUPERSEDED", "Superseded"],
+  ["EXPIRED", "Expired"],
+  ["TERMINATED", "Terminated"],
+];
 
 export function EmployeeDetailPage() {
   const { id } = useParams();
@@ -103,6 +112,7 @@ export function EmployeeDetailPage() {
         {tab === "Documents" && <DocumentsTab employeeId={id} hasPermission={hasPermission} />}
         {tab === "Rotation" && <RotationTab employeeId={id} hasPermission={hasPermission} />}
         {tab === "Leave" && <EmployeeLeaveTab employeeId={id} hasPermission={hasPermission} />}
+        {tab === "History" && <BusinessHistoryTab employeeId={id} />}
       </div>
     </div>
   );
@@ -266,6 +276,41 @@ function AssignmentsTab({ employee, hasPermission, onChanged }) {
 function OverviewTab({ employee, onChanged, hasPermission }) {
   const [message, setMessage] = useState(null);
   const [email, setEmail] = useState("");
+  const [linkableUsers, setLinkableUsers] = useState(null);
+  const [linkUserId, setLinkUserId] = useState("");
+
+  // Linking an EXISTING account instead of minting a second one. Without this
+  // the only offered path was "create login", so a person who already had an
+  // account — a Gate Pass user being onboarded into Workforce, say — got a
+  // duplicate identity. The candidate list is loaded on demand: it needs
+  // users.view, which the account-linking actor may or may not also hold.
+  async function loadLinkableUsers() {
+    setMessage(null);
+    try {
+      const response = await api.listUsers();
+      const candidates = response.data.filter((user) => !user.employee_id);
+      setLinkableUsers(candidates);
+      if (candidates[0]) setLinkUserId(candidates[0].id);
+    } catch (err) {
+      setMessage(
+        err instanceof ApiError
+          ? `Unable to list existing accounts: ${err.message}`
+          : "Unable to list existing accounts.",
+      );
+    }
+  }
+
+  async function linkExistingUser(event) {
+    event.preventDefault();
+    try {
+      await api.linkExistingUserToEmployee(employee.id, { userId: linkUserId });
+      setMessage("Existing account linked to this employee.");
+      setLinkableUsers(null);
+      onChanged();
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : "Unable to link the existing account.");
+    }
+  }
 
   async function createLogin(event) {
     event.preventDefault();
@@ -344,9 +389,44 @@ function OverviewTab({ employee, onChanged, hasPermission }) {
             </Button>
           )}
 
-          {employee.hasLogin === false && !hasPermission("employees.account.create") && !hasPermission("employees.account.reset") && (
-            <p className={styles.detailValue}>No login account.</p>
+          {!employee.hasLogin && hasPermission("employees.account.link_existing") && (
+            linkableUsers === null ? (
+              <Button variant="secondary" onClick={loadLinkableUsers}>
+                Link an existing account
+              </Button>
+            ) : (
+              <form onSubmit={linkExistingUser} className={styles.inlineForm}>
+                <FormField label="Existing account" htmlFor="linkExistingUser" required>
+                  <Select
+                    id="linkExistingUser"
+                    value={linkUserId}
+                    onChange={(event) => setLinkUserId(event.target.value)}
+                    required
+                  >
+                    {linkableUsers.length === 0 && <option value="">No unlinked accounts</option>}
+                    {linkableUsers.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.full_name} · {user.email}
+                      </option>
+                    ))}
+                  </Select>
+                </FormField>
+                <Button type="submit" disabled={linkableUsers.length === 0}>
+                  Link account
+                </Button>
+                <Button variant="secondary" onClick={() => setLinkableUsers(null)}>
+                  Cancel
+                </Button>
+              </form>
+            )
           )}
+
+          {employee.hasLogin === false &&
+            !hasPermission("employees.account.create") &&
+            !hasPermission("employees.account.reset") &&
+            !hasPermission("employees.account.link_existing") && (
+              <p className={styles.detailValue}>No login account.</p>
+            )}
         </div>
       </div>
 
@@ -527,6 +607,17 @@ function ContractsTab({ employeeId, hasPermission }) {
     }
   }
 
+  async function transition(contractId, status, label) {
+    setMessage(null);
+    try {
+      await api.transitionContract(employeeId, contractId, { status });
+      setMessage(`Contract marked ${label.toLowerCase()}.`);
+      load();
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : "Unable to record the contract transition.");
+    }
+  }
+
   async function download(contract) { const blob = await api.getContractBlob(employeeId, contract.id); const url = URL.createObjectURL(blob); const link = window.document.createElement("a"); link.href = url; link.download = `${contract.contract_number}.pdf`; link.click(); URL.revokeObjectURL(url); }
 
   return (
@@ -549,6 +640,20 @@ function ContractsTab({ employeeId, hasPermission }) {
           )}
           {c.status !== "DRAFT" && hasPermission("contract.download") && <Button variant="secondary" onClick={() => download(c)}>Download</Button>}
           {c.status !== "DRAFT" && hasPermission("contract.amend") && <Button variant="secondary" onClick={async () => { await api.createContractDraft(employeeId, { kind: "AMENDMENT", amendsContractId: c.id }); load(); }}>Create amendment</Button>}
+          {/* A finalized contract is never rewritten or deleted; recording
+              what became of it is the only supported ending. The backend has
+              always accepted this (POST .../transition) — nothing offered it,
+              so a CURRENT contract could never be marked terminated or
+              expired through the product. Only CURRENT transitions. */}
+          {c.status === "CURRENT" && (hasPermission("contract.edit_draft") || hasPermission("contract.finalize")) && (
+            <div className={styles.contractTransitions}>
+              {CONTRACT_TRANSITIONS.map(([status, label]) => (
+                <Button key={status} variant="secondary" onClick={() => transition(c.id, status, label)}>
+                  {label}
+                </Button>
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -598,6 +703,22 @@ function DocumentsTab({ employeeId, hasPermission }) {
   const [types, setTypes] = useState([]);
   const [documentTypeId, setDocumentTypeId] = useState("");
   const [file, setFile] = useState(null);
+  const [openVersionsFor, setOpenVersionsFor] = useState(null);
+  const [versions, setVersions] = useState([]);
+
+  // Loaded on demand rather than with the list: most viewers only ever need
+  // the current version, and a request per document type on every open would
+  // be paid whether or not anyone looks.
+  async function toggleVersions(typeId) {
+    if (openVersionsFor === typeId) {
+      setOpenVersionsFor(null);
+      setVersions([]);
+      return;
+    }
+    const response = await api.getEmployeeDocumentVersions(employeeId, typeId);
+    setVersions(response.data);
+    setOpenVersionsFor(typeId);
+  }
 
   const load = useCallback(async () => {
     const response = await api.listEmployeeDocuments(employeeId);
@@ -627,6 +748,12 @@ function DocumentsTab({ employeeId, hasPermission }) {
         <p key={d.id}>
           {d.document_type_name} — v{d.version} — {d.verification_status}
           {hasPermission("employee_documents.download") && <Button variant="secondary" onClick={() => download(d)}>Download</Button>}
+          {/* Superseded versions are retained, never overwritten, so the
+              history is the only way to reach an earlier one. The endpoint
+              has always existed; nothing called it. */}
+          <Button variant="secondary" onClick={() => toggleVersions(d.document_type_id)}>
+            {openVersionsFor === d.document_type_id ? "Hide versions" : "Version history"}
+          </Button>
           {hasPermission("employee_documents.manage") && <Button variant="secondary" onClick={async () => { await api.requestDocument(employeeId, { documentTypeId: d.document_type_id, note: "Replacement requested" }); }}>Request replacement</Button>}
           {hasPermission("employee_documents.verify") && d.verification_status === "UPLOADED" && (
             <>
@@ -641,6 +768,34 @@ function DocumentsTab({ employeeId, hasPermission }) {
           )}
         </p>
       ))}
+      {openVersionsFor && (
+        <div className={styles.versionHistory}>
+          <h3 className={styles.versionTitle}>Version history</h3>
+          {versions.length === 0 ? (
+            <p>No earlier versions.</p>
+          ) : (
+            <ul className={styles.historyList}>
+              {versions.map((version) => (
+                <li key={version.id}>
+                  <div className={styles.historyHeader}>
+                    <strong>Version {version.version}</strong>
+                    <span>{formatDateTime(version.uploaded_at)}</span>
+                  </div>
+                  <p className={styles.historySummary}>
+                    {formatEnumLabel(version.verification_status)}
+                    {version.original_filename ? ` · ${version.original_filename}` : ""}
+                  </p>
+                  {hasPermission("employee_documents.download") && (
+                    <Button variant="secondary" onClick={() => download(version)}>
+                      Download this version
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -702,4 +857,76 @@ function RotationTab({ employeeId, hasPermission }) {
       )}
     </div>
   );
+}
+
+// The append-only record of what has happened to this Employee. The backend
+// has exposed it since the Workforce foundation; nothing ever read it, so an
+// employee's own history was invisible in the product.
+//
+// Removed entries are SHOWN as removed rather than hidden: the database
+// trigger rejects deletion outright and permits only the logical-removal
+// columns, so "removed" is part of the record, not the absence of one.
+function BusinessHistoryTab({ employeeId }) {
+  const [state, setState] = useState({ entries: [], status: "loading", error: null });
+
+  const load = useCallback(async () => {
+    try {
+      const response = await api.getEmployeeBusinessHistory(employeeId);
+      setState({ entries: response.data, status: "ready", error: null });
+    } catch (err) {
+      setState({
+        entries: [],
+        status: "error",
+        error: err instanceof ApiError ? err.message : "Unable to load business history.",
+      });
+    }
+  }, [employeeId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
+
+  if (state.status === "loading") return <LoadingState message="Loading history…" />;
+  if (state.status === "error") return <p role="alert">{state.error}</p>;
+  if (state.entries.length === 0) {
+    return <EmptyState title="No history yet" message="Employment events appear here as they happen." />;
+  }
+
+  return (
+    <ul className={styles.historyList}>
+      {state.entries.map((entry) => (
+        <li key={entry.id} className={entry.is_removed ? styles.historyRemoved : undefined}>
+          <div className={styles.historyHeader}>
+            <strong>{formatEnumLabel(entry.event_type)}</strong>
+            <span>{formatDateTime(entry.created_at)}</span>
+          </div>
+          {entry.summary && <p className={styles.historySummary}>{summaryText(entry.summary)}</p>}
+          {entry.is_removed && (
+            <p className={styles.historyRemovedNote}>
+              Removed{entry.removed_reason ? `: ${entry.removed_reason}` : ""}. The entry itself is retained.
+            </p>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Summaries are structured JSON whose shape varies per event type, so this
+// renders the pairs rather than guessing at a sentence per type.
+//
+// Their keys are camelCase JSON, not SCREAMING_SNAKE enum codes, so
+// formatEnumLabel is the wrong formatter here — it would render
+// "previousStatus" as "Previousstatus".
+function summaryText(summary) {
+  if (typeof summary === "string") return summary;
+  return Object.entries(summary)
+    .map(([key, value]) => `${humanizeKey(key)}: ${value}`)
+    .join(" · ");
+}
+
+function humanizeKey(key) {
+  const words = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
