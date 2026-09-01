@@ -895,8 +895,11 @@ SELECT
   DO $abort$ BEGIN RAISE EXCEPTION 'runtime function boundary verification failed'; END $abort$;
 \endif
 
+-- The stamp must name the migration level actually present right now. It was
+-- derived from this same ledger moments ago, so a mismatch means the schema
+-- moved underneath this run and the release must not be reported successful.
 SELECT public.esdms_runtime_provisioning_version()
-       = '1787427000000_driver-vehicle-master-and-gate-evidence'
+       = (SELECT (ARRAY_AGG(m.name ORDER BY m.id DESC))[1] FROM public.pgmigrations m)
        AS runtime_provisioning_version_valid
 \gset
 \if :runtime_provisioning_version_valid

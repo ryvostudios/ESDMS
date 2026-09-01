@@ -8,6 +8,10 @@ import pg from "pg";
 import config from "../src/config/env.js";
 import pool from "../src/config/database.js";
 import { inspectRuntimeCompatibility } from "../src/shared/db/runtime-compatibility.js";
+import {
+  EXPECTED_MIGRATION,
+  EXPECTED_MIGRATION_COUNT,
+} from "../src/shared/db/schema-compatibility.js";
 import { USER_PROFILE_QUERY } from "../src/shared/users/user-profile.query.js";
 import { seedUsers, TEST_PASSWORD } from "./setup.js";
 
@@ -666,8 +670,11 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
         readinessStatus: 200,
         schemaCompatible: true,
         runtimeProvisioningCompatible: true,
-        appliedMigrationCount: 38,
-        latestAppliedMigration: "1787427000000_driver-vehicle-master-and-gate-evidence",
+        // Derived from the exported constants, never copied: a hard-coded
+        // migration name and count silently go stale on the next migration
+        // and then assert nothing.
+        appliedMigrationCount: EXPECTED_MIGRATION_COUNT,
+        latestAppliedMigration: EXPECTED_MIGRATION,
       });
     } finally {
       await runtimePool.end();

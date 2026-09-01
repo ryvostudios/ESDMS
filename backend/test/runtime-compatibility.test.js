@@ -94,9 +94,32 @@ test("provisioning marker is pinned to the latest authoritative migration", asyn
     .map((name) => name.replace(/\.js$/, ""))
     .sort();
 
+  // The constant the application compares against must still name the newest
+  // migration on disk. That half is unchanged.
   assert.equal(EXPECTED_RUNTIME_PROVISIONING, migrationNames.at(-1));
+
+  // The stamp itself is DERIVED from the migration ledger at provisioning time
+  // rather than written into this file as a literal. A hard-coded name has to
+  // be hand-edited after every migration, and a forgotten edit makes the marker
+  // claim a level that was never provisioned -- the exact drift this marker
+  // exists to detect. Deriving it means a level that was never migrated to
+  // cannot be stamped at all.
+  assert.match(script, /ARRAY_AGG\(m\.name ORDER BY m\.id DESC\)\)\[1\][\s\S]*?FROM public\.pgmigrations/);
+  assert.match(script, /CREATE OR REPLACE FUNCTION public\.esdms_runtime_provisioning_version/);
+
+  // ...and the provisioning run verifies its own stamp against that same
+  // ledger before reporting success.
   assert.match(
     script,
-    new RegExp(`SELECT '${EXPECTED_RUNTIME_PROVISIONING.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'::text`),
+    /esdms_runtime_provisioning_version\(\)\s*\n?\s*=\s*\(SELECT \(ARRAY_AGG/,
+  );
+
+  // No migration name may be baked into the script as a literal, which would
+  // reintroduce the drift the derivation removes.
+  const hardcodedMigrationLiteral = script.match(/'(\d{13}_[a-z0-9-]+)'/i);
+  assert.equal(
+    hardcodedMigrationLiteral,
+    null,
+    `provision-db-roles.sql hard-codes migration ${hardcodedMigrationLiteral?.[1]}; derive it instead.`,
   );
 });

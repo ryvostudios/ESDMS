@@ -301,13 +301,28 @@ test("every contract table actually exists in the migrated database", async () =
 test("GET /health/ready reports the full serving contract, not only schema level", async () => {
   const { status, body } = await apiRequest(server.baseUrl, "GET", "/api/v1/health/ready");
 
-  assert.equal(status, 200);
-  assert.equal(body.data.status, "ready");
-  assert.equal(body.data.ready, true);
+  // The three facts this contract introduced are all healthy here: the test
+  // database is migrated, the connected role can reach every declared table,
+  // and the real authentication query executes.
   assert.equal(body.data.schemaCompatible, true);
   assert.equal(body.data.runtimeAccessHealthy, true);
   assert.equal(body.data.authServingHealthy, true);
-  assert.deepEqual(body.data.problems, []);
+
+  // The endpoint is still 503, and that is the point: the test database is
+  // never provisioned, so the privilege boundary is unproven and the
+  // provisioning stamp is absent. Schema level plus reachability plus a
+  // working auth query must NOT be enough on their own.
+  assert.equal(status, 503);
+  assert.equal(body.data.status, "not_ready");
+  assert.equal(body.data.ready, false);
+  assert.equal(body.data.runtimeProvisioningCompatible, false);
+
+  // Every problem reported is about provisioning -- none of the three facts
+  // above may contribute one.
+  assert.ok(body.data.problems.length > 0);
+  for (const problem of body.data.problems) {
+    assert.match(problem, /runtime privilege boundary/);
+  }
 });
 
 test("login and /me work, and a wrong password is still rejected", async () => {
