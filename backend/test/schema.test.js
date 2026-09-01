@@ -1,5 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import pool from "../src/config/database.js";
 import { seedUsers } from "./setup.js";
 
@@ -44,6 +45,26 @@ async function insertDraftGatePass(client, overrides = {}) {
   );
 
   return result.rows[0];
+}
+
+// gate_pass_files is unique on (gate_pass_id, file_type, version), on
+// storage_key and on checksum, so each evidence row needs its own values.
+async function insertEvidenceFile(client, gatePassId, fileType) {
+  const result = await client.query(
+    `INSERT INTO gate_pass_files
+       (gate_pass_id, file_type, storage_key, mime_type, size_bytes, checksum_sha256, created_by_user_id)
+     VALUES ($1, $2, $3, 'image/png', 10, $4, $5)
+     RETURNING id`,
+    [
+      gatePassId,
+      fileType,
+      `test/${gatePassId}/${fileType}-${crypto.randomUUID()}.png`,
+      crypto.randomBytes(32).toString("hex"),
+      users.admin,
+    ],
+  );
+
+  return result.rows[0].id;
 }
 
 test("gate pass numbers are unique and sequential per year via atomic counter", async () => {
@@ -179,17 +200,49 @@ test("gate_passes rejects REJECTED status without a rejection reason", async () 
 });
 
 test("gate_passes rejects COMPLETED status without departure/return evidence fields set", async () => {
-  const draft = await insertDraftGatePass(pool);
-
+  // Two independent guards protect a completed pass, and this asserts both.
+  //
+  // The lifecycle trigger (1787428000000_gate-pass-lifecycle-integrity.js)
+  // rejects the illegal jump first, so reaching the coherence CHECK at all
+  // requires travelling a legal path to the point where COMPLETED is next.
+  const jumped = await insertDraftGatePass(pool);
   await assert.rejects(
     pool.query(
       `UPDATE gate_passes
          SET status = 'COMPLETED', approved_by_user_id = $2, approved_at = now(),
-             verification_token_hash = 'deadbeef'
+             verification_token_hash = $3
        WHERE id = $1`,
-      [draft.id, users.admin],
+      [jumped.id, users.admin, crypto.randomBytes(32).toString("hex")],
     ),
+    /cannot move from DRAFT to COMPLETED/i,
+    "the lifecycle trigger must refuse the illegal transition",
+  );
+
+  // Now the same claim the CHECK constraint exists to make: even along the
+  // legal VEHICLE_OUTSIDE -> COMPLETED edge, a COMPLETED row without its
+  // return evidence is refused.
+  const walked = await insertDraftGatePass(pool);
+  const departurePhotoId = await insertEvidenceFile(pool, walked.id, "DEPARTURE_PHOTO");
+
+  await pool.query(
+    `UPDATE gate_passes
+       SET status = 'APPROVED', approved_by_user_id = $2, approved_at = now(),
+           verification_token_hash = $3
+     WHERE id = $1`,
+    [walked.id, users.admin, crypto.randomBytes(32).toString("hex")],
+  );
+  await pool.query(
+    `UPDATE gate_passes
+       SET status = 'VEHICLE_OUTSIDE', departure_odometer = 100, departure_at = now(),
+           departure_by_user_id = $2, departure_photo_file_id = $3
+     WHERE id = $1`,
+    [walked.id, users.admin, departurePhotoId],
+  );
+
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET status = 'COMPLETED' WHERE id = $1", [walked.id]),
     /violates check constraint/,
+    "the status/field coherence CHECK must refuse a COMPLETED row with no return evidence",
   );
 });
 

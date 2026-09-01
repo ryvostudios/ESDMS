@@ -6,8 +6,8 @@ import {
 } from "./runtime-access-contract.js";
 import { probeUserProfileServing } from "../users/user-profile.repository.js";
 
-export const EXPECTED_MIGRATION = "1787427000000_driver-vehicle-master-and-gate-evidence";
-export const EXPECTED_MIGRATION_COUNT = 38;
+export const EXPECTED_MIGRATION = "1787428000000_gate-pass-lifecycle-integrity";
+export const EXPECTED_MIGRATION_COUNT = 39;
 
 // Readiness answers ONE question: can this instance actually serve traffic
 // right now, as the role it is actually connected as.
@@ -181,7 +181,14 @@ const SCHEMA_STATE_SQL = `
     EXISTS (
       SELECT 1 FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'gate_passes' AND column_name = 'driver_id'
-    ) AS gate_pass_fleet_link_present
+    ) AS gate_pass_fleet_link_present,
+    EXISTS (
+      SELECT 1 FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'gate_passes'
+        AND t.tgname = 'gate_passes_enforce_lifecycle' AND NOT t.tgisinternal
+    ) AS gate_pass_lifecycle_trigger_present
   FROM migration_state
 `;
 
@@ -204,6 +211,10 @@ const REQUIRED_SCHEMA_OBJECTS = [
   ["gate_pass_fleet_link_present", "gate_passes.driver_id"],
   ["evidence_note_present", "gate_pass_files.evidence_note"],
   ["evidence_file_types_present", "constraint gate_pass_files_type_check"],
+  // Gate Pass lifecycle validity exists only at the database level. Without
+  // this trigger the application still runs, but the guarantee that a
+  // COMPLETED pass can never be rewound to DRAFT is silently gone.
+  ["gate_pass_lifecycle_trigger_present", "trigger gate_passes_enforce_lifecycle"],
 ];
 
 function summarize(label, names, limit = 8) {
