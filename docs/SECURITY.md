@@ -391,6 +391,28 @@ boundary was unchanged by it — 46 application tables (47 with owner-only
 section are each accurate for the migration they describe; the current
 boundary is whatever `scripts/provision-db-roles.sql` names, never a number
 copied from here.
+
+**Current boundary (informative).** The narrative above stops at Checkpoint 5.
+Since then, IPO and purchasing, Delivery Challan, Receiving, line
+dispositions, carry-forward allocation, procurement documents, capability
+bundles and Fleet master data have each added tables, and the boundary is now
+**64 application tables (65 with owner-only `pgmigrations`)**. That number is
+recorded here only so a stale figure cannot be mistaken for the current one —
+it is still not the authority.
+
+The authority is now machine-checked in two places, so this section can no
+longer drift silently:
+
+- `backend/src/shared/db/runtime-access-contract.js` declares every table the
+  running API may touch and with which privileges. A test asserts that it and
+  `scripts/provision-db-roles.sql` name exactly the same tables with exactly
+  the same privileges, and that every table the migrations create appears in
+  it. Adding a table to one without the other fails CI.
+- `/health/ready` verifies the live database against that same contract —
+  schema USAGE, table privileges, RLS and the runtime row policies — and
+  additionally executes the real authentication projection. An instance whose
+  runtime role cannot actually serve reports not-ready instead of reporting a
+  healthy schema (see §8.3).
 It adds stage/version-aware partial unique indexes and a composite FINAL
 approval foreign key binding Pricing id + Demand id + Demand revision.
 Existing approval rows are preserved as `INITIAL`; existing Pricing headers
@@ -429,12 +451,48 @@ unset ESDMS_RUNTIME_PASSWORD
 
 Every new module/table requires a reviewed forward migration plus an explicit update to the runtime table allowlist and RLS policy provisioning. New directly callable database functions require an equally explicit reviewed grant. No migration-owner default privilege automatically exposes future tables, sequences, or functions to `esdms_runtime`, `anon`, or `authenticated`.
 
-Production readiness runs on the API's own runtime connection. It requires
-both physical/migration schema compatibility and current runtime provisioning,
-including the reviewed marker, critical grants, RLS policies, and the negative
-security boundaries above. Therefore `schemaCompatible=true` cannot by itself
-make `/api/v1/health/ready` healthy. The endpoint reports only non-secret
-versions and booleans and never repairs the database.
+### 8.3 Readiness Verifies Serving Capability, Not Only Schema
+
+Object existence and access privilege are independent facts, and readiness
+used to check only the first. A migration that added a table without a
+matching `provision-db-roles.sql` run left every object present and every
+query denied: `/health/ready` reported `"ready"` with `schemaCompatible: true`
+while `POST /auth/login` returned 500 with PostgreSQL `42501`. Revoking
+`SELECT` on `users`, `roles`, `sites`, `departments` or `employees` all
+reproduced it.
+
+`/health/ready` now verifies four independent things and reports each
+separately, so an operator can tell "the migration did not run" apart from
+"the migration ran but provisioning did not". Readiness runs on the API's own
+runtime connection, so `schemaCompatible: true` cannot by itself make the
+endpoint healthy. It reports only non-secret versions and booleans, and never
+repairs the database:
+
+| Field | What it means |
+| --- | --- |
+| `schemaCompatible` | Migration ledger and load-bearing objects (columns, triggers, functions, indexes) |
+| `runtimeAccessHealthy` | The connected role holds the schema/table privileges and, where it is subject to RLS, the row policies declared in `runtime-access-contract.js` |
+| `authServingHealthy` | The REAL authentication profile projection executes — the same statement `/auth/login` and every authenticated request run |
+| `runtimeProvisioningCompatible` | The privilege *boundary* is intact — the role inherits no other role, holds no grant beyond the reviewed set, can execute no unexpected function, and every policy has the exact intended shape — and `esdms_runtime_provisioning_version()` names the migration level currently deployed, so a stale or omitted provisioning run cannot pass |
+| `ready` | All four. This is what drives the 200/503 |
+| `problems` | Actionable, non-secret descriptions. Object and privilege names only — never driver text, SQL, or stack frames |
+
+The provisioning marker is stamped by `provision-db-roles.sql` from the
+migration ledger as it stood when provisioning ran, not from a hand-maintained
+literal. A level that was never migrated to therefore cannot be stamped, and a
+deployment that migrated without re-provisioning is refused rather than served.
+
+The policy check is skipped for a role RLS could not constrain (a superuser,
+`BYPASSRLS`, or a table's own owner without `FORCE RLS`), so a development
+connection that owns the schema is not reported not-ready for policies that do
+not apply to it. In production the API connects as the non-owner
+`esdms_runtime`, where they do apply and are checked.
+
+Readiness is a very good predictor that a user can sign in. It is not proof —
+it runs the authentication query with a sentinel id, not a real credential, an
+Argon2 verification, a JWT signature and a session cookie. The release
+procedure therefore still requires a real login smoke test after deployment;
+see `docs/OPERATIONS.md`.
 
 ---
 

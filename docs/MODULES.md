@@ -285,13 +285,27 @@ V1's checkpoint 7; see §5's status).
 
 ## 7. Fleet
 
-Fleet-related functionality may eventually provide controlled vehicle master data and related operational information.
+Fleet provides controlled Driver and Vehicle master data and the operational
+information that hangs off it.
 
-Gate Pass may reference approved vehicle records through a defined interface rather than owning all fleet functionality.
+Gate Pass references approved Driver and Vehicle records through a defined
+interface rather than owning fleet functionality itself. A Gate Pass copies
+the driver name/phone and vehicle registration onto itself at issue time, so
+the master row is provenance and the copied text is history: renaming a Driver
+or re-registering a Vehicle never rewrites an already-issued Gate Pass.
+
+Driver and Vehicle are site-scoped master data with add / view / edit /
+deactivate / reactivate and no hard delete — `gate_passes` references both with
+`ON DELETE RESTRICT`. Vehicle registration, and Driver CNIC and licence
+number, are unique per site and compared case-insensitively.
+
+Fleet master data confers no application authority of its own: it is gated by
+the `driver.*` and `vehicle.*` capabilities like any other module.
 
 Current status:
 
-**Planned — not implemented**
+**Implemented** — master data and Gate Pass integration. Maintenance,
+scheduling and utilisation reporting remain out of scope.
 
 ---
 
@@ -521,9 +535,9 @@ everything that depends on it) on 2026-08-25 — see `docs/DECISIONS.md`.
 | Authentication | Implemented — HttpOnly cookie session (browser) + Bearer (non-browser clients), with `session_version`-based revocation |
 | Authorization | Implemented — RBAC, department/site scope |
 | Gate Pass | Implemented, security-hardened; not yet deployed |
-| Procurement & Material Receiving V1 | Checkpoint 1 (Material Catalog Foundation) implemented; checkpoints 2-8 (Demand → Closure) not started — see `docs/PROCUREMENT_RECEIVING_SPEC.md` |
+| Procurement & Material Receiving V1 | Checkpoints 1-8 implemented (Material Catalog → Demand → approvals → Procurement pricing → final approval → IPO → purchasing → Delivery Challan → Receiving) — see `docs/PROCUREMENT_RECEIVING_SPEC.md` |
 | Inventory (full — stock ledger/balances) | Not started; deferred behind Procurement & Material Receiving V1 adoption (per §14 sequencing) |
-| Fleet | Not started |
+| Fleet | Implemented — Driver/Vehicle master data and Gate Pass integration; maintenance and utilisation reporting not started |
 | Maintenance | Not started |
 | HSE | Not started |
 | Workforce / Employee Management | Core module implemented, security-hardened; not yet deployed. Attendance itself remains out of scope. |
