@@ -1,16 +1,15 @@
 import pool from "../../config/database.js";
-import { listUserProfiles, isProfileActive } from "../users/user-profile.repository.js";
+import { selectEligibleRecipientIds } from "../users/user-profile.repository.js";
 
-// Answers "which ACTIVE users are actually eligible to perform this
-// workflow action right now?" — reusing getUserProfileById (the single
-// authoritative effective-permissions computation authenticate.js and the
-// governance endpoints already share) rather than a second, hand-rolled
-// SQL implementation of the same GRANT/DENY rule that could silently
-// diverge from it (see docs/DECISIONS.md).
+// Answers "which ACTIVE users are actually eligible to perform this workflow
+// action right now?" — reusing the effective-permission and current-assignment
+// rules authentication itself uses (see user-profile.repository.js) rather
+// than a second, hand-rolled implementation of the same GRANT/DENY/bundle
+// precedence that could silently diverge from it.
 //
-// Eligibility: the profile is active (isProfileActive — user, role, AND
-// site all active) AND effectively holds `capabilityCode` (role grant or
-// individual GRANT, minus individual DENY) AND is in scope: CEO, or holds
+// Eligibility: the profile is active (user, role AND site all active) AND
+// effectively holds `capabilityCode` (role grant, individual GRANT or active
+// bundle, minus individual DENY) AND is in scope: CEO, or holds
 // `allScopePermissionCode` (if given), or belongs to `siteId`.
 //
 // `departmentId` (optional) narrows a notification to the users who own that
@@ -18,12 +17,14 @@ import { listUserProfiles, isProfileActive } from "../users/user-profile.reposit
 // not every capable user at the site. A broad-scope holder (CEO /
 // allScopePermissionCode) stays eligible regardless, exactly as with site
 // scope; everyone else must match BOTH site and department. Omitting it
-// preserves the original site-only behavior byte for byte.
+// preserves the site-only behaviour.
 //
-// Profiles for all users are loaded in one set-oriented query using the same
-// authoritative projection as authentication. The optional executor keeps
-// routing inside the caller's transaction instead of acquiring another pool
-// connection while one is already held.
+// The filtering happens in the database, not in JavaScript over every user
+// profile: this runs inside the caller's write transaction, while it holds
+// its row lock, so its cost must depend on how many recipients there ARE and
+// not on how many accounts exist. The optional executor keeps routing inside
+// that transaction instead of acquiring another pool connection while one is
+// already held.
 export async function resolveEligibleRecipients({
   capabilityCode,
   allScopePermissionCode = null,
@@ -31,22 +32,10 @@ export async function resolveEligibleRecipients({
   departmentId = null,
   executor = pool,
 }) {
-  const profiles = await listUserProfiles(executor);
-
-  const eligible = [];
-
-  for (const profile of profiles) {
-    if (!isProfileActive(profile)) continue;
-    if (!profile.permissions.includes(capabilityCode)) continue;
-
-    const hasBroadScope =
-      profile.role === "CEO" || (allScopePermissionCode && profile.permissions.includes(allScopePermissionCode));
-
-    if (!hasBroadScope && profile.site_id !== siteId) continue;
-    if (!hasBroadScope && departmentId && profile.department_id !== departmentId) continue;
-
-    eligible.push(profile.id);
-  }
-
-  return eligible;
+  return selectEligibleRecipientIds(executor, {
+    capabilityCode,
+    allScopePermissionCode,
+    siteId,
+    departmentId,
+  });
 }
