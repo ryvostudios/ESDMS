@@ -55,17 +55,23 @@ export function assertEmployeeManageable(actor, employee, permissionCode) {
   }
 }
 
-// For creating a new Employee: an actor without company-wide scope may only
-// create within their own site — an explicit mismatch is a denial, not a
-// silent override (mirrors gate-pass.authorization.js's
+// For creating a new site-scoped record: an actor without company-wide scope
+// may only create within their own site — an explicit mismatch is a denial,
+// not a silent override (mirrors gate-pass.authorization.js's
 // resolveCreateDepartmentId and users.service.js's resolveCreateSiteId).
-export function resolveCreateSiteId(actor, requestedSiteId) {
+//
+// `recordLabel` exists because this is shared by Employees, Departments,
+// Positions, Drivers and Vehicles. It used to say "You can only create
+// employees within your own site" to all of them, so a Site Manager refused a
+// cross-site VEHICLE was told about employees. The default is deliberately
+// generic rather than wrong for four callers out of five.
+export function resolveCreateSiteId(actor, requestedSiteId, recordLabel = "records") {
   const scope = employeeSiteFilter(actor);
   if (scope === null) {
     return requestedSiteId || actor.siteId;
   }
   if (requestedSiteId && requestedSiteId !== actor.siteId) {
-    throw new ForbiddenError("You can only create employees within your own site.");
+    throw new ForbiddenError(`You can only create ${recordLabel} within your own site.`);
   }
   return actor.siteId;
 }

@@ -79,7 +79,7 @@ export async function getDriver(actor, id) {
 }
 
 export async function createDriver(actor, input) {
-  const siteId = resolveCreateSiteId(actor, input.siteId);
+  const siteId = resolveCreateSiteId(actor, input.siteId, "drivers");
   await assertEmployeeLinkUsable(input.employeeId, siteId);
 
   try {
@@ -117,7 +117,7 @@ export async function getVehicle(actor, id) {
 }
 
 export async function createVehicle(actor, input) {
-  const siteId = resolveCreateSiteId(actor, input.siteId);
+  const siteId = resolveCreateSiteId(actor, input.siteId, "vehicles");
 
   try {
     return await repo.insertVehicle({ ...input, siteId, createdByUserId: actor.id });

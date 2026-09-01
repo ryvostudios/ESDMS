@@ -10,11 +10,9 @@ const mockListVehicles = vi.hoisted(() => vi.fn());
 
 vi.mock("./api.js", () => ({
   listDrivers: (...args) => mockListDrivers(...args),
-  getDriver: vi.fn(),
   createDriver: (...args) => mockCreateDriver(...args),
   updateDriver: (...args) => mockUpdateDriver(...args),
   listVehicles: (...args) => mockListVehicles(...args),
-  getVehicle: vi.fn(),
   createVehicle: vi.fn(),
   updateVehicle: vi.fn(),
 }));

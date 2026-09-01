@@ -247,10 +247,37 @@ test("gate_passes rejects COMPLETED status without departure/return evidence fie
 });
 
 test("verification_token_hash uniqueness only applies to non-null values", async () => {
-  await insertDraftGatePass(pool);
-  await insertDraftGatePass(pool);
-  // Both rows have NULL verification_token_hash — must not collide.
-  assert.ok(true);
+  // The index is UNIQUE but partial. Both halves are asserted, because
+  // asserting only that two NULL rows coexist would also pass if the
+  // uniqueness rule were dropped altogether.
+  const first = await insertDraftGatePass(pool);
+  const second = await insertDraftGatePass(pool);
+
+  const nulls = await pool.query(
+    "SELECT count(*)::int AS total FROM gate_passes WHERE id = ANY($1) AND verification_token_hash IS NULL",
+    [[first.id, second.id]],
+  );
+  assert.equal(nulls.rows[0].total, 2, "several unapproved passes may hold a NULL token at once");
+
+  // And a non-null token is still unique.
+  const token = crypto.randomBytes(32).toString("hex");
+  await pool.query(
+    `UPDATE gate_passes
+       SET status = 'APPROVED', approved_by_user_id = $2, approved_at = now(), verification_token_hash = $3
+     WHERE id = $1`,
+    [first.id, users.admin, token],
+  );
+
+  await assert.rejects(
+    pool.query(
+      `UPDATE gate_passes
+         SET status = 'APPROVED', approved_by_user_id = $2, approved_at = now(), verification_token_hash = $3
+       WHERE id = $1`,
+      [second.id, users.admin, token],
+    ),
+    (error) => error.code === "23505",
+    "two Gate Passes must never share a verification token",
+  );
 });
 
 test("a user's department must belong to the user's own site (composite FK)", async () => {

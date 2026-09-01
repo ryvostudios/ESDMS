@@ -35,7 +35,7 @@ export const listAll = asyncHandler(async (req, res) => {
 
 export const create = asyncHandler(async (req, res) => {
   const input = parseBody(createDepartmentSchema, req.body);
-  const siteId = resolveCreateSiteId(req.user, input.siteId);
+  const siteId = resolveCreateSiteId(req.user, input.siteId, "departments");
 
   if (await nameExistsForSite(siteId, input.name)) {
     throw new ConflictError("A department with this name already exists at this site.");

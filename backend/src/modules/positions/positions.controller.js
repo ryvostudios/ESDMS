@@ -42,7 +42,7 @@ export const listAll = asyncHandler(async (req, res) => {
 
 export const create = asyncHandler(async (req, res) => {
   const input = parseBody(createPositionSchema, req.body);
-  const siteId = resolveCreateSiteId(req.user, input.siteId);
+  const siteId = resolveCreateSiteId(req.user, input.siteId, "positions");
 
   if (await codeExistsForSite(siteId, input.code)) {
     throw new ConflictError("A position with this code already exists at this site.");

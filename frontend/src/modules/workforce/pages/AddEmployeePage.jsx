@@ -31,6 +31,8 @@ export function AddEmployeePage() {
   // out-of-scope match is never an individual row, even a redacted one —
   // only this one boolean, so the count of such matches is never exposed.
   const [duplicateResult, setDuplicateResult] = useState(null);
+  const [advisory, setAdvisory] = useState(null);
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -64,6 +66,28 @@ export function AddEmployeePage() {
     // necessarily valid (or even the same row id) under the new one.
     setDepartmentId("");
     setPositionId("");
+  }
+
+  // An ADVISORY pre-check, offered before the form is completed. The
+  // authoritative check stays the transactional one at create time (which
+  // returns 409 with the same shape below) — this only lets someone find out
+  // before filling in the rest of the record, which is what the endpoint was
+  // built for. It never blocks and never substitutes for the create-time check.
+  async function checkForDuplicates() {
+    if (!fullLegalName.trim()) return;
+    setChecking(true);
+    setError(null);
+    try {
+      const response = await api.checkDuplicateEmployees({
+        fullLegalName,
+        siteId: siteId || sites[0]?.id,
+      });
+      setAdvisory(response.data);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to check for duplicates.");
+    } finally {
+      setChecking(false);
+    }
   }
 
   async function createNow(confirmDuplicateOverride) {
@@ -151,12 +175,55 @@ export function AddEmployeePage() {
                 <Input id="employeeCode" value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} required />
               </FormField>
               <FormField label="Full legal name" htmlFor="fullLegalName" required>
-                <Input id="fullLegalName" value={fullLegalName} onChange={(e) => setFullLegalName(e.target.value)} required />
+                <Input
+                  id="fullLegalName"
+                  value={fullLegalName}
+                  onChange={(e) => {
+                    setFullLegalName(e.target.value);
+                    setAdvisory(null);
+                  }}
+                  required
+                />
               </FormField>
               <FormField label="Joining date" htmlFor="joiningDate" required>
                 <Input id="joiningDate" type="date" value={joiningDate} onChange={(e) => setJoiningDate(e.target.value)} required />
               </FormField>
             </div>
+            <div className={styles.actions}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={checkForDuplicates}
+                disabled={!fullLegalName.trim()}
+                loading={checking}
+              >
+                Check for existing records
+              </Button>
+            </div>
+            {advisory && (
+              <div className={styles.duplicatePanel} role="status">
+                {advisory.matches.length === 0 && !advisory.outsideScopeMatch ? (
+                  <p className={styles.duplicateHint}>No existing Employee matches this name.</p>
+                ) : (
+                  <>
+                    <p className={styles.duplicateTitle}>Possible existing Employee(s)</p>
+                    <ul className={styles.matchList}>
+                      {advisory.matches.map((match) => (
+                        <li key={match.id} className={styles.matchRow}>
+                          <span className={styles.matchCode}>{match.employee_code}</span>
+                          <span>{match.full_legal_name}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {advisory.outsideScopeMatch && (
+                      <p className={styles.duplicateHint}>
+                        A possible matching Employee exists outside your access scope.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className={styles.section}>

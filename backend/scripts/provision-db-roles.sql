@@ -591,9 +591,17 @@ FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REF
   AS privileges(privilege_type)
 ORDER BY privilege_type;
 
--- 5. Every table the runtime can access, plus owner-only pgmigrations, keeps
--- RLS enabled. Deriving this from effective grants avoids another stale count
--- when a reviewed table is added to the explicit allowlist.
+-- 5. RLS enabled on every table the runtime can reach, plus pgmigrations.
+--
+-- Derived from effective grants, never a repeated list. This block used to
+-- name 63 tables by hand and assert `count(*) = 63`; the schema had grown to
+-- 65 and the list had silently drifted, so `drivers` and `vehicles` were
+-- excluded from the very assertion that claimed to cover everything.
+--
+-- The set is deliberately derived from GRANTS rather than from the policies
+-- created above: a table the runtime can read but which was never given a
+-- policy is exactly the dangerous case, and deriving from policies would
+-- define that hole out of existence instead of catching it.
 SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace

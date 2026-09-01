@@ -192,7 +192,7 @@ export async function checkDuplicates(actor, input) {
   // Never trust a client-supplied site to establish scope: the site used
   // both for the "same site name" match and for redaction is the actor's
   // own resolved create-site (ESDMS-002).
-  const siteId = resolveCreateSiteId(actor, input.siteId);
+  const siteId = resolveCreateSiteId(actor, input.siteId, "employees");
   const duplicates = await findPotentialDuplicates({
     fullLegalName: input.fullLegalName,
     primarySiteId: siteId,
@@ -204,7 +204,7 @@ export async function checkDuplicates(actor, input) {
 }
 
 export async function createEmployee(actor, input) {
-  const siteId = resolveCreateSiteId(actor, input.siteId);
+  const siteId = resolveCreateSiteId(actor, input.siteId, "employees");
 
   if (await employeeCodeExists(input.employeeCode)) {
     throw new ConflictError("This Employee ID is already in use.");

@@ -8,4 +8,3 @@ export const recordPurchase = (id, body) => apiClient.post(`/ipos/${id}/purchase
 export const closePurchasing = (id) => apiClient.post(`/ipos/${id}/close-purchasing`, {});
 export const cancelIpo = (id, body) => apiClient.post(`/ipos/${id}/cancel`, body);
 export const getIpoPdf = (id) => apiClient.getBlob(`/ipos/${id}/pdf`);
-export const listOutstanding = (params) => apiClient.get(`/ipos/outstanding${buildQuery(params)}`);

@@ -48,7 +48,12 @@ export const checkDuplicates = asyncHandler(async (req, res) => {
 export const create = asyncHandler(async (req, res) => {
   const input = parseBody(createEmployeeSchema, req.body);
   const created = await service.createEmployee(req.user, input);
-  res.status(201).json({ success: true, data: toEmployeeDto({ ...created, department_id: null, position_id: null }) });
+  // Re-read through the same projection the detail endpoint uses, rather than
+  // returning the raw insert with department/position forced to null. The
+  // initial assignment IS created from the submitted departmentId/positionId,
+  // so nulling them made the create response disagree with the very next GET
+  // and left a client rendering from it showing a blank department.
+  res.status(201).json({ success: true, data: toEmployeeDto(await service.getEmployee(req.user, created.id)) });
 });
 
 export const list = asyncHandler(async (req, res) => {
