@@ -6,8 +6,8 @@ import {
 } from "./runtime-access-contract.js";
 import { probeUserProfileServing } from "../users/user-profile.repository.js";
 
-export const EXPECTED_MIGRATION = "1787430000000_formal-approver-price-visibility";
-export const EXPECTED_MIGRATION_COUNT = 41;
+export const EXPECTED_MIGRATION = "1787431000000_driver-identifier-normalization";
+export const EXPECTED_MIGRATION_COUNT = 42;
 
 // Readiness answers ONE question: can this instance actually serve traffic
 // right now, as the role it is actually connected as.

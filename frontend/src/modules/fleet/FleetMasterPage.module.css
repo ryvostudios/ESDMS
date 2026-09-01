@@ -34,6 +34,12 @@
   height: 18px;
 }
 
+.tableScroll {
+  /* Scoped to this container, never global: an unexpectedly long value makes
+     the TABLE scroll horizontally rather than the whole document. */
+  overflow-x: auto;
+}
+
 .table {
   display: none;
   width: 100%;
@@ -78,11 +84,22 @@
   color: var(--color-text);
 }
 
-/* 960px, not the 720px MaterialCatalogPage uses: a Driver row carries seven
-   columns (name, phone, company, type, licence, status, actions) and still
-   overflows a 768px tablet viewport at 720. The card layout therefore covers
-   phones AND tablets, and the table appears only where it genuinely fits. */
-@media (min-width: 960px) {
+/* A Driver row carries seven columns (name, phone, company, type, licence,
+   status, actions) and needs roughly 775px of CONTENT width.
+   
+   The breakpoint must therefore be expressed in viewport width MINUS the
+   shell, not in table width alone. AppShell shows a 248px sidebar from 961px
+   up (Sidebar.module.css hides it at max-width: 960px) and adds 2x24px of
+   content padding, so a 960px breakpoint put the table on screen at exactly
+   the width where the sidebar appeared and took the space it needed: between
+   ~1000px and ~1090px the page itself scrolled sideways, including at the
+   1024x768 tablet size.
+   
+     775 (table) + 248 (sidebar) + 48 (content padding) = 1071
+   
+   1100px leaves margin for longer names and different font metrics. Below it
+   the card layout covers phones and tablets, as before. */
+@media (min-width: 1100px) {
   .table {
     display: table;
   }

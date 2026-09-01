@@ -181,6 +181,7 @@ export function FleetMasterPage({ config }) {
 
       {status === "ready" && rows.length > 0 && (
         <>
+          <div className={styles.tableScroll}>
           <table className={styles.table}>
             <thead>
               <tr>
@@ -217,6 +218,7 @@ export function FleetMasterPage({ config }) {
               ))}
             </tbody>
           </table>
+          </div>
 
           {/* Same rows, laid out for a phone. A Guard or site admin at the
               gate must not have to pan the page sideways to reach Actions. */}
