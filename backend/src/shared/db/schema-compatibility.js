@@ -1,96 +1,321 @@
+import {
+  RUNTIME_TABLE_PRIVILEGES,
+  RUNTIME_TABLES,
+  RUNTIME_POLICY_NAME,
+  RUNTIME_FUNCTIONS,
+} from "./runtime-access-contract.js";
+import { probeUserProfileServing } from "../users/user-profile.repository.js";
+
 export const EXPECTED_MIGRATION = "1787427000000_driver-vehicle-master-and-gate-evidence";
 export const EXPECTED_MIGRATION_COUNT = 38;
 
-// This is deliberately detection-only. A migration ledger entry is not proof
-// that its load-bearing objects still exist, so readiness verifies both.
-export async function inspectSchemaCompatibility(executor) {
-  const result = await executor.query(
-    `WITH migration_state AS (
-       SELECT * FROM esdms_schema_migration_state($1)
-     )
-     SELECT
-       migration_state.applied_count,
-       migration_state.latest_applied,
-       migration_state.expected_applied,
-       EXISTS (
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public'
-           AND table_name = 'material_demands'
-           AND column_name = 'draft_delete_eligible'
-           AND data_type = 'boolean'
-           AND is_nullable = 'NO'
-       ) AS required_column_present,
-       EXISTS (
-         SELECT 1 FROM pg_trigger t
-         JOIN pg_class c ON c.oid = t.tgrelid
-         JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'public' AND c.relname = 'material_demands'
-           AND t.tgname = 'material_demands_forbid_draft_rollback' AND NOT t.tgisinternal
-       ) AS rollback_trigger_present,
-       EXISTS (
-         SELECT 1 FROM pg_trigger t
-         JOIN pg_class c ON c.oid = t.tgrelid
-         JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'public' AND c.relname = 'material_demands'
-           AND t.tgname = 'material_demands_set_draft_delete_eligible' AND NOT t.tgisinternal
-       ) AS eligibility_trigger_present,
-       to_regprocedure('public.material_demands_forbid_draft_rollback()') IS NOT NULL
-         AS rollback_function_present,
-       to_regprocedure('public.material_demands_set_draft_delete_eligible()') IS NOT NULL
-         AS eligibility_function_present,
-       to_regclass('public.permission_bundles') IS NOT NULL AS permission_bundles_present,
-       to_regclass('public.permission_bundle_permissions') IS NOT NULL AS bundle_permissions_present,
-       to_regclass('public.user_permission_bundle_assignments') IS NOT NULL AS bundle_assignments_present,
-       EXISTS (SELECT 1 FROM permissions WHERE code = 'procurement.site_scope') AS procurement_scope_present,
-       to_regclass('public.drivers') IS NOT NULL AS drivers_present,
-       to_regclass('public.vehicles') IS NOT NULL AS vehicles_present,
-       EXISTS (
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'gate_pass_files' AND column_name = 'evidence_note'
-       ) AS evidence_note_present,
-       EXISTS (
-         SELECT 1 FROM pg_constraint
-         WHERE conname = 'gate_pass_files_type_check'
-           AND pg_get_constraintdef(oid) LIKE '%RETURN_ADDITIONAL_PHOTO%'
-           AND pg_get_constraintdef(oid) LIKE '%COMPLETED_PDF%'
-       ) AS evidence_file_types_present,
-       EXISTS (
-         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'gate_passes' AND column_name = 'driver_id'
-       ) AS gate_pass_fleet_link_present
-     FROM migration_state`,
-    [EXPECTED_MIGRATION],
-  );
+// Readiness answers ONE question: can this instance actually serve traffic
+// right now, as the role it is actually connected as.
+//
+// It deliberately verifies three independent facts, because any one of them
+// can be true while the others are false:
+//
+//   1. SCHEMA LEVEL   — the migration ledger, and the physical existence of
+//      load-bearing objects. A ledger row is not proof an object survived.
+//
+//   2. RUNTIME ACCESS — that the connected role actually holds the schema
+//      and table privileges, and (where it is subject to RLS) the row
+//      policies, described by runtime-access-contract.js. Object existence
+//      and access privilege are INDEPENDENT facts: a migration that adds a
+//      table without a matching provision-db-roles.sql run leaves every
+//      object present and every query denied.
+//
+//   3. AUTH SERVING   — that the real authentication/profile projection can
+//      actually execute. This is the end-to-end backstop: it runs the same
+//      statement /auth/login and every authenticated request run, so it
+//      cannot drift away from what serving traffic needs.
+//
+// Before (3) and (2) existed, readiness returned 200 "ready" while every
+// login returned 500 with PostgreSQL 42501 — the exact failure this module
+// exists to prevent. Adding more object-existence probes would not have
+// caught it, because every object existed.
 
-  const state = result.rows[0];
-  const schemaCompatible = Boolean(
-    state.expected_applied &&
-      state.applied_count >= EXPECTED_MIGRATION_COUNT &&
-      state.required_column_present &&
-      state.rollback_trigger_present &&
-      state.eligibility_trigger_present &&
-      state.rollback_function_present &&
-      state.eligibility_function_present &&
-      state.permission_bundles_present &&
-      state.bundle_permissions_present &&
-      state.bundle_assignments_present &&
-      state.procurement_scope_present &&
-      // Fleet and gate-evidence objects are load-bearing for Driver/Vehicle
-      // management and multi-photo evidence. Without them readiness would
-      // report a healthy schema while every fleet request and every evidence
-      // write failed — the exact lie this module exists to prevent.
-      state.drivers_present &&
-      state.vehicles_present &&
-      state.gate_pass_fleet_link_present &&
-      state.evidence_note_present &&
-      state.evidence_file_types_present,
-  );
+function buildAccessQuery() {
+  const values = [];
+  const params = [];
+
+  for (const table of RUNTIME_TABLES) {
+    for (const privilege of RUNTIME_TABLE_PRIVILEGES[table]) {
+      params.push(table, privilege);
+      values.push(`($${params.length - 1}, $${params.length})`);
+    }
+  }
+
+  params.push(RUNTIME_POLICY_NAME);
+  const policyParam = `$${params.length}`;
+  params.push(RUNTIME_FUNCTIONS);
+  const functionsParam = `$${params.length}`;
+
+  const sql = `
+    WITH contract(table_name, privilege_type) AS (VALUES ${values.join(", ")}),
+    contract_tables AS (SELECT DISTINCT table_name FROM contract),
+    rel AS (
+      SELECT c.oid, c.relname, c.relrowsecurity, c.relforcerowsecurity, c.relowner
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r'
+    ),
+    -- A superuser or BYPASSRLS role is never filtered by a policy, and a
+    -- table's owner is exempt unless the table FORCEs RLS. Requiring a
+    -- runtime policy for a role it could not constrain would report a
+    -- perfectly serviceable development/test connection as not-ready.
+    connected_role AS (
+      SELECT oid, (rolsuper OR rolbypassrls) AS bypasses_rls
+      FROM pg_roles WHERE rolname = current_user
+    ),
+    missing_tables AS (
+      SELECT t.table_name AS name
+      FROM contract_tables t
+      LEFT JOIN rel r ON r.relname = t.table_name
+      WHERE r.oid IS NULL
+    ),
+    missing_privileges AS (
+      SELECT c.table_name || '.' || c.privilege_type AS name
+      FROM contract c
+      JOIN rel r ON r.relname = c.table_name
+      WHERE NOT has_table_privilege(current_user, r.oid, c.privilege_type)
+    ),
+    rls_disabled AS (
+      SELECT r.relname::text AS name
+      FROM contract_tables t
+      JOIN rel r ON r.relname = t.table_name
+      WHERE NOT r.relrowsecurity
+    ),
+    policy_required AS (
+      SELECT r.oid, r.relname::text AS relname
+      FROM contract_tables t
+      JOIN rel r ON r.relname = t.table_name
+      CROSS JOIN connected_role cr
+      WHERE NOT cr.bypasses_rls
+        AND (r.relowner <> cr.oid OR r.relforcerowsecurity)
+    ),
+    missing_policies AS (
+      SELECT pr.relname::text AS name
+      FROM policy_required pr
+      WHERE NOT EXISTS (
+        SELECT 1 FROM pg_policy p
+        WHERE p.polrelid = pr.oid
+          AND p.polname = ${policyParam}
+          AND (
+            0 = ANY (p.polroles)
+            OR EXISTS (
+              SELECT 1 FROM unnest(p.polroles) AS role_oid
+              WHERE pg_has_role(current_user, role_oid, 'MEMBER')
+            )
+          )
+      )
+    ),
+    missing_functions AS (
+      SELECT f AS name
+      FROM unnest(${functionsParam}::text[]) AS f
+      WHERE to_regprocedure('public.' || f) IS NULL
+        OR NOT has_function_privilege(current_user, to_regprocedure('public.' || f), 'EXECUTE')
+    )
+    SELECT
+      has_schema_privilege(current_user, 'public', 'USAGE') AS schema_usable,
+      (SELECT coalesce(array_agg(name ORDER BY name), ARRAY[]::text[]) FROM missing_tables) AS missing_tables,
+      (SELECT coalesce(array_agg(name ORDER BY name), ARRAY[]::text[]) FROM missing_privileges) AS missing_privileges,
+      (SELECT coalesce(array_agg(name ORDER BY name), ARRAY[]::text[]) FROM rls_disabled) AS rls_disabled,
+      (SELECT coalesce(array_agg(name ORDER BY name), ARRAY[]::text[]) FROM missing_policies) AS missing_policies,
+      (SELECT coalesce(array_agg(name ORDER BY name), ARRAY[]::text[]) FROM missing_functions) AS missing_functions
+  `;
+
+  return { sql, params };
+}
+
+const SCHEMA_STATE_SQL = `
+  WITH migration_state AS (
+    SELECT * FROM esdms_schema_migration_state($1)
+  )
+  SELECT
+    migration_state.applied_count,
+    migration_state.latest_applied,
+    migration_state.expected_applied,
+    EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'material_demands'
+        AND column_name = 'draft_delete_eligible'
+        AND data_type = 'boolean'
+        AND is_nullable = 'NO'
+    ) AS required_column_present,
+    EXISTS (
+      SELECT 1 FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'material_demands'
+        AND t.tgname = 'material_demands_forbid_draft_rollback' AND NOT t.tgisinternal
+    ) AS rollback_trigger_present,
+    EXISTS (
+      SELECT 1 FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'material_demands'
+        AND t.tgname = 'material_demands_set_draft_delete_eligible' AND NOT t.tgisinternal
+    ) AS eligibility_trigger_present,
+    to_regprocedure('public.material_demands_forbid_draft_rollback()') IS NOT NULL
+      AS rollback_function_present,
+    to_regprocedure('public.material_demands_set_draft_delete_eligible()') IS NOT NULL
+      AS eligibility_function_present,
+    to_regclass('public.permission_bundles') IS NOT NULL AS permission_bundles_present,
+    to_regclass('public.permission_bundle_permissions') IS NOT NULL AS bundle_permissions_present,
+    to_regclass('public.user_permission_bundle_assignments') IS NOT NULL AS bundle_assignments_present,
+    EXISTS (SELECT 1 FROM permissions WHERE code = 'procurement.site_scope') AS procurement_scope_present,
+    to_regclass('public.drivers') IS NOT NULL AS drivers_present,
+    to_regclass('public.vehicles') IS NOT NULL AS vehicles_present,
+    EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'gate_pass_files' AND column_name = 'evidence_note'
+    ) AS evidence_note_present,
+    EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'gate_pass_files_type_check'
+        AND pg_get_constraintdef(oid) LIKE '%RETURN_ADDITIONAL_PHOTO%'
+        AND pg_get_constraintdef(oid) LIKE '%COMPLETED_PDF%'
+    ) AS evidence_file_types_present,
+    EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'gate_passes' AND column_name = 'driver_id'
+    ) AS gate_pass_fleet_link_present
+  FROM migration_state
+`;
+
+// Object existence: a migration ledger entry is not proof its load-bearing
+// objects still exist, so this verifies both.
+const REQUIRED_SCHEMA_OBJECTS = [
+  ["required_column_present", "material_demands.draft_delete_eligible"],
+  ["rollback_trigger_present", "trigger material_demands_forbid_draft_rollback"],
+  ["eligibility_trigger_present", "trigger material_demands_set_draft_delete_eligible"],
+  ["rollback_function_present", "function material_demands_forbid_draft_rollback()"],
+  ["eligibility_function_present", "function material_demands_set_draft_delete_eligible()"],
+  ["permission_bundles_present", "table permission_bundles"],
+  ["bundle_permissions_present", "table permission_bundle_permissions"],
+  ["bundle_assignments_present", "table user_permission_bundle_assignments"],
+  ["procurement_scope_present", "permission procurement.site_scope"],
+  // Fleet and gate-evidence objects are load-bearing for Driver/Vehicle
+  // management and multi-photo evidence.
+  ["drivers_present", "table drivers"],
+  ["vehicles_present", "table vehicles"],
+  ["gate_pass_fleet_link_present", "gate_passes.driver_id"],
+  ["evidence_note_present", "gate_pass_files.evidence_note"],
+  ["evidence_file_types_present", "constraint gate_pass_files_type_check"],
+];
+
+function summarize(label, names, limit = 8) {
+  const shown = names.slice(0, limit).join(", ");
+  return names.length > limit
+    ? `${label}: ${shown} (+${names.length - limit} more)`
+    : `${label}: ${shown}`;
+}
+
+// The three checks below are deliberately independent and individually
+// fault-tolerant. The schema-level query reads `permissions` and calls
+// esdms_schema_migration_state(), so a privilege problem can stop it before
+// it returns a row — and that is precisely the situation an operator most
+// needs a specific diagnosis for. Letting it throw would collapse every
+// distinguishable cause into one opaque "could not inspect the database".
+// So each check contributes what it can, and the access check (which reads
+// only always-readable system catalogs) is what names the actual defect.
+export async function inspectSchemaCompatibility(executor) {
+  const problems = [];
+
+  let state = null;
+  try {
+    state = (await executor.query(SCHEMA_STATE_SQL, [EXPECTED_MIGRATION])).rows[0];
+  } catch (error) {
+    problems.push(
+      error?.code === "42501"
+        ? "the runtime database role is not permitted to read the schema state"
+        : "the schema state could not be read",
+    );
+  }
+
+  if (state) {
+    if (!state.expected_applied) {
+      problems.push(`migration ${EXPECTED_MIGRATION} has not been applied`);
+    }
+    if (!(state.applied_count >= EXPECTED_MIGRATION_COUNT)) {
+      problems.push(
+        `migration level ${state.applied_count} is below the expected ${EXPECTED_MIGRATION_COUNT}`,
+      );
+    }
+    for (const [field, description] of REQUIRED_SCHEMA_OBJECTS) {
+      if (!state[field]) problems.push(`missing schema object: ${description}`);
+    }
+  }
+
+  const schemaCompatible = problems.length === 0;
+
+  // Runtime access. Reported even when the schema level is already wrong,
+  // so one readiness call gives an operator the complete picture instead of
+  // one problem per redeploy.
+  const { sql, params } = buildAccessQuery();
+  const access = (await executor.query(sql, params)).rows[0];
+
+  if (!access.schema_usable) {
+    problems.push("the runtime database role lacks USAGE on schema public");
+  }
+  if (access.missing_tables.length > 0) {
+    problems.push(summarize("contract tables missing from the database", access.missing_tables));
+  }
+  if (access.missing_privileges.length > 0) {
+    problems.push(
+      summarize("the runtime database role is missing table privileges", access.missing_privileges),
+    );
+  }
+  if (access.rls_disabled.length > 0) {
+    problems.push(summarize("row level security is disabled on", access.rls_disabled));
+  }
+  if (access.missing_policies.length > 0) {
+    problems.push(
+      summarize(`the runtime database role has no ${RUNTIME_POLICY_NAME} policy on`, access.missing_policies),
+    );
+  }
+  if (access.missing_functions.length > 0) {
+    problems.push(summarize("the runtime database role cannot execute", access.missing_functions));
+  }
+
+  const runtimeAccessHealthy =
+    access.schema_usable &&
+    access.missing_tables.length === 0 &&
+    access.missing_privileges.length === 0 &&
+    access.rls_disabled.length === 0 &&
+    access.missing_policies.length === 0 &&
+    access.missing_functions.length === 0;
+
+  // End-to-end serving probe, last: if the two structural checks above ever
+  // miss something, this still catches it, because it is literally the query
+  // authentication runs.
+  let authServingHealthy = true;
+  try {
+    await probeUserProfileServing(executor);
+  } catch (error) {
+    authServingHealthy = false;
+    problems.push(
+      error?.code === "42501"
+        ? "the runtime database role is not permitted to execute the authentication profile query"
+        : "the authentication profile query could not be executed",
+    );
+  }
 
   return {
     expectedMigration: EXPECTED_MIGRATION,
     expectedMigrationCount: EXPECTED_MIGRATION_COUNT,
-    appliedMigrationCount: state.applied_count,
-    latestAppliedMigration: state.latest_applied || null,
+    appliedMigrationCount: state ? state.applied_count : null,
+    latestAppliedMigration: state?.latest_applied || null,
     schemaCompatible,
+    runtimeAccessHealthy,
+    authServingHealthy,
+    ready: schemaCompatible && runtimeAccessHealthy && authServingHealthy,
+    // Actionable and non-secret by construction: object/table/privilege names
+    // this codebase already publishes in docs/SECURITY.md and
+    // scripts/provision-db-roles.sql. No database error text, no connection
+    // string, no row data.
+    problems,
   };
 }

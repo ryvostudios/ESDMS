@@ -16,6 +16,8 @@
     "reset:operational-data": "node scripts/reset-operational-data.js",
     "migrate:down": "node-pg-migrate down",
     "migrate:up:prod": "node-pg-migrate up -d MIGRATION_DATABASE_URL",
+    "db:release": "node scripts/release-database.js",
+    "verify:deployment": "node scripts/verify-deployment.js",
     "user:create-admin": "node scripts/create-admin-user.js",
     "user:create-ceo": "node scripts/create-ceo-user.js",
     "test": "DOTENV_CONFIG_PATH=.env.test node scripts/run-tests-with-disposable-db.js",

@@ -234,15 +234,32 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- post-migration script: current migrations plus a stale/omitted provisioning
 -- run must never satisfy readiness again.
 GRANT EXECUTE ON FUNCTION public.esdms_schema_migration_state(text) TO esdms_runtime;
-CREATE OR REPLACE FUNCTION public.esdms_runtime_provisioning_version()
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-SECURITY INVOKER
-SET search_path = pg_catalog
-AS $function$
-  SELECT '1787427000000_driver-vehicle-master-and-gate-evidence'::text;
-$function$;
+-- The stamp is DERIVED from the migration ledger at provisioning time rather
+-- than hard-coded, for the same reason the table lists below are derived: a
+-- literal that has to be hand-edited after every migration is a drift footgun,
+-- and drift is exactly what this marker exists to detect. Baking in the level
+-- actually present when provisioning ran makes the stale-provisioning case
+-- impossible to fake -- you cannot stamp a level you did not migrate to.
+DO $provision$
+DECLARE
+  provisioned_migration text;
+BEGIN
+  SELECT (ARRAY_AGG(m.name ORDER BY m.id DESC))[1]
+    INTO provisioned_migration
+    FROM public.pgmigrations m;
+
+  IF provisioned_migration IS NULL THEN
+    RAISE EXCEPTION 'No migrations have been applied. Run migrations before provisioning runtime privileges.';
+  END IF;
+
+  EXECUTE format(
+    'CREATE OR REPLACE FUNCTION public.esdms_runtime_provisioning_version() '
+    'RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = pg_catalog '
+    'AS $body$ SELECT %L::text; $body$',
+    provisioned_migration
+  );
+END
+$provision$;
 REVOKE ALL ON FUNCTION public.esdms_runtime_provisioning_version() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.esdms_runtime_provisioning_version() TO esdms_runtime;
 
