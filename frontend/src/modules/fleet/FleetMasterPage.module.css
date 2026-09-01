@@ -103,10 +103,6 @@
   .table {
     display: table;
   }
-
-  .cardList {
-    display: none;
-  }
 }
 
 .cardList {
@@ -116,6 +112,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* Declared AFTER the base .cardList rule, matching MaterialCatalogPage,
+   EmployeesListPage and GatePassListPage. Order matters at equal specificity:
+   this module previously hid .cardList inside the media query ABOVE its own
+   `display: flex`, so the later rule won and the card list rendered
+   underneath the table on every wide screen. */
+@media (min-width: 1100px) {
+  .cardList {
+    display: none;
+  }
 }
 
 .card {
