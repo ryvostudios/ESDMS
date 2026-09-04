@@ -28,7 +28,7 @@ services:
   - type: web
     name: esdms-api-staging
     runtime: node
-    plan: starter
+    plan: free
     rootDir: backend
     buildCommand: npm ci
     startCommand: npm start
