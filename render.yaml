@@ -92,7 +92,7 @@ services:
     envVars:
       # https://api-staging.<company-domain>/api/v1
       - key: VITE_API_URL
-        sync: false
+        value: /api/v1
       - key: VITE_APP_TIMEZONE
         value: Asia/Karachi
       - key: VITE_BUILD_REVISION
@@ -101,6 +101,12 @@ services:
           name: esdms-app-staging
           property: commit
     routes:
+      # Same-origin staging proxy. The browser stays on the frontend origin,
+      # preserving the secure SameSite session-cookie model before custom DNS exists.
+      - type: rewrite
+        source: /api/v1/*
+        destination: https://esdms-api-staging.onrender.com/api/v1/*
+
       # Client-side routing: every non-asset path must serve the SPA shell,
       # otherwise a refresh on /workforce/employees or a scanned Gate Pass QR
       # landing on /guard/verify returns 404 from the static host.
