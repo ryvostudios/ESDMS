@@ -268,22 +268,6 @@ test("exit is rejected before approval (still DRAFT/PENDING)", async () => {
   assert.equal(exit.status, 409);
 });
 
-test("evidence photo is required for exit", async () => {
-  const draft = await createDraft(tokens.admin);
-  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/approve`, { token: tokens.admin });
-
-  const form = new FormData();
-  form.append("odometer", "100");
-
-  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/exit`, {
-    token: tokens.guard,
-    body: form,
-    isForm: true,
-  });
-
-  assert.equal(exit.status, 400);
-});
-
 test("exit rejects a file whose bytes don't match its declared image type", async () => {
   const draft = await createDraft(tokens.admin);
   await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.id}/approve`, { token: tokens.admin });

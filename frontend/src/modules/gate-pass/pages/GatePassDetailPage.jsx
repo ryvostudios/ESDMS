@@ -305,10 +305,13 @@ export function GatePassDetailPage() {
             </div>
           )}
 
-          {(gatePass.departureEvidence || gatePass.returnEvidence) && (
+          {(gatePass.departureAt || gatePass.departureEvidence || gatePass.returnEvidence) && (
             <div className={styles.section}>
               <h2 className={styles.sectionTitle}>Evidence</h2>
               {evidenceError && <p className={styles.pdfError}>{evidenceError}</p>}
+              {!gatePass.departureEvidence && !gatePass.returnEvidence && (
+                <p className={styles.noItems}>No photographic evidence was captured.</p>
+              )}
               <div className={styles.evidenceGrid}>
                 {gatePass.departureEvidence && (
                   <div className={styles.evidenceCard}>

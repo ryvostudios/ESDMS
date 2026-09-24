@@ -342,12 +342,13 @@ test("a Gate Pass with zero material items runs the full lifecycle and both PDFs
   assert.ok(layout.boxes.some((box) => box.text === "No material items"));
   assert.deepEqual(layout.overlaps(), []);
 
-  // Odometer and evidence remain mandatory: zero items does not relax them.
-  const noPhoto = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+  // The odometer remains mandatory: zero items does not relax it.
+  const noOdometer = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
     token: tokens.guard,
-    body: { odometer: 42150 },
+    isForm: true,
+    body: buildMultiPhotoForm({}, 1),
   });
-  assert.equal(noPhoto.status, 400);
+  assert.equal(noOdometer.status, 400);
 
   const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
     token: tokens.guard,
@@ -419,4 +420,264 @@ test("zero items does not bypass any other create or draft-edit validation", asy
   assert.equal(edited.status, 200, JSON.stringify(edited.body));
   const detail = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}`, { token: tokens.teamLead });
   assert.deepEqual(detail.body.data.items, []);
+});
+
+// --- Optional departure/return photos ------------------------------------
+
+function odometerOnlyForm(fields) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
+  return form;
+}
+
+async function gatePassRow(id) {
+  return (await pool.query(
+    `SELECT status, departure_odometer, departure_at, departure_by_user_id, departure_photo_file_id,
+            return_odometer, return_at, return_by_user_id, return_photo_file_id, distance_km
+     FROM gate_passes WHERE id = $1`,
+    [id],
+  )).rows[0];
+}
+
+test("exit and return without photos complete the pass with NULL photo references and no placeholder files", async () => {
+  const id = await approvedPass();
+
+  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 1200 }),
+  });
+  assert.equal(exit.status, 200, JSON.stringify(exit.body));
+  assert.equal(exit.body.data.photoCount, 0);
+
+  const returned = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/return`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 1245, remarks: "No camera available at the gate." }),
+  });
+  assert.equal(returned.status, 200, JSON.stringify(returned.body));
+
+  const row = await gatePassRow(id);
+  assert.equal(row.status, "COMPLETED");
+  assert.equal(row.departure_photo_file_id, null);
+  assert.equal(row.return_photo_file_id, null);
+  // Every other movement field is still recorded.
+  assert.equal(row.departure_odometer, 1200);
+  assert.equal(row.return_odometer, 1245);
+  assert.ok(row.departure_at && row.return_at && row.departure_by_user_id && row.return_by_user_id);
+  assert.equal(row.distance_km, 45);
+
+  const files = await pool.query(
+    "SELECT count(*)::int AS total FROM gate_pass_files WHERE gate_pass_id = $1 AND file_type IN ('DEPARTURE_PHOTO', 'RETURN_PHOTO')",
+    [id],
+  );
+  assert.equal(files.rows[0].total, 0, "no fake evidence rows are written");
+
+  const audit = await pool.query(
+    "SELECT action, metadata FROM gate_pass_audit_log WHERE gate_pass_id = $1 AND action IN ('EXIT', 'RETURN') ORDER BY created_at",
+    [id],
+  );
+  assert.deepEqual(audit.rows.map((entry) => [entry.action, entry.metadata.photoCount, entry.metadata.odometer]), [
+    ["EXIT", 0, 1200],
+    ["RETURN", 0, 1245],
+  ]);
+
+  const detail = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}`, { token: tokens.teamLead });
+  assert.equal(detail.body.data.departureEvidence, null);
+  assert.equal(detail.body.data.returnEvidence, null);
+  assert.equal(detail.body.data.distanceKm, 45);
+
+  const job = await pool.query(
+    "SELECT * FROM notification_outbox WHERE entity_id = $1 AND event_type = 'GENERATE_COMPLETION_PDF'",
+    [id],
+  );
+  const layout = recordLayout();
+  try {
+    await gatePassService.processCompletionPdfJob(job.rows[0]);
+  } finally {
+    layout.restore();
+  }
+  const drawn = layout.boxes.map((box) => box.text);
+  assert.equal(drawn.filter((text) => text === "No photographic evidence was captured.").length, 2);
+  assert.ok(!layout.boxes.some((box) => box.kind === "image"), "no image is fabricated");
+  assert.equal(drawn[drawn.indexOf("Distance Travelled") + 1], "45 km");
+  assert.deepEqual(layout.overlaps(), []);
+});
+
+test("exit and return with photos still store typed references and render the evidence", async () => {
+  const id = await approvedPass();
+
+  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard,
+    isForm: true,
+    body: buildMultiPhotoForm({ odometer: 300 }, 1),
+  });
+  assert.equal(exit.status, 200, JSON.stringify(exit.body));
+  const returned = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/return`, {
+    token: tokens.guard,
+    isForm: true,
+    body: buildMultiPhotoForm({ odometer: 300 }, 1),
+  });
+  assert.equal(returned.status, 200, JSON.stringify(returned.body));
+
+  const row = await gatePassRow(id);
+  const types = await pool.query(
+    "SELECT id, file_type FROM gate_pass_files WHERE id = ANY($1::uuid[])",
+    [[row.departure_photo_file_id, row.return_photo_file_id]],
+  );
+  const typeById = Object.fromEntries(types.rows.map((file) => [file.id, file.file_type]));
+  assert.equal(typeById[row.departure_photo_file_id], "DEPARTURE_PHOTO");
+  assert.equal(typeById[row.return_photo_file_id], "RETURN_PHOTO");
+  assert.equal(row.distance_km, 0);
+
+  const audit = await pool.query(
+    "SELECT metadata FROM gate_pass_audit_log WHERE gate_pass_id = $1 AND action IN ('EXIT', 'RETURN')",
+    [id],
+  );
+  assert.deepEqual(audit.rows.map((entry) => entry.metadata.photoCount), [1, 1]);
+
+  const job = await pool.query(
+    "SELECT * FROM notification_outbox WHERE entity_id = $1 AND event_type = 'GENERATE_COMPLETION_PDF'",
+    [id],
+  );
+  const layout = recordLayout();
+  try {
+    await gatePassService.processCompletionPdfJob(job.rows[0]);
+  } finally {
+    layout.restore();
+  }
+  assert.equal(layout.boxes.filter((box) => box.kind === "image").length, 2);
+  assert.ok(!layout.boxes.some((box) => box.text === "No photographic evidence was captured."));
+  assert.deepEqual(layout.overlaps(), []);
+});
+
+test("optional photos do not relax the odometer, lifecycle or permission rules", async () => {
+  const id = await approvedPass();
+
+  const noOdometer = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({}),
+  });
+  assert.equal(noOdometer.status, 400);
+
+  // Only a Gate Keeper permission may record the movement.
+  const notGuard = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.teamLead,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 10 }),
+  });
+  assert.equal(notGuard.status, 403);
+
+  // Another site's Gate Keeper cannot move this pass.
+  const otherSite = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.otherSiteGuard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 10 }),
+  });
+  assert.equal(otherSite.status, 404);
+
+  // Return before exit is still a lifecycle violation, photo or not.
+  const earlyReturn = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/return`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 20 }),
+  });
+  assert.equal(earlyReturn.status, 409);
+
+  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 500 }),
+  });
+  assert.equal(exit.status, 200, JSON.stringify(exit.body));
+
+  const noReturnOdometer = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/return`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ remarks: "forgot the reading" }),
+  });
+  assert.equal(noReturnOdometer.status, 400);
+
+  const backwards = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/return`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 499 }),
+  });
+  assert.equal(backwards.status, 400);
+
+  // A draft (never approved) still cannot exit, even without a photo.
+  const draft = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes", {
+    token: tokens.teamLead,
+    body: buildCreatePayload({ issuingDepartmentId: users.departmentA }),
+  });
+  const draftExit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${draft.body.data.id}/exit`, {
+    token: tokens.guard,
+    isForm: true,
+    body: odometerOnlyForm({ odometer: 1 }),
+  });
+  assert.equal(draftExit.status, 409);
+});
+
+test("database: photo references are optional, every other movement field and the evidence type are still enforced", async () => {
+  const withoutPhotos = await approvedPass();
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${withoutPhotos}/exit`, {
+    token: tokens.guard, isForm: true, body: odometerOnlyForm({ odometer: 10 }),
+  });
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${withoutPhotos}/return`, {
+    token: tokens.guard, isForm: true, body: odometerOnlyForm({ odometer: 20 }),
+  });
+  assert.equal((await gatePassRow(withoutPhotos)).status, "COMPLETED");
+
+  // Required movement fields still hold at the database, independent of the service.
+  for (const column of ["departure_odometer", "departure_at", "departure_by_user_id", "return_odometer", "return_at", "return_by_user_id"]) {
+    await assert.rejects(
+      pool.query(`UPDATE gate_passes SET ${column} = NULL WHERE id = $1`, [withoutPhotos]),
+      (error) => error.constraint === "gate_passes_status_field_coherence_check",
+      `${column} must remain required on a COMPLETED pass`,
+    );
+  }
+
+  // A supplied reference must still be the right kind of file.
+  const withPhotos = await approvedPass();
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${withPhotos}/exit`, {
+    token: tokens.guard, isForm: true, body: buildMultiPhotoForm({ odometer: 10 }, 1),
+  });
+  const departure = (await gatePassRow(withPhotos)).departure_photo_file_id;
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET return_photo_file_id = $2 WHERE id = $1", [withoutPhotos, departure]),
+    /return_photo_file_id must reference a gate_pass_files row with file_type = RETURN_PHOTO/,
+  );
+  await assert.rejects(
+    pool.query("UPDATE gate_passes SET status = 'DRAFT' WHERE id = $1", [withoutPhotos]),
+    /cannot move from COMPLETED to DRAFT/,
+  );
+});
+
+test("evidence of a photo-less pass stays authenticated and site-scoped", async () => {
+  const id = await approvedPass();
+  await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard, isForm: true, body: odometerOnlyForm({ odometer: 10 }),
+  });
+
+  const own = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}/evidence`, { token: tokens.guard });
+  assert.equal(own.status, 200);
+  assert.deepEqual(own.body.data, []);
+
+  const otherSite = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}/evidence`, { token: tokens.otherSiteGuard });
+  assert.equal(otherSite.status, 404);
+
+  const anonymous = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}/evidence`);
+  assert.equal(anonymous.status, 401);
+
+  // Additional evidence added later is still accepted on the photo-less pass
+  // and still requires a photo of its own.
+  const late = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/evidence`, {
+    token: tokens.guard, isForm: true, body: buildMultiPhotoForm({ kind: "OUTBOUND" }, 1),
+  });
+  assert.equal(late.status, 201, JSON.stringify(late.body));
+  const empty = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/evidence`, {
+    token: tokens.guard, isForm: true, body: odometerOnlyForm({ kind: "OUTBOUND" }),
+  });
+  assert.equal(empty.status, 400);
 });

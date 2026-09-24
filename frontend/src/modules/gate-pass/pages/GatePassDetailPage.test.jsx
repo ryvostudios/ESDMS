@@ -148,3 +148,29 @@ describe("GatePassDetailPage — optional items, Gate Keeper wording and distanc
     expect(screen.getByText("0 km")).toBeTruthy();
   });
 });
+
+describe("GatePassDetailPage — optional gate photos", () => {
+  test("a movement recorded without photos says so and offers no photo to view", async () => {
+    mockGatePass = {
+      ...baseGatePass,
+      status: "COMPLETED",
+      departureOdometer: 10,
+      returnOdometer: 20,
+      departureAt: "2026-01-01T01:00:00.000Z",
+      returnAt: "2026-01-01T02:00:00.000Z",
+      distanceKm: 10,
+      departureEvidence: null,
+      returnEvidence: null,
+    };
+    await renderPage();
+
+    expect(screen.getByText("No photographic evidence was captured.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View Photo" })).toBeNull();
+    expect(screen.getByText("10 km")).toBeTruthy();
+  });
+
+  test("a pass that has not left the gate shows no evidence section at all", async () => {
+    await renderPage();
+    expect(screen.queryByText("No photographic evidence was captured.")).toBeNull();
+  });
+});

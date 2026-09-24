@@ -85,8 +85,9 @@ function toVerifiedPhoto(file) {
 }
 
 // Every uploaded photo, in request order, from either field name. The first
-// one is what exit/return store as the event's primary photo (the column the
-// status-coherence CHECK requires); the rest are additional evidence rows.
+// one is what exit/return store as the event's primary photo (optional — the
+// reference stays NULL when none was captured); the rest are additional
+// evidence rows.
 export function extractPhotos(req) {
   const files = [...(req.files?.photo ?? []), ...(req.files?.photos ?? [])];
   return files.map(toVerifiedPhoto);

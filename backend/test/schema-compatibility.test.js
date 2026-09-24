@@ -10,8 +10,8 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 43,
-  latest_applied: "1787432000000_company-organization-reference",
+  applied_count: 44,
+  latest_applied: "1787433000000_gate-pass-optional-photo-evidence",
   expected_applied: true,
   required_column_present: true,
   rollback_trigger_present: true,

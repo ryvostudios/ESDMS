@@ -644,7 +644,7 @@ async function storeEvidenceBatch(client, { gatePassId, photos, fileType, actorI
     version += 1;
   }
 
-  return fileIds[0];
+  return fileIds[0] ?? null;
 }
 
 // Additional gate evidence captured outside the exit/return transitions.
@@ -751,11 +751,9 @@ export async function recordExit(actor, id, { odometer, photo, photos }) {
     throw new ForbiddenError();
   }
 
+  // Photos are optional evidence: none means "no photographic evidence was
+  // captured", recorded as a NULL reference — never a placeholder file.
   const evidence = photos?.length ? photos : photo ? [photo] : [];
-
-  if (!evidence.length) {
-    throw new ValidationError("A departure photo is required.");
-  }
 
   // Every state-dependent check runs, under the row lock, before a single
   // byte is written to disk — a rejected transition never creates a file
@@ -812,10 +810,6 @@ export async function recordReturn(actor, id, { odometer, photo, photos, remarks
   }
 
   const evidence = photos?.length ? photos : photo ? [photo] : [];
-
-  if (!evidence.length) {
-    throw new ValidationError("A return photo is required.");
-  }
 
   // Same ordering as recordExit: validate under the row lock first, write
   // to disk only once the transition is known-good, and compensate with a

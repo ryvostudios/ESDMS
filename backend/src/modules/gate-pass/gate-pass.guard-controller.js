@@ -69,10 +69,6 @@ export const exit = asyncHandler(async (req, res) => {
   const { odometer } = parseBody(exitActionSchema, req.body);
   const photos = extractPhotos(req);
 
-  if (!photos.length) {
-    throw new ValidationError("A departure photo is required.");
-  }
-
   await service.recordExit(req.user, req.params.id, { odometer, photos });
   res.status(200).json({
     success: true,
@@ -83,10 +79,6 @@ export const exit = asyncHandler(async (req, res) => {
 export const returnVehicle = asyncHandler(async (req, res) => {
   const { odometer, remarks } = parseBody(returnActionSchema, req.body);
   const photos = extractPhotos(req);
-
-  if (!photos.length) {
-    throw new ValidationError("A return photo is required.");
-  }
 
   await service.recordReturn(req.user, req.params.id, { odometer, photos, remarks });
   res.status(200).json({
