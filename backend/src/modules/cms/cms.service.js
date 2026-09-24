@@ -72,8 +72,6 @@ export async function audit(actor, query) {
 }
 export function integrations() {
   return [
-    {name:'Dropbox',state:'not_configured',detail:'Not implemented. Future account linking will use OAuth.'},
-    {name:'Google Drive',state:'not_configured',detail:'Not implemented. Future account linking will use OAuth.'},
     {name:'Attendance',state:'not_configured',detail:'Deferred until the company PC attendance application is supplied.'},
     {name:'Current file storage',state:'configured',detail:`${config.storageProvider} provider selected; connectivity is not verified here.`},
     {name:'Notifications',state:config.whatsapp.enabled?'configured':'not_configured',detail:'Provider configuration only; delivery and connectivity are not verified here.'},

@@ -9,6 +9,7 @@ export async function audit({ scope, query, ceo }) {
       a.actor_user_id,u.full_name AS actor_name,a.target_user_id,a.target_employee_id,
       CASE WHEN a.action='CONFIGURATION_CHANGED' THEN a.metadata->>'targetId' END AS configuration_target_id,
       CASE WHEN a.action='CMS_SETTING_CHANGED' THEN a.metadata->>'key'
+           WHEN a.action='CLOUD_STORAGE_CHANGED' THEN a.metadata->>'event'
            WHEN a.action='PERMISSION_METADATA_CHANGED' THEN a.metadata->>'code'
            WHEN a.action='CONFIGURATION_CHANGED' THEN a.metadata->>'table' END AS configuration_key,
       CASE WHEN a.action='CMS_SETTING_CHANGED' THEN jsonb_build_object('before',a.metadata->'before','after',a.metadata->'after') END AS change

@@ -1,3 +1,4 @@
+import { cloudConfig } from '../shared/storage/cloud-config.js';
 import "dotenv/config";
 import { getDomain } from "tldts";
 
@@ -208,6 +209,8 @@ const appTimezone = process.env.APP_TIMEZONE || "Asia/Karachi";
 if (!isValidTimezone(appTimezone)) {
   throw new Error(`APP_TIMEZONE "${appTimezone}" is not a recognized IANA timezone.`);
 }
+
+cloudConfig(); // Fail closed on inconsistent provider/encryption deployment configuration.
 
 const storageProvider = process.env.STORAGE_PROVIDER || "local";
 

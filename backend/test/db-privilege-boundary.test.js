@@ -137,6 +137,10 @@ const CAPABILITY_BUNDLE_TABLES = [
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
   "cms_settings",
+  "cloud_storage_connections",
+  "cloud_storage_active",
+  "cloud_storage_oauth_states",
+  "cloud_storage_objects",
   "user_permission_overrides",
   "governance_audit_log",
   ...WORKFORCE_TABLES,
@@ -495,12 +499,12 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
 
   const explicitGrant = sql.match(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE([\s\S]*?)TO esdms_runtime;/i)?.[1];
   assert.ok(explicitGrant, "expected one explicit runtime table grant");
-  for (const table of RUNTIME_APPLICATION_TABLES.filter((name) => name !== "cms_settings" && !CAPABILITY_BUNDLE_TABLES.includes(name))) {
+  for (const table of RUNTIME_APPLICATION_TABLES.filter((name) => !["cms_settings", "cloud_storage_connections", "cloud_storage_active", "cloud_storage_oauth_states", "cloud_storage_objects"].includes(name) && !CAPABILITY_BUNDLE_TABLES.includes(name))) {
     assert.match(explicitGrant, new RegExp(`public\\.${table}\\b`));
   }
   assert.match(sql, /GRANT SELECT ON TABLE\s+public\.permission_bundles,\s+public\.permission_bundle_permissions\s+TO esdms_runtime/is);
-  assert.match(sql, /GRANT SELECT, INSERT, DELETE ON TABLE\s+public\.user_permission_bundle_assignments\s+TO esdms_runtime/is);
-  assert.match(sql, /GRANT SELECT, UPDATE ON TABLE\s+public\.cms_settings\s+TO esdms_runtime/is);
+  assert.match(sql, /GRANT SELECT, INSERT, DELETE ON TABLE\s+public\.user_permission_bundle_assignments,\s+public\.cloud_storage_oauth_states\s+TO esdms_runtime/is);
+  assert.match(sql, /GRANT SELECT, UPDATE ON TABLE\s+public\.cms_settings,\s+public\.cloud_storage_connections,\s+public\.cloud_storage_active\s+TO esdms_runtime/is);
   assert.doesNotMatch(explicitGrant, /public\.cms_settings\b/);
   assert.doesNotMatch(explicitGrant, /pgmigrations/);
 
@@ -566,9 +570,11 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
       [...RUNTIME_APPLICATION_TABLES].sort(),
     );
     for (const row of directTablePrivileges.rows) {
-      const expected = row.table_name === "cms_settings"
+      const expected = ["cms_settings", "cloud_storage_connections", "cloud_storage_active"].includes(row.table_name)
         ? ["SELECT", "UPDATE"]
-        : row.table_name === "user_permission_bundle_assignments"
+        : row.table_name === "cloud_storage_objects"
+        ? ["INSERT", "SELECT", "UPDATE"]
+        : ["user_permission_bundle_assignments", "cloud_storage_oauth_states"].includes(row.table_name)
         ? ["DELETE", "INSERT", "SELECT"]
         : ["permission_bundles", "permission_bundle_permissions"].includes(row.table_name)
           ? ["SELECT"]

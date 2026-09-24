@@ -5,7 +5,7 @@ export const AREAS = [
   { id: 'workforce', label: 'Workforce Configuration', permissions: ['workforce.configuration.manage', 'employment_types.manage', 'rotation.manage', 'leave.manage'] },
   { id: 'branding', label: 'Branding', permissions: ['cms.branding.manage'] },
   { id: 'content', label: 'Application Content', permissions: ['cms.content.manage'] },
-  { id: 'integrations', label: 'Integrations', permissions: ['cms.integrations.view'] },
+  { id: 'integrations', label: 'Integrations', permissions: ['cms.integrations.view','cms.integrations.manage'] },
   { id: 'audit', label: 'Audit Center', permissions: ['cms.audit.view'] },
   { id: 'system', label: 'System', permissions: ['cms.system.view'] },
 ];

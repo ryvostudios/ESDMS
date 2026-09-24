@@ -92,14 +92,14 @@ export async function uploadDraftFile(actor, employeeId, contractId, file) {
   const previousKey = contract.storage_key;
   let newKey;
   try {
+    const saved = await storageService.save(file.buffer, {
+      gatePassId: contract.id,
+      category: "draft",
+      extension: file.extension,
+      namespace: "workforce",
+    });
+    newKey = saved.storageKey;
     const result = await withTransaction(async (client) => {
-      const saved = await storageService.save(file.buffer, {
-        gatePassId: contract.id,
-        category: "draft",
-        extension: file.extension,
-        namespace: "workforce",
-      });
-      newKey = saved.storageKey;
 
       const updated = await repo.replaceDraftFile(client, contract.id, {
         storageKey: saved.storageKey,

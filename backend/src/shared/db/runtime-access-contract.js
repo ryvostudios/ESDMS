@@ -90,6 +90,10 @@ export const RUNTIME_TABLE_PRIVILEGES = Object.freeze({
   user_permission_overrides: DML,
   users: DML,
   vehicles: DML,
+  cloud_storage_connections: Object.freeze(["SELECT", "UPDATE"]),
+  cloud_storage_active: Object.freeze(["SELECT", "UPDATE"]),
+  cloud_storage_oauth_states: APPEND_REMOVE,
+  cloud_storage_objects: Object.freeze(["SELECT", "INSERT", "UPDATE"]),
   cms_settings: Object.freeze(["SELECT", "UPDATE"]),
   // Capability definitions are migration-owned reference data: readable by
   // the runtime, never rewritten by it.

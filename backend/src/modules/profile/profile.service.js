@@ -169,14 +169,14 @@ export async function uploadProfilePhoto(actor, employeeId, photo) {
 
   let storageKey;
   try {
+    const saved = await storageService.save(photo.buffer, {
+      gatePassId: employee.id,
+      category: "profile-photo",
+      extension: photo.extension,
+      namespace: "workforce",
+    });
+    storageKey = saved.storageKey;
     const result = await withTransaction(async (client) => {
-      const saved = await storageService.save(photo.buffer, {
-        gatePassId: employee.id,
-        category: "profile-photo",
-        extension: photo.extension,
-        namespace: "workforce",
-      });
-      storageKey = saved.storageKey;
 
       const photoRow = await insertProfilePhoto(client, {
         employeeId: employee.id,

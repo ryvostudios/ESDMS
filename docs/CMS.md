@@ -20,7 +20,7 @@ its own capability; existing APIs retain their own checks.
 | Permission Catalog | `cms.permissions.view` or `cms.permissions.manage`; editing requires manage |
 | Branding | `cms.branding.manage` |
 | Application Content | `cms.content.manage` |
-| Integrations | `cms.integrations.view` |
+| Integrations | `cms.integrations.view` or `cms.integrations.manage`; mutations require manage |
 | Audit Center | `cms.audit.view` |
 | System | `cms.system.view` |
 
@@ -134,11 +134,11 @@ readiness booleans. It never exposes connection strings, credentials, database
 role details, environment dumps or underlying query errors. Integrations show
 honest unimplemented/provider-selected status, not verified connectivity.
 
-No provider connection or credential storage exists in this foundation. Future
-Dropbox/Google Drive work requires OAuth and encrypted server-side credential
-storage with externally managed keys, revocation, masked metadata and audited
-replacement. Attendance design waits for its codebase. Do not repurpose public
-text settings as a credential store.
+Cloud Storage now provides permission-controlled Dropbox/Google Drive OAuth,
+encrypted server-side tokens and explicit selection for new writes. See
+[CLOUD_STORAGE.md](CLOUD_STORAGE.md) for deployment setup, restrictions and live
+verification requirements. Attendance remains deferred. CMS text settings must
+never be used as a credential store.
 
 ## Release and verification
 

@@ -69,14 +69,14 @@ export async function uploadDocument(actor, employeeId, documentTypeId, file, { 
 
   let storageKey;
   try {
+    const saved = await storageService.save(file.buffer, {
+      gatePassId: employee.id,
+      category: `document-${docType.id}`,
+      extension: file.extension,
+      namespace: "workforce",
+    });
+    storageKey = saved.storageKey;
     return await withTransaction(async (client) => {
-      const saved = await storageService.save(file.buffer, {
-        gatePassId: employee.id,
-        category: `document-${docType.id}`,
-        extension: file.extension,
-        namespace: "workforce",
-      });
-      storageKey = saved.storageKey;
 
       const inserted = await insertDocument(client, {
         employeeId: employee.id,

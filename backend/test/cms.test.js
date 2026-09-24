@@ -93,7 +93,7 @@ test('audit projection retains historical site, paginates deterministically and 
 test('system and integration status only expose fixed safe projections, no credential endpoints',async()=>{
   const system=await call(tokens.ceo,'GET','/cms/system');assert.equal(system.status,200,JSON.stringify(system.body));
   assert.deepEqual(Object.keys(system.body.data).sort(),['backendRevision','environment','expectedMigration','latestMigration','expectedProvisioning','actualProvisioning','ready','schemaCompatible','authServingHealthy','runtimeAccessHealthy','runtimeProvisioningCompatible'].sort());
-  assert.equal(system.body.data.expectedMigration,'1787435000000_cms-document-branding');
+  assert.equal(system.body.data.expectedMigration,'1787436000000_cloud-storage');
   const integrations=await call(tokens.ceo,'GET','/cms/integrations');assert.equal(integrations.status,200);
   assert.ok(integrations.body.data.filter(i=>['Dropbox','Google Drive','Attendance'].includes(i.name)).every(i=>i.state==='not_configured'));
   assert.equal((await call(tokens.ceo,'POST','/cms/integrations',{token:'not accepted'})).status,404);

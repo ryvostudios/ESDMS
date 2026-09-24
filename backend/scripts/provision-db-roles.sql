@@ -165,7 +165,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.vehicles
 TO esdms_runtime;
 
-GRANT SELECT, UPDATE ON TABLE public.cms_settings TO esdms_runtime;
+GRANT SELECT, UPDATE ON TABLE public.cms_settings, public.cloud_storage_connections, public.cloud_storage_active TO esdms_runtime;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.cloud_storage_objects TO esdms_runtime;
 
 -- Capability definitions are migration-owned reference data. Runtime may
 -- read them but never rewrite bundle membership. Assignment provenance is
@@ -175,7 +176,7 @@ GRANT SELECT ON TABLE
   public.permission_bundle_permissions
 TO esdms_runtime;
 GRANT SELECT, INSERT, DELETE ON TABLE
-  public.user_permission_bundle_assignments
+  public.user_permission_bundle_assignments, public.cloud_storage_oauth_states
 TO esdms_runtime;
 
 -- Supabase browser-facing roles are not an application authorization path.
@@ -273,6 +274,10 @@ ALTER TABLE public.department_material_catalog ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.carry_forward_allocations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.delivery_challan_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.delivery_challans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cloud_storage_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cloud_storage_active ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cloud_storage_oauth_states ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cloud_storage_objects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cms_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.document_number_counters ENABLE ROW LEVEL SECURITY;
@@ -349,6 +354,10 @@ BEGIN
     'delivery_challan_lines',
     'delivery_challans',
     'cms_settings',
+    'cloud_storage_connections',
+    'cloud_storage_active',
+    'cloud_storage_oauth_states',
+    'cloud_storage_objects',
     'departments',
     'drivers',
     'document_number_counters',
@@ -546,6 +555,10 @@ dml_privileges(privilege_type) AS (
 expected_privileges(table_name, privilege_type) AS (
   SELECT e.table_name, p.privilege_type FROM expected_tables e CROSS JOIN dml_privileges p
   UNION ALL VALUES
+    ('cloud_storage_connections', 'SELECT'), ('cloud_storage_connections', 'UPDATE'),
+    ('cloud_storage_active', 'SELECT'), ('cloud_storage_active', 'UPDATE'),
+    ('cloud_storage_oauth_states', 'SELECT'), ('cloud_storage_oauth_states', 'INSERT'), ('cloud_storage_oauth_states', 'DELETE'),
+    ('cloud_storage_objects', 'SELECT'), ('cloud_storage_objects', 'INSERT'), ('cloud_storage_objects', 'UPDATE'),
     ('cms_settings', 'SELECT'),
     ('cms_settings', 'UPDATE'),
     ('permission_bundles', 'SELECT'),

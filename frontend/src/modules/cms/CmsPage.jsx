@@ -1,3 +1,4 @@
+import { CloudStoragePanel } from './CloudStoragePanel.jsx';
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiClient } from '../../core/api/client.js';
@@ -30,7 +31,8 @@ export function CmsPage() {
     {area==='workforce' && <WorkforceConfigPage section="workforce"/>}
     {area==='permissions' && <PermissionCatalog/>}
     {['branding','content'].includes(area) && <Settings key={area} category={area}/>}
-    {area==='integrations' && <ReadOnly path="integrations" render={items=><><p>No credentials are stored or accepted here. Provider connections are deferred.</p><div className={styles.cards}>{items.map(item=><section className={styles.panel} key={item.name}><h2>{item.name}</h2><p>{item.state.replaceAll('_',' ')}</p><p>{item.detail}</p></section>)}</div></>}/>}
+    {area==='integrations' && <CloudStoragePanel/>}
+    {area==='integrations' && <ReadOnly path="integrations" render={items=><><p>Other integration status</p><div className={styles.cards}>{items.map(item=><section className={styles.panel} key={item.name}><h2>{item.name}</h2><p>{item.state.replaceAll('_',' ')}</p><p>{item.detail}</p></section>)}</div></>}/>}
     {area==='audit' && <AuditCenter/>}
     {area==='system' && <ReadOnly path="system" render={data=><section className={styles.panel}><h2>Serving status</h2><p>{data.ready?'Ready':'Not ready — release verification required'}</p><dl className={styles.details}>{Object.entries(data).map(([key,value])=><div key={key}><dt>{key.replace(/([A-Z])/g,' $1')}</dt><dd>{String(value??'Not available')}</dd></div>)}</dl><p>Frontend revision: {import.meta.env.VITE_BUILD_REVISION || 'development'}</p></section>}/>}
   </div>;

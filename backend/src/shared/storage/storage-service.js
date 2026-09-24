@@ -1,3 +1,4 @@
+import { RoutedStorageService } from './cloud-store.js';
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -280,4 +281,4 @@ export function createStorageService(source = config) {
   throw new Error(`Unknown STORAGE_PROVIDER "${source.storageProvider}" (expected "local" or "supabase").`);
 }
 
-export const storageService = createStorageService();
+export const storageService = new RoutedStorageService(createStorageService());

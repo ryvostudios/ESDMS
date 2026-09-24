@@ -10,9 +10,10 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 46,
-  latest_applied: "1787435000000_cms-document-branding",
+  applied_count: 47,
+  latest_applied: "1787436000000_cloud-storage",
   expected_applied: true,
+  cloud_storage_columns_present: true,
   cms_columns_present: true,
   cms_audit_scope_trigger_present: true,
   required_column_present: true,
@@ -179,7 +180,7 @@ test("problem summaries stay bounded and never carry database error text", async
 });
 
 test("CMS scope trigger and metadata are load-bearing even when the migration ledger is current", async () => {
-  for (const field of ["cms_columns_present", "cms_audit_scope_trigger_present"]) {
+  for (const field of ["cms_columns_present", "cms_audit_scope_trigger_present", "cloud_storage_columns_present"]) {
     const result = await inspectSchemaCompatibility(executorWith({ schema: { [field]: false } }));
     assert.equal(result.ready, false);
     assert.equal(result.schemaCompatible, false);

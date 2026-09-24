@@ -90,7 +90,7 @@ export async function guardUmCreateAuthority(actor, requestedRole) {
 // Delegation is bounded by effective authority, never by position/title.
 // Authority to administer access is itself CEO-delegated, not transitive.
 export function isReservedDelegationPermission(code) {
-  return code.startsWith("users.") || code.startsWith("permission_overrides.") ||
+  return code === "cms.integrations.manage" || code.startsWith("users.") || code.startsWith("permission_overrides.") ||
     code.startsWith("employees.account.") || code.endsWith(".all_sites") ||
     code.endsWith(".all_departments");
 }
