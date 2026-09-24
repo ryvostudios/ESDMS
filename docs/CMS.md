@@ -37,24 +37,74 @@ Permission codes and enforcement remain application-controlled. The existing
 `permissions` table now holds display name, category and help text alongside its
 existing description. The CMS edits metadata only; no creation/rename API exists.
 
-`cms_settings` contains seven seeded, allowlisted plain-text keys. Company name,
-short name and contact details form the branding foundation. Sign-in heading/help,
+`cms_settings` contains seeded, allowlisted keys. Company name, short name,
+contact details and document issuer name form the branding text (plus the
+managed logo reference, see Document branding). Sign-in heading/help,
 announcement and support text form application content. Each has server-side
 length/type validation, labels and descriptions. Markup/control characters and
 unknown keys are rejected. React renders values as text. Edits require the current
 revision, preventing stale updates, and audit in the same transaction.
 
-All seven values are deliberately public. `/api/v1/cms/public-content` is the sole
+All plain-text values are deliberately public; the logo reference is not. `/api/v1/cms/public-content` is the sole
 unauthenticated CMS endpoint and returns only these values with no-store headers.
 Do not put confidential company announcements, credentials or employee data here.
 Sign-in consumes company labels and login text; the application shell consumes
 announcement/support text. Fetch failures retain safe defaults and never block
 authentication. New text appears on a fresh page load.
 
-No logo has been supplied; no replacement logo or upload endpoint is added.
-Contact details are reserved for later document branding. Existing generated and
-issued documents are untouched. A future document-branding checkpoint must add
-asset validation and version/snapshot semantics before consuming these settings.
+## Document branding
+
+Migration `1787435000000_cms-document-branding` extends the same allowlist
+(no new table, no new grants) with two branding keys:
+
+- `document.company_name` — issuer name printed on newly generated documents
+  (default `E-Set Engineering Services`). Public plain text like the others.
+- `company.logo` — managed only by the logo endpoints below; the generic
+  setting PATCH refuses it. `''` means the bundled default logo. Otherwise it
+  holds a server-written reference (storage key, SHA-256, type, dimensions)
+  that is never returned to clients or written to audit.
+
+`company.contact_details` is now printed as a small line under the issuer name.
+
+**Logo source.** The default is the real E-Set logo
+(`eset-logo-header.png`, 1200×630 RGBA) with only its fully transparent margin
+trimmed (pixels, colours and proportions untouched), bundled at
+`backend/assets/branding/eset-logo.png` (353×402). Runtime code never reads a
+developer Desktop path.
+
+**Logo management** (`cms.branding.manage`, server-enforced; explicit DENY wins):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/cms/branding/logo` | Public read of the active logo (sign-in needs it). Served only as its validated `image/png`/`image/jpeg`, `nosniff`, ETag. |
+| `PUT /api/v1/cms/branding/logo` | Multipart `logo` + `revision`. PNG/JPEG only, ≤ 2 MB, 32–4096 px. The declared type is re-checked against the bytes, PNG pixel data is fully inflated and the image is parsed as the PDF renderer will parse it. SVG and anything else is rejected. The client filename is ignored; bytes go through the existing storage service under a server-generated key. |
+| `DELETE /api/v1/cms/branding/logo` | `{ revision }` — restore the bundled default. |
+
+Every change requires the current revision and writes `CMS_SETTING_CHANGED`
+in the same transaction with a safe description only (for example
+`Uploaded PNG 353×402, 149 KB, sha256 1a2b3c4d5e6f`) — never bytes, base64,
+storage keys or URLs. Superseded logo files are kept as configuration history.
+
+**Documents.** `backend/src/shared/documents/branding.js` is the single source
+of issuer identity: logo (aspect ratio preserved, max 120×46 pt), issuer name,
+document title and optional contact line. It is used by the Gate Pass
+approval and completion PDFs, IPO, Delivery Challan and Demand List. Each
+document keeps its existing projected data; branding adds no fields.
+
+**Historical documents.**
+
+- Gate Pass (approval, completion), IPO and Delivery Challan PDFs are rendered
+  once, persisted, and thereafter served as the stored bytes. A later branding
+  change never alters an issued document; only newly generated ones use it.
+- The Demand List PDF has never been persisted: it is regenerated from live
+  Demand data on every download, so it also uses the current branding. This is
+  deliberate — it is a working request list, not an issued document — and no
+  Demand schema or logic was changed for branding.
+
+**Fallback.** Branding never blocks a document. If settings cannot be read,
+defaults are used. If a configured uploaded logo is missing or fails its
+checksum, the document shows text identity only and the public logo endpoint
+returns 404 — a different logo is never substituted.
 
 ## Audit and system information
 

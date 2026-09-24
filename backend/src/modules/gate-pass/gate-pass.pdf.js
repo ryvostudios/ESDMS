@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { formatDate, formatDateTime } from "../../shared/time/app-timezone.js";
+import { drawBrandHeader, loadDocumentBranding } from "../../shared/documents/branding.js";
 
 function collectPdfBuffer(doc) {
   return new Promise((resolve, reject) => {
@@ -94,16 +95,16 @@ export function drawItemsTable(doc, items) {
   }
 }
 
-export async function generateGatePassPdf(gatePass, items, verificationUrl) {
+// `branding` is resolved centrally when not supplied (tests pass it).
+export async function generateGatePassPdf(gatePass, items, verificationUrl, branding) {
+  const brand = branding ?? (await loadDocumentBranding());
   const qrDataUrl = await QRCode.toDataURL(verificationUrl, { margin: 1, width: 220 });
   const qrImage = Buffer.from(qrDataUrl.split(",")[1], "base64");
 
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN });
   const bufferPromise = collectPdfBuffer(doc);
 
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#0f172a").text("E-Set Digital Management System");
-  doc.font("Helvetica").fontSize(12).fillColor("#475569").text("Gate Pass");
-  doc.moveDown(1);
+  drawBrandHeader(doc, brand, { title: "Gate Pass" });
 
   doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(gatePass.gate_pass_number);
   doc.moveDown(1);

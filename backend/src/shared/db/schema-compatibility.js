@@ -16,8 +16,8 @@ import { USER_PROFILE_QUERY } from "../users/user-profile.query.js";
 // relation in the range table at executor start, before a single row is read.
 const SERVING_PROBE_USER_ID = "00000000-0000-0000-0000-000000000000";
 
-export const EXPECTED_MIGRATION = "1787434000000_cms-foundation";
-export const EXPECTED_MIGRATION_COUNT = 45;
+export const EXPECTED_MIGRATION = "1787435000000_cms-document-branding";
+export const EXPECTED_MIGRATION_COUNT = 46;
 
 // Readiness answers ONE question: can this instance actually serve traffic
 // right now, as the role it is actually connected as.

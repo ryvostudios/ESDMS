@@ -6,6 +6,7 @@ import { PageHeader } from '../../shared/components/PageHeader.jsx';
 import { Button } from '../../shared/components/Button.jsx';
 import { Input, Textarea, FormField } from '../../shared/components/FormField.jsx';
 import { ErrorState, LoadingState } from '../../shared/components/StatePanel.jsx';
+import { useCompanyLogo } from './company-logo.js';
 import { WorkforceConfigPage } from '../workforce/pages/WorkforceConfigPage.jsx';
 import { GovernancePage } from '../workforce/pages/GovernancePage.jsx';
 import styles from './CmsPage.module.css';
@@ -44,12 +45,33 @@ function Settings({category}) {
   const [rows,setRows]=useState(null),[error,setError]=useState('');
   const load=useCallback(()=>apiClient.get(`/cms/settings/${category}`).then(r=>setRows(r.data)).catch(e=>setError(e.message)),[category]);
   useEffect(()=>{load();},[load]);
-  return <>{error&&<ErrorState message={error}/>}<p>Company-wide, public plain text. Never enter passwords, API keys or confidential information.</p>{category==='branding'&&<p>The E-Set logo has not been supplied. No logo is fabricated; issued documents and PDF branding remain unchanged.</p>}{rows?.map(row=><SettingEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>)}{!rows&&!error&&<LoadingState/>}</>;
+  return <>{error&&<ErrorState message={error}/>}<p>Company-wide, public plain text. Never enter passwords, API keys or confidential information.</p>{category==='branding'&&<p>Branding applies to newly generated documents. Issued Gate Pass, IPO and Delivery Challan PDFs keep the branding they were issued with; Demand List PDFs are regenerated from live data and always use the current branding.</p>}{rows?.map(row=>row.type==='logo'?<LogoEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>:<SettingEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>)}{!rows&&!error&&<LoadingState/>}</>;
 }
 function SettingEditor({row,onSaved}) {
   const [value,setValue]=useState(row.value),[message,setMessage]=useState(''),[saving,setSaving]=useState(false);
   async function save(event){event.preventDefault();setSaving(true);try{await apiClient.patch(`/cms/settings/${row.key}`,{value,revision:row.revision});setMessage('Saved');await onSaved();}catch(e){setMessage(e.message);}finally{setSaving(false);}}
   return <section className={styles.panel}><h2>{row.label}</h2><p>{row.description}</p><form onSubmit={save}><FormField label={row.label} htmlFor={row.key}><Textarea id={row.key} value={value} onChange={e=>setValue(e.target.value)} maxLength={row.max} required={row.min>0}/></FormField><span className={styles.secondary}>{row.key} · plain text · company-wide</span><Button type="submit" loading={saving}>Save {row.label.toLowerCase()}</Button>{message&&<p role="status">{message}</p>}</form></section>;
+}
+const MAX_LOGO_BYTES = 2*1024*1024;
+function LogoEditor({row,onSaved}) {
+  const logoUrl=useCompanyLogo(row.revision);
+  const [file,setFile]=useState(null),[message,setMessage]=useState(''),[saving,setSaving]=useState(false);
+  function choose(event){
+    const selected=event.target.files?.[0]??null;setMessage('');
+    // Convenience only: the server re-validates the actual bytes.
+    if(selected&&!['image/png','image/jpeg'].includes(selected.type)){setFile(null);setMessage('Choose a PNG or JPEG image.');return;}
+    if(selected&&selected.size>MAX_LOGO_BYTES){setFile(null);setMessage('The logo must be 2 MB or smaller.');return;}
+    setFile(selected);
+  }
+  async function run(action){setSaving(true);try{await action();setMessage('Saved');await onSaved();}catch(e){setMessage(e.message);}finally{setSaving(false);}}
+  function upload(event){event.preventDefault();if(!file)return;const form=new FormData();form.append('revision',String(row.revision));form.append('logo',file);run(()=>apiClient.put('/cms/branding/logo',form,{isForm:true}));}
+  return <section className={styles.panel}><h2>{row.label}</h2><p>{row.description}</p>
+    <div className={styles.logoPreview}>{logoUrl?<img src={logoUrl} alt="Current company logo"/>:<span>Logo unavailable — documents show the company name only.</span>}</div>
+    <p className={styles.secondary}>{row.logo.description}</p>
+    <form onSubmit={upload}><FormField label="Replace logo (PNG or JPEG, up to 2 MB)" htmlFor="companyLogo"><input id="companyLogo" type="file" accept="image/png,image/jpeg" onChange={choose}/></FormField>
+      <Button type="submit" loading={saving} disabled={!file}>Upload logo</Button>
+      {row.logo.source==='uploaded'&&<Button type="button" variant="secondary" disabled={saving} onClick={()=>run(()=>apiClient.del('/cms/branding/logo',{body:{revision:row.revision}}))}>Restore default E-Set logo</Button>}
+      {message&&<p role="status">{message}</p>}</form></section>;
 }
 function PermissionCatalog() {
   const {hasPermission}=useAuth();const [rows,setRows]=useState(null),[search,setSearch]=useState(''),[error,setError]=useState('');

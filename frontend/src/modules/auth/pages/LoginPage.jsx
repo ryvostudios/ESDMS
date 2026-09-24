@@ -1,4 +1,5 @@
 import { usePublicContent } from "../../cms/public-content.js";
+import { useCompanyLogo } from "../../cms/company-logo.js";
 import { useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
@@ -33,6 +34,7 @@ function PasswordInput({ visible, onToggleVisible, ...inputProps }) {
 
 export function LoginPage() {
   const content = usePublicContent();
+  const logoUrl = useCompanyLogo();
   const { status, login } = useAuth();
   const location = useLocation();
   // The grid's own container is pointer-events:none, so it never receives
@@ -118,6 +120,7 @@ export function LoginPage() {
           </div>
 
           <div className={styles.heading}>
+            {logoUrl && <img className={styles.cardLogo} src={logoUrl} alt={`${content['company.display_name']} logo`} />}
             <h1>{content['login.heading']}</h1>
             <p>{content['login.help']}</p>
           </div>

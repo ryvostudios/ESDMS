@@ -10,8 +10,8 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 45,
-  latest_applied: "1787434000000_cms-foundation",
+  applied_count: 46,
+  latest_applied: "1787435000000_cms-document-branding",
   expected_applied: true,
   cms_columns_present: true,
   cms_audit_scope_trigger_present: true,

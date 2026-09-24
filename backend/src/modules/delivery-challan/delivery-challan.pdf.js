@@ -1,5 +1,5 @@
+import { loadDocumentBranding } from "../../shared/documents/branding.js";
 import {
-  COMPANY,
   createDocument,
   documentHeader,
   fieldGrid,
@@ -32,10 +32,13 @@ import {
 // The owner also supplied an older, simpler challan; keeping the whole layout
 // in this one file is what makes swapping between them a template change with
 // no effect on DC data, numbering or workflow.
-export async function generateDeliveryChallanPdf({ deliveryChallan, lines }) {
+// `branding` is resolved centrally when not supplied (tests pass it).
+export async function generateDeliveryChallanPdf({ deliveryChallan, lines }, branding) {
+  const brand = branding ?? (await loadDocumentBranding());
   const { doc, buffer } = createDocument();
 
   documentHeader(doc, {
+    branding: brand,
     title: "Delivery Challan",
     reference: deliveryChallan.dc_number,
     // Issuance context only. The challan's later workflow status (RECEIVING,
@@ -48,7 +51,7 @@ export async function generateDeliveryChallanPdf({ deliveryChallan, lines }) {
   });
 
   partiesBlock(doc, {
-    from: `${COMPANY.name}\nProcurement Team`,
+    from: `${brand.companyName}\nProcurement Team`,
     to: `${deliveryChallan.department_name} Department\n${deliveryChallan.site_name}`,
   });
 
@@ -108,7 +111,7 @@ export async function generateDeliveryChallanPdf({ deliveryChallan, lines }) {
 
   footer(
     doc,
-    `${COMPANY.footer} Receipt must also be recorded in ESDMS by the receiving department. This document is not a stock or inventory statement.`,
+    `${brand.footer} Receipt must also be recorded in ESDMS by the receiving department. This document is not a stock or inventory statement.`,
   );
 
   doc.end();

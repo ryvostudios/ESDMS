@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import { formatDate, formatDateTime } from "../../shared/time/app-timezone.js";
 import { drawItemsTable, ensureSpace } from "./gate-pass.pdf.js";
+import { drawBrandHeader, loadDocumentBranding } from "../../shared/documents/branding.js";
 
 // The completion/closure document — deliberately NOT the approval PDF.
 //
@@ -110,13 +111,13 @@ function drawPhotos(doc, photos) {
   }
 }
 
-export async function generateGatePassCompletionPdf(gatePass, items, evidence) {
+// `branding` is resolved centrally when not supplied (tests pass it).
+export async function generateGatePassCompletionPdf(gatePass, items, evidence, branding) {
+  const brand = branding ?? (await loadDocumentBranding());
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN });
   const bufferPromise = collectPdfBuffer(doc);
 
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#0f172a").text("E-Set Digital Management System");
-  doc.font("Helvetica").fontSize(12).fillColor("#475569").text("Gate Pass — Completion Record");
-  doc.moveDown(0.6);
+  drawBrandHeader(doc, brand, { title: "Gate Pass — Completion Record" });
   doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(gatePass.gate_pass_number);
   doc.font("Helvetica").fontSize(10).fillColor("#475569").text(`Final status: ${gatePass.status}`);
 

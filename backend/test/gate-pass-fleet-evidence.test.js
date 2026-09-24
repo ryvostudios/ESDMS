@@ -424,6 +424,10 @@ test("zero items does not bypass any other create or draft-edit validation", asy
 
 // --- Optional departure/return photos ------------------------------------
 
+// Evidence photos are laid out at a fixed 245pt width; the header logo is
+// separate branding, not evidence.
+const isEvidencePhoto = (box) => box.kind === "image" && box.width === 245;
+
 function odometerOnlyForm(fields) {
   const form = new FormData();
   for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
@@ -499,7 +503,7 @@ test("exit and return without photos complete the pass with NULL photo reference
   }
   const drawn = layout.boxes.map((box) => box.text);
   assert.equal(drawn.filter((text) => text === "No photographic evidence was captured.").length, 2);
-  assert.ok(!layout.boxes.some((box) => box.kind === "image"), "no image is fabricated");
+  assert.ok(!layout.boxes.some(isEvidencePhoto), "no image is fabricated");
   assert.equal(drawn[drawn.indexOf("Distance Travelled") + 1], "45 km");
   assert.deepEqual(layout.overlaps(), []);
 });
@@ -546,7 +550,7 @@ test("exit and return with photos still store typed references and render the ev
   } finally {
     layout.restore();
   }
-  assert.equal(layout.boxes.filter((box) => box.kind === "image").length, 2);
+  assert.equal(layout.boxes.filter(isEvidencePhoto).length, 2);
   assert.ok(!layout.boxes.some((box) => box.text === "No photographic evidence was captured."));
   assert.deepEqual(layout.overlaps(), []);
 });

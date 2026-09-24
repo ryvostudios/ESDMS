@@ -59,7 +59,7 @@ test('public text uses allowlisted typed keys, optimistic locking, transactional
   assert.equal((await call(tokens.ceo,'PATCH','/cms/settings/login.heading',{value:'Safe',revision:row.revision,secret:'not accepted'})).status,400);
   const changed=await patch('Welcome to E-Set');assert.equal(changed.status,200,JSON.stringify(changed.body));
   assert.equal((await patch('Stale overwrite')).status,409);
-  const publicResult=await call(null,'GET','/cms/public-content');assert.equal(publicResult.status,200);assert.equal(publicResult.body.data['login.heading'],'Welcome to E-Set');assert.equal(Object.keys(publicResult.body.data).length,7);
+  const publicResult=await call(null,'GET','/cms/public-content');assert.equal(publicResult.status,200);assert.equal(publicResult.body.data['login.heading'],'Welcome to E-Set');assert.equal(Object.keys(publicResult.body.data).length,8);assert.ok(!('company.logo' in publicResult.body.data));
   const audit=await pool.query("SELECT metadata,scope_site_id FROM governance_audit_log WHERE action='CMS_SETTING_CHANGED' ORDER BY created_at DESC LIMIT 1");
   assert.equal(audit.rows[0].metadata.before,row.value);assert.equal(audit.rows[0].metadata.after,'Welcome to E-Set');assert.equal(audit.rows[0].scope_site_id,null);
   assert.equal((await grant(users.siteManager,'cms.content.manage')).status,200);
@@ -93,7 +93,7 @@ test('audit projection retains historical site, paginates deterministically and 
 test('system and integration status only expose fixed safe projections, no credential endpoints',async()=>{
   const system=await call(tokens.ceo,'GET','/cms/system');assert.equal(system.status,200,JSON.stringify(system.body));
   assert.deepEqual(Object.keys(system.body.data).sort(),['backendRevision','environment','expectedMigration','latestMigration','expectedProvisioning','actualProvisioning','ready','schemaCompatible','authServingHealthy','runtimeAccessHealthy','runtimeProvisioningCompatible'].sort());
-  assert.equal(system.body.data.expectedMigration,'1787434000000_cms-foundation');
+  assert.equal(system.body.data.expectedMigration,'1787435000000_cms-document-branding');
   const integrations=await call(tokens.ceo,'GET','/cms/integrations');assert.equal(integrations.status,200);
   assert.ok(integrations.body.data.filter(i=>['Dropbox','Google Drive','Attendance'].includes(i.name)).every(i=>i.state==='not_configured'));
   assert.equal((await call(tokens.ceo,'POST','/cms/integrations',{token:'not accepted'})).status,404);

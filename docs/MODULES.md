@@ -65,8 +65,9 @@ unstarted.
 **Foundation implemented.** The integrated CMS reuses Organization, Governance
 and Workforce configuration, adds human-readable permission metadata, controlled
 public branding/content, safe integration status, Audit Center and System info.
-Authority and release details: [CMS.md](./CMS.md). External provider connections,
-Attendance and document logo rollout remain deferred.
+Company logo management and E-Set document branding (Gate Pass, IPO, Delivery
+Challan, Demand List) are in place; see "Document branding" in
+[CMS.md](./CMS.md). External provider connections and Attendance remain deferred.
 
 ---
 
