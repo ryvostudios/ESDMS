@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { startTransition, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiClient, ApiError } from "../../../core/api/client.js";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
@@ -40,8 +40,13 @@ export function ChangePasswordPage() {
       // cleared the cookie — there is no session left to refresh. Clear
       // local auth state directly (no network call, so it can't itself
       // surface a misleading 401) and send the user to sign in again.
-      clearSession();
-      navigate("/login", { replace: true, state: { info: "Password changed. Sign in again." } });
+      // Router navigation is a transition. Clear auth at the same priority:
+      // otherwise ProtectedRoute renders on the old password page first and
+      // overwrites this navigation with a stale return-to-password location.
+      startTransition(() => {
+        clearSession();
+        navigate("/login", { replace: true, state: { info: "Password changed. Sign in again." } });
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to change password. Please try again.");
       setSubmitting(false);
