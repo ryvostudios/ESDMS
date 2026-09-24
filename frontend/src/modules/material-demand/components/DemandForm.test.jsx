@@ -85,6 +85,28 @@ describe("DemandForm — catalog picker", () => {
     expect(onSubmit.mock.calls[0][0].lines).toEqual([{ catalogEntryId: "entry-1", quantity: 50 }]);
   });
 
+  test.each(["0", "", "-3"])("a selected item with quantity %j is reported, never silently dropped", async (value) => {
+    mockListCatalog.mockResolvedValue({
+      data: [
+        { id: "entry-1", item_name: "Cement", default_uom_name: "Bags" },
+        { id: "entry-2", item_name: "Paint", default_uom_name: "Litres" },
+      ],
+      meta: { page: 1, pageSize: 200, total: 2 },
+    });
+
+    const onSubmit = await renderForm();
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Cement" }));
+    fireEvent.change(screen.getByLabelText("Quantity for Cement"), { target: { value: "50" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Paint" }));
+    fireEvent.change(screen.getByLabelText("Quantity for Paint"), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: /save draft/i }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toMatch(/quantity greater than zero/i);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   test("unchecking a previously selected item removes its line", async () => {
     mockListCatalog.mockResolvedValue({
       data: [{ id: "entry-1", item_name: "Cement", default_uom_name: "Bags" }],
