@@ -275,6 +275,16 @@ invariants are centralized in one place,
   `PRIVILEGE_ESCALATION_ATTEMPT` in `governance_audit_log` **before** the
   `403` is returned — a denied privileged request is never invisible.
 
+Delegated governance is bounded by the actor's effective permissions. Existing
+ordinary Employee role capabilities remain assignable through authorized user
+management; other role/bundle permissions must be held by the delegate.
+Governance, account-management and company-wide scope permissions cannot be
+redelegated by non-CEO actors. Accounts holding these powers require CEO
+administration. A delegate cannot replace or remove another actor's DENY.
+Mutation targets are locked and rechecked for current site and protected status.
+Workforce treats EMPLOYEE accounts with explicit grants or bundles as privileged
+for credential reset, offboarding and automatic site synchronization.
+
 Effective permissions (`role permissions + individual grants + active named
 bundles - individual denials`, explicit denial always winning) are computed once, in
 `getUserProfileById` (§8.2's `user_permission_overrides` table), and reused

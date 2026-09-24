@@ -5,6 +5,8 @@ import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from ".
 import { recordGovernanceAudit } from "../../shared/audit/governance-audit.repository.js";
 import { findDepartmentById } from "../departments/departments.repository.js";
 import {
+  listRolePermissionCodes,
+  listBundlePermissionCodes,
   findUserById,
   findRoleByName,
   emailExists,
@@ -26,12 +28,25 @@ import {
 } from "./users.repository.js";
 import { getUserProfileById } from "../../shared/users/user-profile.repository.js";
 import {
+  assertDelegablePermissions,
+  assertLockedGovernanceTarget,
+  canDelegatePermissions,
+  isReservedDelegationPermission,
+  ASSIGNABLE_ROLES,
   guardGovernanceTarget,
   guardUmCreateAuthority,
   CEO_ROLE,
   UM_ROLE,
   UM_MANAGE_PERMISSION,
 } from "./users.authorization.js";
+
+// Explicit user-management authority includes the existing ordinary EMPLOYEE
+// baseline (also used by Workforce onboarding), independently of the manager
+// holding those operational permissions. All other role powers need a ceiling.
+const ORDINARY_ROLE_PERMISSIONS = new Set([
+  "profile.self.view", "profile.self.edit", "leave.self.create", "leave.self.view", "leave.self.cancel",
+  "dc.view", "demand.view", "material_catalog.view", "receiving.receive", "receiving.view",
+]);
 
 // An actor without site-wide/company-wide reach can only create users
 // within their own site — and an explicit mismatch is a denial, not a
@@ -61,6 +76,7 @@ async function assertDepartmentUsable(departmentId, siteId) {
 }
 
 export async function createUser(actor, input) {
+  if (!ASSIGNABLE_ROLES.includes(input.role)) throw new ForbiddenError("Role is not assignable.");
   await guardUmCreateAuthority(actor, input.role);
 
   const siteId = resolveCreateSiteId(actor, input.siteId);
@@ -69,6 +85,8 @@ export async function createUser(actor, input) {
   if (!role || !role.is_active) {
     throw new ValidationError("Invalid or inactive role.");
   }
+
+  assertDelegablePermissions(actor, (await listRolePermissionCodes(role.id)).filter((code) => !ORDINARY_ROLE_PERMISSIONS.has(code)));
 
   if (await emailExists(input.email)) {
     throw new ConflictError("A user with this email already exists.");
@@ -125,6 +143,7 @@ export async function getUser(actor, targetUserId) {
 }
 
 export async function changeUserRole(actor, targetUserId, nextRole) {
+  if (!ASSIGNABLE_ROLES.includes(nextRole)) throw new ForbiddenError("Role is not assignable.");
   const target = await getUser(actor, targetUserId);
 
   await guardGovernanceTarget(actor, target, {
@@ -141,7 +160,9 @@ export async function changeUserRole(actor, targetUserId, nextRole) {
     throw new ValidationError("Invalid or inactive role.");
   }
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, targetUserId, "USER_ROLE_CHANGED", async (client) => {
+    await assertLockedGovernanceTarget(client, actor, await lockUserById(client, targetUserId), nextRole);
+    assertDelegablePermissions(actor, (await listRolePermissionCodes(role.id, client)).filter((code) => !ORDINARY_ROLE_PERMISSIONS.has(code)));
     await updateUserRoleId(client, targetUserId, role.id);
 
     await recordGovernanceAudit(client, {
@@ -167,7 +188,8 @@ async function setUserActive(actor, targetUserId, isActive) {
     throw new ValidationError(`User is already ${isActive ? "active" : "inactive"}.`);
   }
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, targetUserId, "USER_ACTIVE_STATE_CHANGED", async (client) => {
+    await assertLockedGovernanceTarget(client, actor, await lockUserById(client, targetUserId));
     await setUserActiveState(client, targetUserId, isActive);
 
     await recordGovernanceAudit(client, {
@@ -212,7 +234,7 @@ export async function regenerateTemporaryPassword(actor, targetUserId) {
     umPermission: { code: UM_MANAGE_PERMISSION, nextRole: target.role },
   });
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, targetUserId, "USER_TEMP_PASSWORD_REGENERATED", async (client) => {
     const locked = await lockUserById(client, targetUserId);
     if (!locked) throw new NotFoundError("User not found.");
 
@@ -237,6 +259,10 @@ export async function regenerateTemporaryPassword(actor, targetUserId) {
     ) {
       throw new ForbiddenError();
     }
+
+    await assertLockedGovernanceTarget(client, actor, locked);
+    const profile = await getUserProfileById(targetUserId, client);
+    assertDelegablePermissions(actor, profile.permissions.filter((code) => !ORDINARY_ROLE_PERMISSIONS.has(code)));
 
     if (!locked.must_change_password) {
       throw new ValidationError(
@@ -272,13 +298,24 @@ export async function getPermissionOverview(actor, targetUserId) {
     listBundleAssignmentsForUser(targetUserId),
   ]);
 
+  const assignableRoles = [];
+  for (const name of ASSIGNABLE_ROLES) {
+    const role = await findRoleByName(name);
+    if (role?.is_active && canDelegatePermissions(actor, (await listRolePermissionCodes(role.id)).filter((code) => !ORDINARY_ROLE_PERMISSIONS.has(code))) &&
+        (name !== UM_ROLE || actor.permissions.has(UM_MANAGE_PERMISSION))) assignableRoles.push(name);
+  }
+
   return {
+    canManage: actor.role === CEO_ROLE || !profile.permissions.some(isReservedDelegationPermission),
+    assignableRoles,
     userId: target.id,
     role: target.role,
     effectivePermissions: profile.permissions,
     overrides: overrides.map((row) => ({
       permissionCode: row.permission_code,
       effect: row.effect,
+      canEdit: canDelegatePermissions(actor, [row.permission_code]) &&
+        (actor.role === CEO_ROLE || row.effect !== "DENY" || row.granted_by_user_id === actor.id),
       reason: row.reason,
       grantedBy: { id: row.granted_by_user_id, fullName: row.granted_by_full_name },
       createdAt: row.created_at,
@@ -288,6 +325,7 @@ export async function getPermissionOverview(actor, targetUserId) {
       displayName: row.display_name,
       description: row.description,
       permissionCodes: row.permission_codes,
+      canDelegate: canDelegatePermissions(actor, row.permission_codes),
     })),
     assignedBundles: assignedBundles.map((row) => ({
       code: row.code,
@@ -317,7 +355,10 @@ export async function setPermissionOverride(actor, targetUserId, permissionCode,
     throw new ValidationError("Unknown permission code.");
   }
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, target.id, "PERMISSION_OVERRIDE", async (client) => {
+    await assertLockedGovernanceTarget(client, actor, await lockUserById(client, target.id));
+    assertDelegablePermissions(actor, [permissionCode]);
+    await assertOverrideEditable(client, actor, target.id, permission.id);
     await upsertOverride(client, {
       userId: target.id,
       permissionId: permission.id,
@@ -345,7 +386,10 @@ export async function removePermissionOverride(actor, targetUserId, permissionCo
     throw new ValidationError("Unknown permission code.");
   }
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, target.id, "PERMISSION_OVERRIDE_REMOVED", async (client) => {
+    await assertLockedGovernanceTarget(client, actor, await lockUserById(client, target.id));
+    assertDelegablePermissions(actor, [permissionCode]);
+    await assertOverrideEditable(client, actor, target.id, permission.id);
     const removed = await deleteOverride(client, target.id, permission.id);
     if (!removed) {
       throw new NotFoundError("No override exists for this permission.");
@@ -367,7 +411,9 @@ export async function assignCapabilityBundle(actor, targetUserId, bundleCode) {
   const bundle = await findCapabilityBundleByCode(bundleCode);
   if (!bundle || !bundle.is_active) throw new ValidationError("Unknown or inactive capability bundle.");
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, target.id, "CAPABILITY_BUNDLE_ASSIGNED", async (client) => {
+    await assertLockedGovernanceTarget(client, actor, await lockUserById(client, target.id));
+    assertDelegablePermissions(actor, await listBundlePermissionCodes(bundle.id, client));
     const assigned = await insertBundleAssignment(client, {
       userId: target.id,
       bundleId: bundle.id,
@@ -390,7 +436,9 @@ export async function removeCapabilityBundle(actor, targetUserId, bundleCode) {
   const bundle = await findCapabilityBundleByCode(bundleCode);
   if (!bundle) throw new ValidationError("Unknown capability bundle.");
 
-  return withTransaction(async (client) => {
+  return withGovernanceMutation(actor, target.id, "CAPABILITY_BUNDLE_REMOVED", async (client) => {
+    await assertLockedGovernanceTarget(client, actor, await lockUserById(client, target.id));
+    assertDelegablePermissions(actor, await listBundlePermissionCodes(bundle.id, client));
     const removed = await deleteBundleAssignment(client, target.id, bundle.id);
     if (!removed) throw new NotFoundError("This capability bundle is not assigned.");
 
@@ -402,4 +450,32 @@ export async function removeCapabilityBundle(actor, targetUserId, bundleCode) {
     });
     return { userId: target.id, bundleCode: bundle.code };
   });
+}
+
+async function assertOverrideEditable(client, actor, userId, permissionId) {
+  if (actor.role === CEO_ROLE) return;
+  const result = await client.query(
+    "SELECT effect, granted_by_user_id FROM user_permission_overrides WHERE user_id = $1 AND permission_id = $2",
+    [userId, permissionId],
+  );
+  const existing = result.rows[0];
+  if (existing?.effect === "DENY" && existing.granted_by_user_id !== actor.id) {
+    throw new ForbiddenError("Only CEO or the author of this restriction can replace or remove it.");
+  }
+}
+
+// Denial auditing must run AFTER rollback: an audit FK written on a second
+// connection while the target is locked would deadlock against our own lock.
+async function withGovernanceMutation(actor, targetUserId, action, callback) {
+  try {
+    return await withTransaction(callback);
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      await withTransaction((client) => recordGovernanceAudit(client, {
+        actorUserId: actor.id, targetUserId, action: "PRIVILEGE_ESCALATION_ATTEMPT",
+        metadata: { attemptedAction: action, violations: ["delegated_authority_boundary"] },
+      }));
+    }
+    throw error;
+  }
 }

@@ -10,8 +10,8 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 42,
-  latest_applied: "1787431000000_driver-identifier-normalization",
+  applied_count: 43,
+  latest_applied: "1787432000000_company-organization-reference",
   expected_applied: true,
   required_column_present: true,
   rollback_trigger_present: true,

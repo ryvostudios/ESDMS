@@ -187,3 +187,19 @@ export async function deleteBundleAssignment(client, userId, bundleId) {
   );
   return result.rowCount > 0;
 }
+
+export async function listRolePermissionCodes(roleId, executor = pool) {
+  const result = await executor.query(
+    `SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = $1`,
+    [roleId],
+  );
+  return result.rows.map((row) => row.code);
+}
+
+export async function listBundlePermissionCodes(bundleId, executor = pool) {
+  const result = await executor.query(
+    `SELECT p.code FROM permission_bundle_permissions bp JOIN permissions p ON p.id = bp.permission_id WHERE bp.bundle_id = $1`,
+    [bundleId],
+  );
+  return result.rows.map((row) => row.code);
+}

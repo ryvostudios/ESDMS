@@ -96,10 +96,15 @@ export function GovernancePage() {
 
   const canTargetSelected =
     selected &&
+    overview?.canManage !== false &&
     selected.role !== "CEO" &&
     selected.id !== actor.id &&
     (selected.role !== "UPPER_MANAGEMENT" || hasPermission("users.manage_um"));
   const canToggleSelected = canTargetSelected && hasPermission(selected.isActive ? "users.deactivate" : "users.activate");
+  // users.update is independently delegable from permission_overrides.view.
+  // Keep role changes usable when the permission overview is unavailable;
+  // the API enforces the delegation ceiling for every submitted role.
+  const roleOptions = overview?.assignableRoles ?? ["EMPLOYEE", "HR", "UPPER_MANAGEMENT", "ADMIN", "SITE_MANAGER", "TEAM_LEAD", "GATE_GUARD"];
   const activeCount = users.filter((u) => u.isActive).length;
 
   // A permission with an active GRANT override is called out — everything
@@ -218,13 +223,12 @@ export function GovernancePage() {
                           }
                         }}
                       >
-                        <option value="EMPLOYEE">Employee</option>
-                        <option value="HR">HR</option>
-                        {hasPermission("users.manage_um") && <option value="UPPER_MANAGEMENT">Upper Management</option>}
-                        <option value="ADMIN">Site Administrator</option>
-                        <option value="SITE_MANAGER">Site Manager</option>
-                        <option value="TEAM_LEAD">Team Lead</option>
-                        <option value="GATE_GUARD">Gate Guard</option>
+                        {!roleOptions.includes(selected.role) && (
+                          <option value={selected.role}>{formatEnumLabel(selected.role)} (current)</option>
+                        )}
+                        {roleOptions.filter((role) => role !== "UPPER_MANAGEMENT" || hasPermission("users.manage_um")).map((role) => (
+                          <option key={role} value={role}>{role === "HR" ? "HR" : formatEnumLabel(role)}</option>
+                        ))}
                       </Select>
                     </FormField>
                   </div>
@@ -237,7 +241,7 @@ export function GovernancePage() {
                 <div className={styles.actionGroup}>
                   <h3 className={styles.actionGroupTitle}>Capability bundles</h3>
                   <p className={styles.emptySelection}>
-                    Bundles are application authority, separate from Department and Position. Explicit DENY overrides still win.
+                    Bundles are application authority, separate from Department and Position. Explicit DENY overrides still win. Delegated managers can assign only permissions they hold; CEO controls governance and company-wide delegation.
                   </p>
                   <ul className={styles.overrideList}>
                     {overview.availableBundles.map((bundle) => {
@@ -250,7 +254,7 @@ export function GovernancePage() {
                             <span className={styles.emptySelection}>{bundle.permissionCodes.join(" · ")}</span>
                           </span>
                           <StatusBadge tone={assigned ? "success" : "neutral"} label={assigned ? "Assigned" : "Not assigned"} />
-                          {canTargetSelected && hasPermission("permission_overrides.manage") && (
+                          {canTargetSelected && hasPermission("permission_overrides.manage") && bundle.canDelegate !== false && (
                             <Button
                               variant={assigned ? "secondary" : "primary"}
                               onClick={() => setPendingBundleAction({ type: assigned ? "remove" : "assign", bundle })}
@@ -283,7 +287,7 @@ export function GovernancePage() {
                       <li key={item.permissionCode} className={styles.overrideRow}>
                         <span className={styles.overrideCode}>{item.permissionCode}</span>
                         <StatusBadge tone={item.effect === "GRANT" ? "success" : "danger"} label={item.effect} />
-                        {canTargetSelected && hasPermission("permission_overrides.manage") && (
+                        {canTargetSelected && hasPermission("permission_overrides.manage") && item.canEdit !== false && (
                           <Button variant="secondary" onClick={() => remove(item.permissionCode)}>
                             Remove
                           </Button>
