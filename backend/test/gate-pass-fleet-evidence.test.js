@@ -4,6 +4,7 @@ import pool from "../src/config/database.js";
 import { startTestServer, seedUsers } from "./setup.js";
 import { authHeader, apiRequest, buildCreatePayload, buildMultiPhotoForm } from "./gate-pass-helpers.js";
 import * as gatePassService from "../src/modules/gate-pass/gate-pass.service.js";
+import { recordLayout } from "./pdf-layout-recorder.js";
 
 let server;
 let users;
@@ -313,4 +314,109 @@ test("completion produces a closure PDF and queues WhatsApp without gating compl
     [id],
   );
   assert.equal(afterRetry.rows[0].total, 1, "the completion PDF job is idempotent");
+});
+
+test("a Gate Pass with zero material items runs the full lifecycle and both PDFs say so", async () => {
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes", {
+    token: tokens.teamLead,
+    body: buildCreatePayload({ issuingDepartmentId: users.departmentA, items: [] }),
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.data.id;
+
+  const submitted = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/submit`, { token: tokens.teamLead });
+  assert.equal(submitted.status, 200, JSON.stringify(submitted.body));
+  const approved = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/approve`, { token: tokens.admin });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+
+  const approvalJob = await pool.query(
+    "SELECT * FROM notification_outbox WHERE entity_id = $1 AND event_type = 'GENERATE_APPROVAL_PDF'",
+    [id],
+  );
+  let layout = recordLayout();
+  try {
+    await gatePassService.processApprovalPdfJob(approvalJob.rows[0]);
+  } finally {
+    layout.restore();
+  }
+  assert.ok(layout.boxes.some((box) => box.text === "No material items"));
+  assert.deepEqual(layout.overlaps(), []);
+
+  // Odometer and evidence remain mandatory: zero items does not relax them.
+  const noPhoto = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard,
+    body: { odometer: 42150 },
+  });
+  assert.equal(noPhoto.status, 400);
+
+  const exit = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/exit`, {
+    token: tokens.guard,
+    isForm: true,
+    body: buildMultiPhotoForm({ odometer: 42150 }, 1),
+  });
+  assert.equal(exit.status, 200, JSON.stringify(exit.body));
+  // Zero-distance trip: returned with the same reading it left with.
+  const returned = await apiRequest(server.baseUrl, "POST", `/api/v1/gate-passes/${id}/return`, {
+    token: tokens.guard,
+    isForm: true,
+    body: buildMultiPhotoForm({ odometer: 42150 }, 1),
+  });
+  assert.equal(returned.status, 200, JSON.stringify(returned.body));
+
+  const detail = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}`, { token: tokens.teamLead });
+  assert.equal(detail.body.data.status, "COMPLETED");
+  assert.deepEqual(detail.body.data.items, []);
+  assert.equal(detail.body.data.distanceKm, 0);
+
+  const completionJob = await pool.query(
+    "SELECT * FROM notification_outbox WHERE entity_id = $1 AND event_type = 'GENERATE_COMPLETION_PDF'",
+    [id],
+  );
+  layout = recordLayout();
+  try {
+    await gatePassService.processCompletionPdfJob(completionJob.rows[0]);
+  } finally {
+    layout.restore();
+  }
+  const drawn = layout.boxes.map((box) => box.text);
+  assert.ok(drawn.includes("No material items"));
+  assert.ok(drawn.includes("42,150 km"));
+  // The printed distance is the stored generated column, not a recomputation.
+  assert.equal(drawn[drawn.indexOf("Distance Travelled") + 1], `${detail.body.data.distanceKm} km`);
+  assert.deepEqual(layout.overlaps(), []);
+});
+
+test("zero items does not bypass any other create or draft-edit validation", async () => {
+  const noDriver = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes", {
+    token: tokens.teamLead,
+    body: buildCreatePayload({ issuingDepartmentId: users.departmentA, items: [], driverName: undefined, driverPhone: undefined }),
+  });
+  assert.equal(noDriver.status, 400);
+
+  const badItem = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes", {
+    token: tokens.teamLead,
+    body: buildCreatePayload({ issuingDepartmentId: users.departmentA, items: [{ description: "Pump", quantity: 0 }] }),
+  });
+  assert.equal(badItem.status, 400);
+
+  const missingItems = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes", {
+    token: tokens.teamLead,
+    body: buildCreatePayload({ issuingDepartmentId: users.departmentA, items: undefined }),
+  });
+  assert.equal(missingItems.status, 400, "the items list itself is still required, even if empty");
+
+  // A draft can drop its last item, and the stored item history of other
+  // passes is untouched.
+  const created = await apiRequest(server.baseUrl, "POST", "/api/v1/gate-passes", {
+    token: tokens.teamLead,
+    body: buildCreatePayload({ issuingDepartmentId: users.departmentA }),
+  });
+  const id = created.body.data.id;
+  const edited = await apiRequest(server.baseUrl, "PATCH", `/api/v1/gate-passes/${id}`, {
+    token: tokens.teamLead,
+    body: { items: [] },
+  });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  const detail = await apiRequest(server.baseUrl, "GET", `/api/v1/gate-passes/${id}`, { token: tokens.teamLead });
+  assert.deepEqual(detail.body.data.items, []);
 });

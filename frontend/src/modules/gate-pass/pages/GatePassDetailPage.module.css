@@ -213,3 +213,9 @@
   color: var(--color-text-muted);
   text-transform: uppercase;
 }
+
+.noItems {
+  color: var(--color-text-muted);
+  font-style: italic;
+  margin-bottom: var(--space-4);
+}

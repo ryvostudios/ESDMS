@@ -20,7 +20,7 @@ describe("permission-driven Workforce navigation", () => {
     authState.user = { employeeId: null };
   });
 
-  test("a Gate Guard sees no Workforce or governance navigation", () => {
+  test("a Gate Keeper sees no Workforce or governance navigation", () => {
     authState.permissions = new Set(["gate_pass.verify", "gate_pass.exit", "gate_pass.return"]);
     render(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Gate" })).toBeTruthy();
@@ -75,7 +75,7 @@ describe("permission-driven Workforce navigation", () => {
     expect(screen.getByRole("link", { name: "Receiving" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Procurement" })).toBeNull();
 
-    // Gate Guard gains nothing from this phase.
+    // Gate Keeper gains nothing from this phase.
     authState.permissions = new Set(["gate_pass.verify", "gate_pass.exit", "gate_pass.return"]);
     rerender(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.queryByRole("link", { name: "IPOs" })).toBeNull();

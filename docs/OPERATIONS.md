@@ -120,7 +120,8 @@ After a reset, sign in as the original CEO and rebuild through the UI:
 Departments and Positions and Employment Types under Workforce Config,
 Employees under Employees (each can be given a login from its own page, which
 starts at EMPLOYEE role), then role and capability-bundle assignment under
-Governance — Site Administrator, Site Manager, Team Lead, Gate Guard, plus the
+Governance — Site Administrator, Site Manager, Team Lead, Gate Keeper (role
+code `GATE_GUARD`), plus the
 Procurement Staff and Formal / Financial Approver bundles. Drivers, Vehicles
 and Materials each have their own screen. No manual SQL is required.
 

@@ -17,5 +17,7 @@ describe("formatEnumLabel", () => {
     expect(formatEnumLabel("ADMIN")).toBe("Site Administrator");
     expect(formatEnumLabel("CEO")).toBe("CEO");
     expect(formatEnumLabel("TEAM_LEAD")).toBe("Team Lead");
+    // Display only: the role code itself stays GATE_GUARD.
+    expect(formatEnumLabel("GATE_GUARD")).toBe("Gate Keeper");
   });
 });

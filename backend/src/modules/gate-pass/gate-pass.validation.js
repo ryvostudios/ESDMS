@@ -32,7 +32,9 @@ const gatePassBaseShape = {
   purpose: z.enum(GATE_PASS_PURPOSES),
   expectedReturnDate: z.string().date().optional().nullable(),
   remarks: z.string().trim().max(1000).optional().nullable(),
-  items: z.array(itemSchema).min(1).max(50),
+  // A Gate Pass may move a vehicle or a person with no material at all, so
+  // zero items is valid. Any item that IS listed is still fully validated.
+  items: z.array(itemSchema).max(50),
 };
 
 export const createGatePassSchema = z.object(gatePassBaseShape).superRefine((value, ctx) => {

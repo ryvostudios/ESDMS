@@ -2,6 +2,8 @@ export function formatEnumLabel(value) {
   if (!value) return "";
   if (value === "CEO") return "CEO";
   if (value === "ADMIN") return "Site Administrator";
+  // Display name only: the stable role code stays GATE_GUARD everywhere.
+  if (value === "GATE_GUARD") return "Gate Keeper";
   return value
     .toLowerCase()
     .split("_")

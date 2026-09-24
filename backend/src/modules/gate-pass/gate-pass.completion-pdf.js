@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import { formatDate, formatDateTime } from "../../shared/time/app-timezone.js";
+import { drawItemsTable, ensureSpace } from "./gate-pass.pdf.js";
 
 // The completion/closure document — deliberately NOT the approval PDF.
 //
@@ -37,17 +38,24 @@ function sectionTitle(doc, text) {
   doc.moveDown(0.5);
 }
 
+// Measured before drawing, so a long value moves to the next page whole
+// instead of being split by pdfkit's implicit mid-text page break.
 function field(doc, label, value) {
-  ensureSpace(doc, 34);
+  const text = value === null || value === undefined || value === "" ? "—" : String(value);
+  doc.font("Helvetica-Bold").fontSize(8);
+  const labelHeight = doc.heightOfString(label, { width: CONTENT_WIDTH });
+  doc.font("Helvetica").fontSize(10);
+  ensureSpace(doc, labelHeight + doc.heightOfString(text, { width: CONTENT_WIDTH }));
   doc.font("Helvetica-Bold").fontSize(8).fillColor("#64748b").text(label, PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
-  doc.font("Helvetica").fontSize(10).fillColor("#0f172a").text(value || "—", { width: CONTENT_WIDTH });
+  doc.font("Helvetica").fontSize(10).fillColor("#0f172a").text(text, PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
   doc.moveDown(0.35);
 }
 
-function ensureSpace(doc, needed) {
-  if (doc.y + needed > doc.page.height - doc.page.margins.bottom) {
-    doc.addPage();
-  }
+// Odometer readings are shown as recorded, and the distance is the stored
+// distance_km — a generated column (return_odometer - departure_odometer) —
+// never recomputed here. No reading, no distance: nothing is invented.
+function formatKm(value) {
+  return value === null || value === undefined ? null : `${Number(value).toLocaleString("en-US")} km`;
 }
 
 // Photos are laid out two per row at a bounded width. Rendering the stored
@@ -56,6 +64,10 @@ function ensureSpace(doc, needed) {
 const PHOTO_WIDTH = 245;
 const PHOTO_HEIGHT = 165;
 const PHOTO_GAP = 25;
+
+function caption(photo) {
+  return `${formatDateTime(photo.created_at)} · ${photo.captured_by_name}${photo.evidence_note ? ` · ${photo.evidence_note}` : ""}`;
+}
 
 function drawPhotos(doc, photos) {
   if (!photos.length) {
@@ -67,7 +79,10 @@ function drawPhotos(doc, photos) {
 
   for (let index = 0; index < photos.length; index += 2) {
     const pair = photos.slice(index, index + 2);
-    const captionHeight = 26;
+    doc.font("Helvetica").fontSize(7);
+    // A long evidence note wraps; the row grows with it rather than letting
+    // the caption run into the next row of photos.
+    const captionHeight = Math.max(...pair.map((photo) => doc.heightOfString(caption(photo), { width: PHOTO_WIDTH }))) + 10;
     ensureSpace(doc, PHOTO_HEIGHT + captionHeight + 10);
 
     const rowY = doc.y;
@@ -84,7 +99,7 @@ function drawPhotos(doc, photos) {
       }
 
       doc.font("Helvetica").fontSize(7).fillColor("#64748b").text(
-        `${formatDateTime(photo.created_at)} · ${photo.captured_by_name}${photo.evidence_note ? ` · ${photo.evidence_note}` : ""}`,
+        caption(photo),
         x,
         rowY + PHOTO_HEIGHT + 4,
         { width: PHOTO_WIDTH },
@@ -126,34 +141,18 @@ export async function generateGatePassCompletionPdf(gatePass, items, evidence) {
   }
 
   sectionTitle(doc, "Approved Items");
-  doc.font("Helvetica-Bold").fontSize(8).fillColor("#64748b");
-  const headerY = doc.y;
-  doc.text("Description", PAGE_MARGIN, headerY, { width: 240 });
-  doc.text("Part Number", PAGE_MARGIN + 250, headerY, { width: 120 });
-  doc.text("Qty", PAGE_MARGIN + 380, headerY, { width: 60 });
-  doc.text("Unit", PAGE_MARGIN + 445, headerY, { width: 70 });
-  doc.y = headerY + 14;
-
-  doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-  for (const item of items) {
-    const cells = [
-      { text: item.description, x: PAGE_MARGIN, width: 240 },
-      { text: item.part_number || "—", x: PAGE_MARGIN + 250, width: 120 },
-      { text: String(item.quantity), x: PAGE_MARGIN + 380, width: 60 },
-      { text: item.unit || "—", x: PAGE_MARGIN + 445, width: 70 },
-    ];
-    const rowHeight = Math.max(...cells.map((cell) => doc.heightOfString(cell.text, { width: cell.width })));
-    ensureSpace(doc, rowHeight + 6);
-    const y = doc.y;
-    for (const cell of cells) doc.text(cell.text, cell.x, y, { width: cell.width });
-    doc.y = y + rowHeight + 6;
-  }
+  drawItemsTable(doc, items);
 
   sectionTitle(doc, "Gate Movement");
   field(doc, "Actual Exit Time", gatePass.departure_at ? formatDateTime(gatePass.departure_at) : "—");
   field(doc, "Exit Recorded By", gatePass.departure_by_name);
   field(doc, "Actual Return / Entry Time", gatePass.return_at ? formatDateTime(gatePass.return_at) : "—");
   field(doc, "Return Recorded By", gatePass.return_by_name);
+  if (gatePass.departure_odometer !== null && gatePass.departure_odometer !== undefined) {
+    field(doc, "Departure Odometer", formatKm(gatePass.departure_odometer));
+    field(doc, "Return Odometer", formatKm(gatePass.return_odometer));
+    field(doc, "Distance Travelled", formatKm(gatePass.distance_km));
+  }
   if (gatePass.return_remarks) field(doc, "Return Remarks", gatePass.return_remarks);
   if (gatePass.remarks) field(doc, "Remarks", gatePass.remarks);
 
