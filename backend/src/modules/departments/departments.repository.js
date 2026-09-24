@@ -39,20 +39,20 @@ export async function nameExistsForSite(siteId, name, excludeId = null) {
   return result.rowCount > 0;
 }
 
-export async function insertDepartment(siteId, name) {
-  const result = await pool.query(
+export async function insertDepartment(siteId, name, executor = pool) {
+  const result = await executor.query(
     "INSERT INTO departments (site_id, name) VALUES ($1, $2) RETURNING id, name, is_active, site_id",
     [siteId, name],
   );
   return result.rows[0];
 }
 
-export async function updateDepartmentFields(id, { name, isActive, whatsappDestination }) {
+export async function updateDepartmentFields(id, { name, isActive, whatsappDestination }, executor = pool) {
   // whatsappDestination is three-valued: undefined leaves it alone, null
   // clears it, a string sets it — so a plain COALESCE would make clearing
   // impossible. The explicit "was this field supplied?" flag keeps all three
   // reachable without a second query.
-  const result = await pool.query(
+  const result = await executor.query(
     `UPDATE departments
      SET name = COALESCE($2, name),
          is_active = COALESCE($3, is_active),

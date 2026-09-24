@@ -10,9 +10,11 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 44,
-  latest_applied: "1787433000000_gate-pass-optional-photo-evidence",
+  applied_count: 45,
+  latest_applied: "1787434000000_cms-foundation",
   expected_applied: true,
+  cms_columns_present: true,
+  cms_audit_scope_trigger_present: true,
   required_column_present: true,
   rollback_trigger_present: true,
   eligibility_trigger_present: true,
@@ -173,5 +175,13 @@ test("problem summaries stay bounded and never carry database error text", async
       !/permission denied|ERROR:|\bat \w+ \(|\bFROM\b|\bWHERE\b/i.test(problem),
       `problem leaked raw detail: ${problem}`,
     );
+  }
+});
+
+test("CMS scope trigger and metadata are load-bearing even when the migration ledger is current", async () => {
+  for (const field of ["cms_columns_present", "cms_audit_scope_trigger_present"]) {
+    const result = await inspectSchemaCompatibility(executorWith({ schema: { [field]: false } }));
+    assert.equal(result.ready, false);
+    assert.equal(result.schemaCompatible, false);
   }
 });

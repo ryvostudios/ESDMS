@@ -16,8 +16,8 @@ import { USER_PROFILE_QUERY } from "../users/user-profile.query.js";
 // relation in the range table at executor start, before a single row is read.
 const SERVING_PROBE_USER_ID = "00000000-0000-0000-0000-000000000000";
 
-export const EXPECTED_MIGRATION = "1787433000000_gate-pass-optional-photo-evidence";
-export const EXPECTED_MIGRATION_COUNT = 44;
+export const EXPECTED_MIGRATION = "1787434000000_cms-foundation";
+export const EXPECTED_MIGRATION_COUNT = 45;
 
 // Readiness answers ONE question: can this instance actually serve traffic
 // right now, as the role it is actually connected as.
@@ -146,6 +146,11 @@ const SCHEMA_STATE_SQL = `
     migration_state.applied_count,
     migration_state.latest_applied,
     migration_state.expected_applied,
+    (SELECT count(*)=4 FROM information_schema.columns WHERE table_schema='public' AND
+      ((table_name='permissions' AND column_name IN ('display_name','category','help_text')) OR
+       (table_name='governance_audit_log' AND column_name='scope_site_id'))) AS cms_columns_present,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.governance_audit_log'::regclass
+      AND tgname='governance_audit_scope_snapshot' AND tgenabled='O' AND NOT tgisinternal) AS cms_audit_scope_trigger_present,
     EXISTS (
       SELECT 1 FROM information_schema.columns
       WHERE table_schema = 'public'
@@ -209,6 +214,8 @@ const SCHEMA_STATE_SQL = `
 // Object existence: a migration ledger entry is not proof its load-bearing
 // objects still exist, so this verifies both.
 const REQUIRED_SCHEMA_OBJECTS = [
+  ["cms_columns_present", "CMS permission metadata and audit scope columns"],
+  ["cms_audit_scope_trigger_present", "trigger governance_audit_scope_snapshot"],
   ["required_column_present", "material_demands.draft_delete_eligible"],
   ["rollback_trigger_present", "trigger material_demands_forbid_draft_rollback"],
   ["eligibility_trigger_present", "trigger material_demands_set_draft_delete_eligible"],

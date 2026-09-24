@@ -25,16 +25,16 @@ export async function codeExists(code) {
   return result.rowCount > 0;
 }
 
-export async function insertEmploymentType(code, name) {
-  const result = await pool.query(
+export async function insertEmploymentType(code, name, executor = pool) {
+  const result = await executor.query(
     "INSERT INTO employment_types (code, name) VALUES ($1, $2) RETURNING id, code, name, is_active",
     [code, name],
   );
   return result.rows[0];
 }
 
-export async function updateEmploymentTypeFields(id, { name, isActive }) {
-  const result = await pool.query(
+export async function updateEmploymentTypeFields(id, { name, isActive }, executor = pool) {
+  const result = await executor.query(
     `UPDATE employment_types
      SET name = COALESCE($2, name), is_active = COALESCE($3, is_active), updated_at = CURRENT_TIMESTAMP
      WHERE id = $1

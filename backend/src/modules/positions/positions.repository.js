@@ -35,8 +35,8 @@ export async function codeExistsForSite(siteId, code) {
   return result.rowCount > 0;
 }
 
-export async function insertPosition({ siteId, code, name, departmentId, description }) {
-  const result = await pool.query(
+export async function insertPosition({ siteId, code, name, departmentId, description }, executor = pool) {
+  const result = await executor.query(
     `INSERT INTO positions (site_id, code, name, department_id, description)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING id, code, name, department_id, description, is_active, site_id`,
@@ -45,8 +45,8 @@ export async function insertPosition({ siteId, code, name, departmentId, descrip
   return result.rows[0];
 }
 
-export async function updatePositionFields(id, { name, departmentId, description, isActive }) {
-  const result = await pool.query(
+export async function updatePositionFields(id, { name, departmentId, description, isActive }, executor = pool) {
+  const result = await executor.query(
     `UPDATE positions
      SET name = COALESCE($2, name),
          department_id = CASE WHEN $3::boolean THEN $4 ELSE department_id END,

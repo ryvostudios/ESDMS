@@ -60,6 +60,16 @@ unstarted.
 
 ---
 
+## System Administration
+
+**Foundation implemented.** The integrated CMS reuses Organization, Governance
+and Workforce configuration, adds human-readable permission metadata, controlled
+public branding/content, safe integration status, Audit Center and System info.
+Authority and release details: [CMS.md](./CMS.md). External provider connections,
+Attendance and document logo rollout remain deferred.
+
+---
+
 ## 3. Gate Pass
 
 Purpose:

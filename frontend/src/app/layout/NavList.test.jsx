@@ -26,7 +26,7 @@ describe("permission-driven Workforce navigation", () => {
     expect(screen.getByRole("link", { name: "Gate" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Employees" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Reports" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Governance" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "System Administration" })).toBeNull();
   });
 
   test("My Workforce requires only a linked Employee record — not profile.self.view (ESDMS-018)", () => {
@@ -49,7 +49,7 @@ describe("permission-driven Workforce navigation", () => {
     const { rerender } = render(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Employees" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Reports" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Governance" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "System Administration" })).toBeTruthy();
 
     authState.permissions.add("workforce.export");
     rerender(<MemoryRouter><NavList /></MemoryRouter>);

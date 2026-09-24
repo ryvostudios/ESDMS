@@ -1,3 +1,5 @@
+import { CmsPage } from "../../modules/cms/CmsPage.jsx";
+import { CMS_PERMISSIONS } from "../../modules/cms/cms-access.js";
 import { Routes, Route } from "react-router-dom";
 import { AppShell } from "../layout/AppShell.jsx";
 import { ProtectedRoute } from "./ProtectedRoute.jsx";
@@ -54,6 +56,7 @@ export function AppRoutes() {
         }
       >
         <Route path="/" element={<HomeRoute />} />
+        <Route path="/cms/:area?" element={<PermissionRoute permissions={CMS_PERMISSIONS}><CmsPage /></PermissionRoute>} />
         <Route path="/change-password" element={<ChangePasswordPage />} />
         <Route path="/workforce" element={<PermissionRoute permissions={["employees.view"]}><WorkforceDashboardPage /></PermissionRoute>} />
 

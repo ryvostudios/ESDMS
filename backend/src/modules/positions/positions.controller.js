@@ -1,3 +1,4 @@
+import { mutateConfiguration } from "../../shared/audit/configuration-audit.js";
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
 import { resolveCreateSiteId, resolveTargetSiteId, employeeSiteFilter } from "../workforce/workforce.authorization.js";
@@ -49,7 +50,7 @@ export const create = asyncHandler(async (req, res) => {
   }
   await assertDepartmentUsable(input.departmentId, siteId);
 
-  const created = await insertPosition({ siteId, ...input });
+  const created = await mutateConfiguration(req.user, "positions", null, client => insertPosition({ siteId, ...input }, client));
   res.status(201).json({ success: true, data: created });
 });
 
@@ -66,6 +67,6 @@ export const update = asyncHandler(async (req, res) => {
   }
   if (input.departmentId) await assertDepartmentUsable(input.departmentId, position.site_id);
 
-  const updated = await updatePositionFields(position.id, input);
+  const updated = await mutateConfiguration(req.user, "positions", position.id, client => updatePositionFields(position.id, input, client));
   res.status(200).json({ success: true, data: updated });
 });

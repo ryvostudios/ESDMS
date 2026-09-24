@@ -1,3 +1,4 @@
+import { mutateConfiguration } from "../../shared/audit/configuration-audit.js";
 import { withTransaction } from "../../shared/db/with-transaction.js";
 import { ForbiddenError, ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
 import { getEmployee } from "../employees/employees.service.js";
@@ -8,21 +9,21 @@ function isSelfActor(actor, employeeId) {
   return actor.employeeId === employeeId;
 }
 
-export async function createPolicy(input) {
-  return repo.insertPolicy(input);
+export async function createPolicy(input, actor) {
+  return mutateConfiguration(actor, "rotation_policies", null, client => repo.insertPolicy(input, client));
 }
 
 // Policies already used historically must not be edited in a way that
 // reinterprets past ledger math — only name/active-state changes; archive
 // and create a new policy for a different work/off-day split
 // (docs/DECISIONS.md, same principle as workforce-config's field_type rule).
-export async function updatePolicy(id, input) {
+export async function updatePolicy(id, input, actor) {
   const policy = await repo.findPolicyById(id);
   if (!policy) throw new NotFoundError("Rotation policy not found.");
   if (input.isActive === false && (await repo.policyInUse(id))) {
     throw new ConflictError("Cannot archive a rotation policy with active employees assigned.");
   }
-  return repo.updatePolicyFields(id, input);
+  return mutateConfiguration(actor, "rotation_policies", id, client => repo.updatePolicyFields(id, input, client));
 }
 
 export { listPolicies } from "./rotation.repository.js";

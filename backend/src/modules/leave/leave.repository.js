@@ -13,8 +13,8 @@ export async function findTypeById(id) {
   return result.rows[0] || null;
 }
 
-export async function insertType({ name, requiresDocument, tracksBalance, description }) {
-  const result = await pool.query(
+export async function insertType({ name, requiresDocument, tracksBalance, description }, executor = pool) {
+  const result = await executor.query(
     `INSERT INTO leave_types (name, requires_document, tracks_balance, description)
      VALUES ($1, $2, $3, $4) RETURNING id, name, requires_document, tracks_balance, description, is_active`,
     [name, requiresDocument ?? false, tracksBalance ?? false, description || null],
@@ -22,8 +22,8 @@ export async function insertType({ name, requiresDocument, tracksBalance, descri
   return result.rows[0];
 }
 
-export async function updateTypeFields(id, { name, isActive, description }) {
-  const result = await pool.query(
+export async function updateTypeFields(id, { name, isActive, description }, executor = pool) {
+  const result = await executor.query(
     `UPDATE leave_types
      SET name = COALESCE($2, name), is_active = COALESCE($3, is_active),
          description = CASE WHEN $4::boolean THEN $5 ELSE description END,

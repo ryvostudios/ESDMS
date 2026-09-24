@@ -1,3 +1,4 @@
+import { usePublicContent } from "../../cms/public-content.js";
 import { useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
@@ -31,6 +32,7 @@ function PasswordInput({ visible, onToggleVisible, ...inputProps }) {
 }
 
 export function LoginPage() {
+  const content = usePublicContent();
   const { status, login } = useAuth();
   const location = useLocation();
   // The grid's own container is pointer-events:none, so it never receives
@@ -97,7 +99,7 @@ export function LoginPage() {
           ES
         </span>
         <div className={styles.brandCopy}>
-          <h2>E-Set Digital Management System</h2>
+          <h2>{content['company.display_name']}</h2>
           <p>Controlled, auditable operations across workforce, procurement, materials, and site access.</p>
         </div>
         <p className={styles.brandFooter}>© {new Date().getFullYear()} E-Set</p>
@@ -112,12 +114,12 @@ export function LoginPage() {
             <span className={styles.mobileBrandMark} aria-hidden="true">
               ES
             </span>
-            <span className={styles.mobileBrandName}>E-Set DMS</span>
+            <span className={styles.mobileBrandName}>{content['company.short_name']}</span>
           </div>
 
           <div className={styles.heading}>
-            <h1>Sign in</h1>
-            <p>Use your E-Set account to continue.</p>
+            <h1>{content['login.heading']}</h1>
+            <p>{content['login.help']}</p>
           </div>
 
           <form className={styles.form} onSubmit={handleSubmit} noValidate>

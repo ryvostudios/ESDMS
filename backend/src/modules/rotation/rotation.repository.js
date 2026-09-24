@@ -13,16 +13,16 @@ export async function findPolicyById(id) {
   return result.rows[0] || null;
 }
 
-export async function insertPolicy({ name, workDays, offDays }) {
-  const result = await pool.query(
+export async function insertPolicy({ name, workDays, offDays }, executor = pool) {
+  const result = await executor.query(
     "INSERT INTO rotation_policies (name, work_days, off_days) VALUES ($1, $2, $3) RETURNING id, name, work_days, off_days, is_active",
     [name, workDays, offDays],
   );
   return result.rows[0];
 }
 
-export async function updatePolicyFields(id, { name, isActive }) {
-  const result = await pool.query(
+export async function updatePolicyFields(id, { name, isActive }, executor = pool) {
+  const result = await executor.query(
     `UPDATE rotation_policies SET name = COALESCE($2, name), is_active = COALESCE($3, is_active), updated_at = CURRENT_TIMESTAMP
      WHERE id = $1 RETURNING id, name, work_days, off_days, is_active`,
     [id, name ?? null, isActive ?? null],

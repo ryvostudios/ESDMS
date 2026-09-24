@@ -1,3 +1,4 @@
+import { mutateConfiguration } from "../../shared/audit/configuration-audit.js";
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
 import { resolveCreateSiteId, resolveTargetSiteId, employeeSiteFilter } from "../workforce/workforce.authorization.js";
@@ -41,7 +42,7 @@ export const create = asyncHandler(async (req, res) => {
     throw new ConflictError("A department with this name already exists at this site.");
   }
 
-  const created = await insertDepartment(siteId, input.name);
+  const created = await mutateConfiguration(req.user, "departments", null, client => insertDepartment(siteId, input.name, client));
   res.status(201).json({ success: true, data: created });
 });
 
@@ -63,6 +64,6 @@ export const update = asyncHandler(async (req, res) => {
     throw new ConflictError("A department with this name already exists at this site.");
   }
 
-  const updated = await updateDepartmentFields(department.id, input);
+  const updated = await mutateConfiguration(req.user, "departments", department.id, client => updateDepartmentFields(department.id, input, client));
   res.status(200).json({ success: true, data: updated });
 });

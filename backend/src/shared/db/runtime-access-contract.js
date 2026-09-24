@@ -90,6 +90,7 @@ export const RUNTIME_TABLE_PRIVILEGES = Object.freeze({
   user_permission_overrides: DML,
   users: DML,
   vehicles: DML,
+  cms_settings: Object.freeze(["SELECT", "UPDATE"]),
   // Capability definitions are migration-owned reference data: readable by
   // the runtime, never rewritten by it.
   permission_bundles: READ_ONLY,

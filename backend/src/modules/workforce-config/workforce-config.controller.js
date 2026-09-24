@@ -28,11 +28,11 @@ export const listSections = asyncHandler(async (req, res) => {
 });
 export const createSection = asyncHandler(async (req, res) => {
   const input = parseBody(createSectionSchema, req.body);
-  res.status(201).json({ success: true, data: await service.createSection(input) });
+  res.status(201).json({ success: true, data: await service.createSection(input, req.user) });
 });
 export const updateSection = asyncHandler(async (req, res) => {
   const input = parseBody(updateSectionSchema, req.body);
-  res.status(200).json({ success: true, data: await service.updateSection(req.params.id, input) });
+  res.status(200).json({ success: true, data: await service.updateSection(req.params.id, input, req.user) });
 });
 
 export const listFields = asyncHandler(async (req, res) => {
@@ -40,11 +40,11 @@ export const listFields = asyncHandler(async (req, res) => {
 });
 export const createField = asyncHandler(async (req, res) => {
   const input = parseBody(createFieldSchema, req.body);
-  res.status(201).json({ success: true, data: await service.createField(input) });
+  res.status(201).json({ success: true, data: await service.createField(input, req.user) });
 });
 export const updateField = asyncHandler(async (req, res) => {
   const input = parseBody(updateFieldSchema, req.body);
-  res.status(200).json({ success: true, data: await service.updateField(req.params.id, input) });
+  res.status(200).json({ success: true, data: await service.updateField(req.params.id, input, req.user) });
 });
 
 export const listDocumentTypes = asyncHandler(async (req, res) => {
@@ -52,9 +52,9 @@ export const listDocumentTypes = asyncHandler(async (req, res) => {
 });
 export const createDocumentType = asyncHandler(async (req, res) => {
   const input = parseBody(createDocumentTypeSchema, req.body);
-  res.status(201).json({ success: true, data: await service.createDocumentType(input) });
+  res.status(201).json({ success: true, data: await service.createDocumentType(input, req.user) });
 });
 export const updateDocumentType = asyncHandler(async (req, res) => {
   const input = parseBody(updateDocumentTypeSchema, req.body);
-  res.status(200).json({ success: true, data: await service.updateDocumentType(req.params.id, input) });
+  res.status(200).json({ success: true, data: await service.updateDocumentType(req.params.id, input, req.user) });
 });

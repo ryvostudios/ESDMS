@@ -1,23 +1,24 @@
+import { mutateConfiguration } from "../../shared/audit/configuration-audit.js";
 import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from "../../shared/errors/app-error.js";
 import * as repo from "./workforce-config.repository.js";
 
-export async function createSection(input) {
-  return repo.insertSection(input);
+export async function createSection(input, actor) {
+  return mutateConfiguration(actor, "employee_profile_sections", null, client => repo.insertSection(input, client));
 }
 
-export async function updateSection(id, input) {
+export async function updateSection(id, input, actor) {
   const section = await repo.findSectionById(id);
   if (!section) throw new NotFoundError("Profile section not found.");
-  return repo.updateSectionFields(id, input);
+  return mutateConfiguration(actor, "employee_profile_sections", id, client => repo.updateSectionFields(id, input, client));
 }
 
-export async function createField(input) {
+export async function createField(input, actor) {
   const section = await repo.findSectionById(input.sectionId);
   if (!section || !section.is_active) throw new ValidationError("Invalid profile section.");
   if (await repo.fieldKeyExists(input.fieldKey)) {
     throw new ConflictError("A custom field with this key already exists.");
   }
-  return repo.insertField(input);
+  return mutateConfiguration(actor, "employee_custom_fields", null, client => repo.insertField(input, client));
 }
 
 // field_type is immutable once any value has been recorded — "Text -> Date"
@@ -25,7 +26,7 @@ export async function createField(input) {
 // field and create a new one instead (docs/DECISIONS.md). Every other
 // metadata change (label, visibility, validation additions, sort order,
 // archive) is allowed freely and never invalidates existing records.
-export async function updateField(id, input) {
+export async function updateField(id, input, actor) {
   const field = await repo.findFieldById(id);
   if (!field) throw new NotFoundError("Custom field not found.");
 
@@ -34,17 +35,17 @@ export async function updateField(id, input) {
     if (!section || !section.is_active) throw new ValidationError("Invalid profile section.");
   }
 
-  return repo.updateFieldFields(id, input);
+  return mutateConfiguration(actor, "employee_custom_fields", id, client => repo.updateFieldFields(id, input, client));
 }
 
-export async function createDocumentType(input) {
+export async function createDocumentType(input, actor) {
   if (await repo.documentTypeNameExists(input.name)) {
     throw new ConflictError("A document type with this name already exists.");
   }
-  return repo.insertDocumentType(input);
+  return mutateConfiguration(actor, "employee_document_types", null, client => repo.insertDocumentType(input, client));
 }
 
-export async function updateDocumentType(id, input) {
+export async function updateDocumentType(id, input, actor) {
   const type = await repo.findDocumentTypeById(id);
   if (!type) throw new NotFoundError("Document type not found.");
 
@@ -52,7 +53,7 @@ export async function updateDocumentType(id, input) {
     throw new ConflictError("Cannot archive a document type that already has uploaded documents.");
   }
 
-  return repo.updateDocumentTypeFields(id, input);
+  return mutateConfiguration(actor, "employee_document_types", id, client => repo.updateDocumentTypeFields(id, input, client));
 }
 
 function managesConfiguration(actor) {

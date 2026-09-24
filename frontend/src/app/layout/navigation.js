@@ -1,3 +1,4 @@
+import { CMS_PERMISSIONS } from "../../modules/cms/cms-access.js";
 import { HomeIcon, TruckIcon, ClipboardCheckIcon, ScanIcon, BoxIcon } from "../../shared/icons.jsx";
 
 const OFFICE_PERMISSIONS = ["gate_pass.view_own", "gate_pass.view_site"];
@@ -22,7 +23,7 @@ export const NAV_ITEMS = [
   { label: "Employees", to: "/workforce/employees", icon: ClipboardCheckIcon, permission: ["employees.view"] },
   { label: "Workforce Ops", to: "/workforce/operations", icon: ClipboardCheckIcon, permission: ["leave.approve", "employee_documents.view", "rotation.adjust"] },
   { label: "Reports", to: "/workforce/reports", icon: ClipboardCheckIcon, allPermissions: ["workforce.reports.view", "workforce.export"] },
-  { label: "Governance", to: "/governance", icon: ClipboardCheckIcon, permission: ["users.view"] },
+  { label: "System Administration", to: "/cms", icon: ClipboardCheckIcon, permission: CMS_PERMISSIONS },
   {
     label: "Material Catalog",
     to: "/material-catalog",
@@ -85,11 +86,5 @@ export const NAV_ITEMS = [
     to: "/fleet/vehicles",
     icon: TruckIcon,
     permission: ["vehicle.view", "vehicle.manage"],
-  },
-  {
-    label: "Workforce Config",
-    to: "/workforce/config",
-    icon: ClipboardCheckIcon,
-    permission: ["workforce.configuration.manage", "departments.manage", "positions.manage"],
   },
 ];

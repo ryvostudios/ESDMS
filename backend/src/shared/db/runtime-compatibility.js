@@ -21,6 +21,8 @@ expected_critical_privileges(table_name, privilege_type) AS (
   SELECT t.table_name, p.privilege_type
   FROM standard_critical_tables t CROSS JOIN dml_privileges p
   UNION ALL VALUES
+    ('cms_settings', 'SELECT'),
+    ('cms_settings', 'UPDATE'),
     ('permission_bundles', 'SELECT'),
     ('permission_bundle_permissions', 'SELECT'),
     ('user_permission_bundle_assignments', 'SELECT'),

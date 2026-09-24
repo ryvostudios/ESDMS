@@ -136,6 +136,7 @@ const CAPABILITY_BUNDLE_TABLES = [
 
 const RUNTIME_APPLICATION_TABLES = [
   ...APPLICATION_TABLES,
+  "cms_settings",
   "user_permission_overrides",
   "governance_audit_log",
   ...WORKFORCE_TABLES,
@@ -494,11 +495,13 @@ test("runtime provisioning SQL is secret-safe, explicit, and contains no legacy 
 
   const explicitGrant = sql.match(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE([\s\S]*?)TO esdms_runtime;/i)?.[1];
   assert.ok(explicitGrant, "expected one explicit runtime table grant");
-  for (const table of RUNTIME_APPLICATION_TABLES.filter((name) => !CAPABILITY_BUNDLE_TABLES.includes(name))) {
+  for (const table of RUNTIME_APPLICATION_TABLES.filter((name) => name !== "cms_settings" && !CAPABILITY_BUNDLE_TABLES.includes(name))) {
     assert.match(explicitGrant, new RegExp(`public\\.${table}\\b`));
   }
   assert.match(sql, /GRANT SELECT ON TABLE\s+public\.permission_bundles,\s+public\.permission_bundle_permissions\s+TO esdms_runtime/is);
   assert.match(sql, /GRANT SELECT, INSERT, DELETE ON TABLE\s+public\.user_permission_bundle_assignments\s+TO esdms_runtime/is);
+  assert.match(sql, /GRANT SELECT, UPDATE ON TABLE\s+public\.cms_settings\s+TO esdms_runtime/is);
+  assert.doesNotMatch(explicitGrant, /public\.cms_settings\b/);
   assert.doesNotMatch(explicitGrant, /pgmigrations/);
 
   assert.match(sql, /ALTER TABLE public\.pgmigrations ENABLE ROW LEVEL SECURITY/);
@@ -563,7 +566,9 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
       [...RUNTIME_APPLICATION_TABLES].sort(),
     );
     for (const row of directTablePrivileges.rows) {
-      const expected = row.table_name === "user_permission_bundle_assignments"
+      const expected = row.table_name === "cms_settings"
+        ? ["SELECT", "UPDATE"]
+        : row.table_name === "user_permission_bundle_assignments"
         ? ["DELETE", "INSERT", "SELECT"]
         : ["permission_bundles", "permission_bundle_permissions"].includes(row.table_name)
           ? ["SELECT"]
@@ -652,7 +657,24 @@ test("psql provisioning suppresses echo and converges twice to the verified leas
       assert.equal(profileQuery.status, 0, "the exact login /me profile query must execute as esdms_runtime");
       assert.equal(profileQuery.stderr, "");
 
-      await seedUsers();
+      const users = await seedUsers();
+      const cmsClient = await runtimePool.connect();
+      try {
+        await cmsClient.query("BEGIN");
+        const setting = await cmsClient.query(
+          "UPDATE cms_settings SET revision = revision + 1 WHERE key = 'login.heading' RETURNING key",
+        );
+        assert.equal(setting.rowCount, 1, "runtime can update seeded CMS settings through RLS");
+        const audit = await cmsClient.query(
+          `INSERT INTO governance_audit_log (actor_user_id, action, metadata)
+           VALUES ($1, 'CMS_SETTING_CHANGED', '{"key":"login.heading"}') RETURNING scope_site_id`,
+          [users.ceo],
+        );
+        assert.equal(audit.rows[0].scope_site_id, null, "runtime writes execute the company-wide audit scope trigger");
+      } finally {
+        await cmsClient.query("ROLLBACK");
+        cmsClient.release();
+      }
       const authSmoke = spawnSync(process.execPath, [runtimeAuthSmokePath], {
         env: {
           ...process.env,

@@ -165,6 +165,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.vehicles
 TO esdms_runtime;
 
+GRANT SELECT, UPDATE ON TABLE public.cms_settings TO esdms_runtime;
+
 -- Capability definitions are migration-owned reference data. Runtime may
 -- read them but never rewrite bundle membership. Assignment provenance is
 -- append/remove only; there is no unaudited UPDATE path.
@@ -271,6 +273,7 @@ ALTER TABLE public.department_material_catalog ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.carry_forward_allocations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.delivery_challan_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.delivery_challans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cms_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.document_number_counters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.document_number_settings ENABLE ROW LEVEL SECURITY;
@@ -345,6 +348,7 @@ BEGIN
     'carry_forward_allocations',
     'delivery_challan_lines',
     'delivery_challans',
+    'cms_settings',
     'departments',
     'drivers',
     'document_number_counters',
@@ -542,6 +546,8 @@ dml_privileges(privilege_type) AS (
 expected_privileges(table_name, privilege_type) AS (
   SELECT e.table_name, p.privilege_type FROM expected_tables e CROSS JOIN dml_privileges p
   UNION ALL VALUES
+    ('cms_settings', 'SELECT'),
+    ('cms_settings', 'UPDATE'),
     ('permission_bundles', 'SELECT'),
     ('permission_bundle_permissions', 'SELECT'),
     ('user_permission_bundle_assignments', 'SELECT'),
