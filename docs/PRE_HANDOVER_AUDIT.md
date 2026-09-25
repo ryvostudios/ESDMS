@@ -24,6 +24,10 @@ local disposable QA, not staging or production.
 
 ## Material security finding
 
+Update: the Multer blocker was subsequently remediated to 2.4.0 with explicit
+multipart limits and full regression. See [MULTIPART_SECURITY.md](MULTIPART_SECURITY.md).
+The findings below describe the original audit baseline.
+
 Dependency audit found backend Multer 2.2.0 (high) and qs 6.15.3 (moderate),
 and frontend build dependency fast-uri 3.1.5 (high).
 

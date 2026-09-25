@@ -1,4 +1,5 @@
 import multer from "multer";
+import { flatMultipartLimits } from "../../shared/http/multipart-limits.js";
 import {
   ALLOWED_PHOTO_MIME_TYPES,
   MAX_EVIDENCE_PHOTO_BYTES,
@@ -40,7 +41,7 @@ const SIGNATURE_CHECKS = {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_EVIDENCE_PHOTO_BYTES, files: MAX_EVIDENCE_PHOTOS_PER_REQUEST },
+  limits: flatMultipartLimits({ fileSize: MAX_EVIDENCE_PHOTO_BYTES, files: MAX_EVIDENCE_PHOTOS_PER_REQUEST, fields: 2, fieldSize: 2000, fieldNameSize: 8 }),
   fileFilter(req, file, callback) {
     if (!ALLOWED_PHOTO_MIME_TYPES.includes(file.mimetype)) {
       return callback(new ValidationError("Photo must be JPEG, PNG, or WebP."));

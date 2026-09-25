@@ -1,4 +1,5 @@
 import multer from "multer";
+import { flatMultipartLimits } from "../../shared/http/multipart-limits.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import { guardParsedBody } from "../../shared/http/text-safety.js";
 
@@ -6,7 +7,7 @@ export const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 4 },
+  limits: flatMultipartLimits({ fileSize: MAX_IMPORT_BYTES, fields: 2, fieldSize: 512, fieldNameSize: 17 }),
   fileFilter(_req, file, callback) {
     if (file.mimetype !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
       return callback(new ValidationError("Only .xlsx workbooks are accepted."));

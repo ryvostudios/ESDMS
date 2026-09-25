@@ -1,4 +1,5 @@
 import multer from "multer";
+import { flatMultipartLimits } from "../../shared/http/multipart-limits.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import { guardParsedBody } from "../../shared/http/text-safety.js";
 
@@ -26,7 +27,7 @@ const SIGNATURE_CHECKS = {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_PHOTO_BYTES, files: 1 },
+  limits: flatMultipartLimits({ fileSize: MAX_PHOTO_BYTES, fields: 0, fieldSize: 0, fieldNameSize: 5 }),
   fileFilter(req, file, callback) {
     if (!ALLOWED_PHOTO_MIME_TYPES.includes(file.mimetype)) {
       return callback(new ValidationError("Photo must be JPEG, PNG, or WebP."));

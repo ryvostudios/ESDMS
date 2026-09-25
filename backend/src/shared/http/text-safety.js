@@ -85,6 +85,11 @@ export function rejectUnsupportedText(req, res, next) {
 export function guardParsedBody(uploadMiddleware) {
   return function guardedUpload(req, res, next) {
     uploadMiddleware(req, res, (error) => {
+      // Busboy reports truncated multipart streams as ordinary Errors.
+      // Normalize only its fixed parser failures, never arbitrary IO errors.
+      if (error && ["Unexpected end of form", "Unexpected end of file", "Malformed part header", "Multipart: Boundary not found"].includes(error.message)) {
+        return next(new ValidationError("Invalid multipart upload."));
+      }
       if (error) return next(error);
       return rejectUnsupportedText(req, res, next);
     });

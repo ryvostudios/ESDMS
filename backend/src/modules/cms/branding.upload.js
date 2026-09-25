@@ -1,5 +1,6 @@
 import zlib from "node:zlib";
 import multer from "multer";
+import { flatMultipartLimits } from "../../shared/http/multipart-limits.js";
 import PDFDocument from "pdfkit";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import { guardParsedBody } from "../../shared/http/text-safety.js";
@@ -22,7 +23,7 @@ const PNG_CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_LOGO_BYTES, files: 1, fields: 2 },
+  limits: flatMultipartLimits({ fileSize: MAX_LOGO_BYTES, fields: 1, fieldSize: 11, fieldNameSize: 8 }),
   fileFilter(req, file, callback) {
     if (!EXTENSION_BY_MIME[file.mimetype]) {
       return callback(new ValidationError("Logo must be a PNG or JPEG image."));
