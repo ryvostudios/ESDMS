@@ -2,6 +2,7 @@ import zlib from "node:zlib";
 import multer from "multer";
 import { flatMultipartLimits } from "../../shared/http/multipart-limits.js";
 import PDFDocument from "pdfkit";
+import sharp from "sharp";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import { guardParsedBody } from "../../shared/http/text-safety.js";
 
@@ -84,5 +85,22 @@ export function extractLogo(req) {
   } catch (error) {
     if (error instanceof ValidationError) throw error;
     throw new ValidationError("The uploaded file is not a valid PNG or JPEG image.");
+  }
+}
+
+// The CMS stores one canonical 512-pixel PNG. Each public favicon/PWA size
+// is derived from these validated bytes, never from a client-provided URL.
+export async function extractAppIcon(req) {
+  const image = extractLogo(req);
+  if (image.width !== image.height || image.width < 512) {
+    throw new ValidationError("Application icon must be square and at least 512 pixels on each side.");
+  }
+  try {
+    const buffer = await sharp(image.buffer, { limitInputPixels: 4096 * 4096, failOn: "warning" })
+      .rotate().resize(512, 512).png().toBuffer();
+    if (buffer.length > MAX_LOGO_BYTES) throw new Error("output too large");
+    return { buffer, mimeType: "image/png", extension: "png", width: 512, height: 512 };
+  } catch {
+    throw new ValidationError("The uploaded application icon could not be decoded safely.");
   }
 }

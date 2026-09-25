@@ -11,6 +11,8 @@ import pool from '../../config/database.js';
 import config from '../../config/env.js';
 import { storageService, verifyChecksum } from '../../shared/storage/storage-service.js';
 import { defaultLogoBytes, parseLogoReference } from '../../shared/documents/branding.js';
+import sharp from 'sharp';
+import { createHash } from 'node:crypto';
 
 export function parse(schema, value) {
   const result = schema.safeParse(value);
@@ -28,13 +30,15 @@ export function describeLogo(reference) {
   if (!reference) return 'Default E-Set logo';
   return `Uploaded ${reference.mimeType==='image/png'?'PNG':'JPEG'} ${reference.width}×${reference.height}, ${Math.ceil(reference.sizeBytes/1024)} KB, sha256 ${reference.sha256.slice(0,12)}`;
 }
+const describeManagedArtwork = (key,reference) => key==='company.app_icon' && !reference
+  ? 'Bundled application icons' : describeLogo(reference);
 export async function listSettings(category) {
   return (await repo.settings()).filter(row => SETTINGS[row.key]?.category === category).map(row => {
     const {managed,...definition} = SETTINGS[row.key];
     if (!managed) return {...row,...definition,type:'plain_text',scope:'company'};
     const reference = parseLogoReference(row.value);
     return {key:row.key,category:row.category,revision:row.revision,updated_at:row.updated_at,...definition,type:'logo',scope:'company',
-      logo:{source:reference?'uploaded':'default',description:describeLogo(reference)}};
+      logo:{source:reference?'uploaded':'default',description:describeManagedArtwork(row.key,reference)}};
   });
 }
 export async function updateSetting(actor, key, body) {
@@ -104,17 +108,18 @@ export async function activeLogo() {
   return {buffer,mimeType:reference.mimeType,etag:reference.sha256};
 }
 
-async function writeLogo(actor, revision, nextValue) {
+async function writeLogo(actor, revision, nextValue, key = 'company.logo') {
+  if (key !== 'company.logo' && key !== 'company.app_icon') throw new ValidationError('Unknown managed artwork.');
   return withTransaction(async client => {
-    const current = (await client.query("SELECT value,revision FROM cms_settings WHERE key='company.logo' FOR UPDATE")).rows[0];
+    const current = (await client.query('SELECT value,revision FROM cms_settings WHERE key=$1 FOR UPDATE',[key])).rows[0];
     if (!current) throw new NotFoundError('Configuration not found.');
     if (current.revision !== revision) throw new ConflictError('Configuration changed. Reload before saving.');
     const updated = await client.query(
-      "UPDATE cms_settings SET value=$1,revision=revision+1,updated_at=CURRENT_TIMESTAMP,updated_by_user_id=$2 WHERE key='company.logo' RETURNING revision",
-      [nextValue,actor.id]);
+      'UPDATE cms_settings SET value=$1,revision=revision+1,updated_at=CURRENT_TIMESTAMP,updated_by_user_id=$2 WHERE key=$3 RETURNING revision',
+      [nextValue,actor.id,key]);
     await recordGovernanceAudit(client,{actorUserId:actor.id,action:'CMS_SETTING_CHANGED',metadata:{
-      key:'company.logo',before:describeLogo(parseLogoReference(current.value)),after:describeLogo(parseLogoReference(nextValue))}});
-    return {key:'company.logo',revision:updated.rows[0].revision,logo:{source:nextValue?'uploaded':'default',description:describeLogo(parseLogoReference(nextValue))}};
+      key,before:describeManagedArtwork(key,parseLogoReference(current.value)),after:describeManagedArtwork(key,parseLogoReference(nextValue))}});
+    return {key,revision:updated.rows[0].revision,logo:{source:nextValue?'uploaded':'default',description:describeManagedArtwork(key,parseLogoReference(nextValue))}};
   });
 }
 const revisionSchema = z.object({revision:z.coerce.number().int().positive()}).strict();
@@ -137,4 +142,76 @@ export async function replaceLogo(actor, body, logo) {
 export async function resetLogo(actor, body) {
   if (!actor.permissions.has('cms.branding.manage')) throw new ForbiddenError();
   return writeLogo(actor,parse(revisionSchema,body).revision,'');
+}
+
+export async function replaceAppIcon(actor, body, icon) {
+  if (!actor.permissions.has('cms.branding.manage')) throw new ForbiddenError();
+  const {revision} = parse(revisionSchema,body);
+  const saved = await storageService.save(icon.buffer,{namespace:'cms',gatePassId:'branding',category:'app-icon',extension:'png'});
+  try {
+    return await writeLogo(actor,revision,JSON.stringify({storageKey:saved.storageKey,sha256:saved.checksumSha256,
+      mimeType:'image/png',width:512,height:512,sizeBytes:saved.sizeBytes}),'company.app_icon');
+  } catch (error) {
+    await storageService.remove(saved.storageKey);
+    throw error;
+  }
+}
+
+export async function resetAppIcon(actor, body) {
+  if (!actor.permissions.has('cms.branding.manage')) throw new ForbiddenError();
+  return writeLogo(actor,parse(revisionSchema,body).revision,'','company.app_icon');
+}
+
+// Missing CMS/storage never blocks login or the shell: callers retain the
+// bundled icons. Public responses contain only a digest/version, no key.
+export async function activeAppIcon() {
+  const row = (await repo.settings()).find(item => item.key === 'company.app_icon');
+  const reference = parseLogoReference(row?.value);
+  if (!reference || reference.mimeType !== 'image/png' || reference.width !== 512 || reference.height !== 512) return null;
+  try {
+    const buffer = await storageService.read(reference.storageKey);
+    if (!verifyChecksum(buffer,reference.sha256)) return null;
+    return {buffer,version:reference.sha256};
+  } catch { return null; }
+}
+
+export async function appIconVariant(size) {
+  if (![32,180,192,512].includes(size)) throw new NotFoundError('Icon not available.');
+  const icon = await activeAppIcon();
+  if (!icon) throw new NotFoundError('Icon not available.');
+  const buffer = size === 512 ? icon.buffer : await sharp(icon.buffer,{limitInputPixels:512*512,failOn:'warning'})
+    .resize(size,size).png().toBuffer();
+  return {buffer,etag:`${icon.version}-${size}`};
+}
+
+export async function publicWebBranding() {
+  let version = null;
+  try { version = (await activeAppIcon())?.version || null; } catch { /* bundled fallback */ }
+  return {appIconVersion:version};
+}
+
+export async function publicManifest() {
+  let content = {};
+  try { content = await publicContent(); } catch { /* bundled fallback */ }
+  const {appIconVersion} = await publicWebBranding();
+  const iconUrl = (size,maskable=false) => appIconVersion
+    ? `/api/v1/cms/branding/app-icon/${size}?v=${appIconVersion}`
+    : `/${maskable?'maskable-':''}icon-${size}.png`;
+  const icons = appIconVersion ? [
+    {src:iconUrl(192),sizes:'192x192',type:'image/png',purpose:'any'},
+    {src:iconUrl(512),sizes:'512x512',type:'image/png',purpose:'any'},
+  ] : [
+    {src:iconUrl(192),sizes:'192x192',type:'image/png',purpose:'any'},
+    {src:iconUrl(512),sizes:'512x512',type:'image/png',purpose:'any'},
+    {src:iconUrl(192,true),sizes:'192x192',type:'image/png',purpose:'maskable'},
+    {src:iconUrl(512,true),sizes:'512x512',type:'image/png',purpose:'maskable'},
+  ];
+  const manifest = {
+    name:content['company.display_name'] || 'E-Set Digital Management System',
+    short_name:content['company.short_name'] || 'E-Set DMS',
+    theme_color:'#15191e',background_color:'#eef2f5',display:'standalone',start_url:'/',scope:'/',
+    icons,
+  };
+  const body = JSON.stringify(manifest);
+  return {body,etag:createHash('sha256').update(body).digest('hex')};
 }

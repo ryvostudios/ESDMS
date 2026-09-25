@@ -1,5 +1,30 @@
 # System Administration foundation
 
+## Web and installed-app branding (Phase 4)
+
+The existing `company.logo` is now also used in the desktop and mobile
+navigation header. Its public, checksum-checked endpoint is shared with the
+login page; a failed CMS or storage read leaves the bundled E-Set mark in place.
+Document branding and historical PDF snapshots retain their existing behavior.
+
+Migration `1787437000000_cms-web-pwa-branding` adds the managed
+`company.app_icon` key to the existing allowlisted `cms_settings` table. A user
+with `cms.branding.manage` can upload a square PNG or JPEG, at most 2 MB, with
+decoded dimensions from 512 to 4096 pixels. The server decodes and converts it
+to a canonical 512-pixel PNG with a bounded pixel count; SVG and client-provided
+paths are rejected. The existing CMS revision check and `CMS_SETTING_CHANGED`
+audit apply. Audit records only a short format/dimension/checksum description,
+never image bytes or storage keys.
+
+Public `/api/v1/cms/branding/public` returns only the active icon digest.
+`/api/v1/cms/branding/manifest.webmanifest` returns the public app name and
+versioned 192/512-pixel icon URLs, while `/api/v1/cms/branding/app-icon/:size`
+serves validated 32/180/192/512-pixel PNG derivatives with ETags. The frontend
+retains static icon and manifest links as offline/login fallbacks, switching to
+the public CMS URLs only after a successful fetch. API assets are served outside
+the service worker's cache-first shell. Browser and OS install-icon caches can
+outlive an update; an already-installed PWA may need refresh or reinstall.
+
 `/cms` integrates existing Organization, Governance and Workforce configuration.
 Old `/governance` and `/workforce/config` bookmarks remain supported. Employee
 records remain under Workforce. Sites are read-only here: site provisioning and

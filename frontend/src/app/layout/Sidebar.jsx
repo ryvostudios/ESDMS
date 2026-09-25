@@ -1,9 +1,11 @@
 import { useRef } from "react";
 import { NavList } from "./NavList.jsx";
 import { SidebarKineticBackground } from "./SidebarKineticBackground.jsx";
+import { useCompanyLogo } from "../../modules/cms/company-logo.js";
 import styles from "./Sidebar.module.css";
 
 export function Sidebar() {
+  const logoUrl = useCompanyLogo();
   // The grid's own container is pointer-events:none, so it never receives
   // pointer events itself — the <aside> IS the real hit-testable owner
   // (brand + nav live inside it), so pointer tracking listens there
@@ -17,7 +19,7 @@ export function Sidebar() {
       </div>
       <div className={styles.brand}>
         <span className={styles.brandMark} aria-hidden="true">
-          ES
+          {logoUrl ? <img src={logoUrl} alt="" /> : "ES"}
         </span>
         <span className={styles.brandText}>
           <span className={styles.brandName}>E-Set DMS</span>

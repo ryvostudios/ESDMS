@@ -15,7 +15,7 @@ Never write secret values on this list.
 ## Database
 - [ ] Production plan and region chosen; backups enabled
 - [ ] `npm run db:release` succeeded from the operator machine
-- [ ] 47/47 migrations applied
+- [ ] 48/48 migrations applied
 - [ ] `esdms_runtime` verified by the release (grants, RLS, provisioning marker)
 - [ ] Migration credentials are **not** in the Render API environment
 
@@ -30,7 +30,7 @@ Never write secret values on this list.
 - [ ] Web service from `backend/`, `npm ci` / `npm start`, health check `/api/v1/health/ready`
 - [ ] Paid always-on plan; auto-deploy off; no pre-deploy migrations
 - [ ] Environment variables per PRODUCTION_ENVIRONMENT.md §3
-- [ ] `/api/v1/health` ok; `/api/v1/health/ready` ready, 47/47, no problems
+- [ ] `/api/v1/health` ok; `/api/v1/health/ready` ready, 48/48, no problems
 
 ## Frontend
 - [ ] Static site from `frontend/`, `npm ci && npm run build`, publish `dist`

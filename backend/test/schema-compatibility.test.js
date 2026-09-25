@@ -10,11 +10,12 @@ import { inspectSchemaCompatibility } from "../src/shared/db/schema-compatibilit
 // produce against a live server.
 
 const HEALTHY_SCHEMA = {
-  applied_count: 47,
-  latest_applied: "1787436000000_cloud-storage",
+  applied_count: 48,
+  latest_applied: "1787437000000_cms-web-pwa-branding",
   expected_applied: true,
   cloud_storage_columns_present: true,
   cms_columns_present: true,
+  cms_app_icon_present: true,
   cms_audit_scope_trigger_present: true,
   required_column_present: true,
   rollback_trigger_present: true,

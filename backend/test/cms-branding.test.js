@@ -80,6 +80,9 @@ after(async () => {
   if (rows["company.logo"].logo.source !== "default") {
     await call(tokens.ceo, "DELETE", "/cms/branding/logo", { revision: rows["company.logo"].revision });
   }
+  if (rows["company.app_icon"].logo.source !== "default") {
+    await call(tokens.ceo, "DELETE", "/cms/branding/app-icon", { revision: rows["company.app_icon"].revision });
+  }
   const name = rows["document.company_name"];
   if (name.value !== "E-Set Engineering Services") {
     await call(tokens.ceo, "PATCH", "/cms/settings/document.company_name", { value: "E-Set Engineering Services", revision: name.revision });
@@ -87,6 +90,48 @@ after(async () => {
   await pool.query("DELETE FROM user_permission_overrides WHERE user_id = ANY($1::uuid[])", [[users.siteManager, users.employee]]);
   await server.close();
   await pool.end();
+});
+
+test("application icon is square, decoded, CMS-authorized, audited and publicly versioned", async () => {
+  let revision = (await brandingRows())["company.app_icon"].revision;
+  const upload = (token, bytes, type = "image/png") => call(token, "PUT", "/cms/branding/app-icon",
+    logoForm(bytes, { revision, type }), true);
+  assert.equal((await upload(null, png(512, 512))).status, 401);
+  assert.equal((await upload(tokens.employee, png(512, 512))).status, 403);
+  assert.equal((await upload(tokens.ceo, png(511, 511))).status, 400);
+  assert.equal((await upload(tokens.ceo, png(512, 600))).status, 400);
+  assert.equal((await upload(tokens.ceo, Buffer.from('<svg><script>alert(1)</script></svg>'), 'image/svg+xml')).status, 400);
+  const saved = await upload(tokens.ceo, png(512, 512));
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.ok(!JSON.stringify(saved.body).includes('storageKey'));
+  revision = saved.body.data.revision;
+  const publicInfo = await call(null, "GET", "/cms/branding/public");
+  assert.equal(publicInfo.status, 200);
+  assert.match(publicInfo.body.data.appIconVersion, /^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(publicInfo.body).includes('storageKey'));
+
+  for (const size of [32, 180, 192, 512]) {
+    const response = await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/${size}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'image/png');
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(bytes.readUInt32BE(16), size);
+    assert.equal(bytes.readUInt32BE(20), size);
+  }
+  const manifestResponse = await fetch(`${server.baseUrl}/api/v1/cms/branding/manifest.webmanifest`);
+  assert.equal(manifestResponse.status, 200);
+  assert.match(manifestResponse.headers.get('content-type'), /^application\/manifest\+json/);
+  const manifest = await manifestResponse.json();
+  assert.ok(manifest.icons.every(icon => icon.src.includes(publicInfo.body.data.appIconVersion)));
+  assert.ok(!JSON.stringify(manifest).includes('storageKey'));
+  const audit = await pool.query("SELECT metadata FROM governance_audit_log WHERE action='CMS_SETTING_CHANGED' AND metadata->>'key'='company.app_icon' ORDER BY created_at DESC LIMIT 1");
+  assert.ok(audit.rows.length);
+  assert.ok(!JSON.stringify(audit.rows[0].metadata).includes('storageKey'));
+  assert.equal((await call(tokens.ceo, "DELETE", "/cms/branding/app-icon", { revision })).status, 200);
+  const fallback = await call(null, "GET", "/cms/branding/public");
+  assert.equal(fallback.body.data.appIconVersion, null);
+  assert.equal((await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/192`)).status, 404);
 });
 
 test("branding changes require cms.branding.manage on the server; DENY wins; CEO protection is unaffected", async () => {

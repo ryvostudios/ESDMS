@@ -25,8 +25,8 @@ can be created as soon as the database exists; otherwise the order is:
    `MIGRATION_DATABASE_URL`, `DATABASE_URL` (as `esdms_runtime`) and
    `ESDMS_RUNTIME_PASSWORD` privately (not in shell history or files in Git).
 5. **Release the database:** `npm run db:release`.
-6. **Verify 47 migrations** — the release output and later readiness report
-   `expectedMigrationCount` = `appliedMigrationCount` = 47.
+6. **Verify 48 migrations** — the release output and later readiness report
+   `expectedMigrationCount` = `appliedMigrationCount` = 48.
 7. **Verify the restricted runtime role** — `db:release` step 3 must pass
    (grants, RLS, ownership, functions, provisioning marker, login query).
 8. **Storage.** Create the private bucket (e.g. `esdms-private`).
@@ -36,7 +36,7 @@ can be created as soon as the database exists; otherwise the order is:
 10. **Deploy backend** (approved commit, manual deploy).
 11. `GET https://api.<company-domain>/api/v1/health` → `ok`.
 12. `GET .../api/v1/health/ready` → `ready`, `schemaCompatible` and
-    `runtimeProvisioningCompatible` true, 47/47, no `problems`.
+    `runtimeProvisioningCompatible` true, 48/48, no `problems`.
 13. **Frontend.** Create the static site (`VITE_API_URL` = frontend origin +
     `/api/v1`, `/api/v1/*` rewrite, SPA fallback); deploy.
 14. **DNS.** Point `app.` and `api.` at the Render services; wait for TLS.
@@ -81,7 +81,7 @@ can be created as soon as the database exists; otherwise the order is:
    re-converges `esdms_runtime` grants/RLS/provisioning marker).
 4. Restore bucket objects for the same point in time.
 5. Deploy the Git commit that matches the restored schema (migration level).
-6. Verify `/health`, `/health/ready` (47/47), CEO login, one document download.
+6. Verify `/health`, `/health/ready` (48/48), CEO login, one document download.
 
 **Restore verification:** perform the steps above into an **isolated**
 database and bucket before go-live and record the date and result. Until that
@@ -94,7 +94,7 @@ Use one controlled smoke-test employee/user and clearly named test records.
 - **Auth:** CEO signs in (no forced change for the CEO); voluntary change at
   `/change-password` works if exercised; CEO shows
   no role/deactivate/override controls in Users & Access.
-- **System:** `/api/v1/health` ok; `/api/v1/health/ready` ready, 47/47; CMS
+- **System:** `/api/v1/health` ok; `/api/v1/health/ready` ready, 48/48; CMS
   areas open for CEO; Audit Center shows the setup actions.
 - **Workforce:** create one employee and a login; first login forces a
   password change; the user sees only their permitted areas.

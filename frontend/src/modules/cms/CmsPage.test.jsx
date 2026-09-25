@@ -69,6 +69,23 @@ describe('CMS area and content boundaries',()=>{
   expect(document.querySelector('img')).toBeNull();
   expect(screen.queryByRole('button',{name:'Restore default E-Set logo'})).toBeNull();
  });
+ test('application icon uses its own CMS endpoint and upload control',async()=>{
+  const row={key:'company.app_icon',label:'Application icon',description:'PWA artwork',type:'logo',revision:7,logo:{source:'uploaded',description:'Uploaded PNG 512×512'}};
+  state.get.mockImplementation(url=>Promise.resolve({data:url==='/cms'?[{id:'branding',label:'Branding'}]:[row]}));
+  state.getBlob.mockResolvedValue(new Blob(['png'],{type:'image/png'}));
+  globalThis.URL.createObjectURL=vi.fn(()=>'blob:app-icon');globalThis.URL.revokeObjectURL=vi.fn();
+  state.put.mockResolvedValue({data:{}});state.del.mockResolvedValue({data:{}});
+  mount('/cms/branding');
+  expect(await screen.findByAltText('Current application icon')).toBeTruthy();
+  expect(state.getBlob).toHaveBeenCalledWith('/cms/branding/app-icon/192');
+  fireEvent.change(screen.getByLabelText(/Replace application icon/),{target:{files:[new File(['png'],'icon.png',{type:'image/png'})]}});
+  fireEvent.click(screen.getByRole('button',{name:'Upload application icon'}));
+  await waitFor(()=>expect(state.put).toHaveBeenCalled());
+  expect(state.put.mock.calls[0][0]).toBe('/cms/branding/app-icon');
+  expect(state.put.mock.calls[0][1].get('revision')).toBe('7');
+  fireEvent.click(screen.getByRole('button',{name:'Restore bundled icons'}));
+  await waitFor(()=>expect(state.del).toHaveBeenCalledWith('/cms/branding/app-icon',{body:{revision:7}}));
+ });
  test('audit center names the target and override capability, with an unambiguous override label',async()=>{
   const items=[
    {id:'e1',action:'PERMISSION_DENIED',actor_name:'Test CEO',created_at:'2026-09-25T00:00:00Z',target_user_name:'Test Employee',target_user_email:'employee@example.test',capability_code:'demand.view'},

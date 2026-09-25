@@ -175,7 +175,7 @@ test("dry run is read-only, includes current storage/configuration and never exp
   const report = JSON.parse(result.stdout.slice(result.stdout.indexOf("{")));
   assert.equal(report.remove.gate_passes, before);
   assert.ok(report.preserve.departments > 0);
-  assert.equal(report.preserve.cms_settings, 9);
+  assert.equal(report.preserve.cms_settings, 10);
   assert.equal(report.connections.length, 2);
   assert.equal(await count("gate_passes"), before);
 });
@@ -311,7 +311,7 @@ test("post-reset release verification, restricted-runtime CEO login and readines
   const result=JSON.parse(smoke.stdout.trim().split("\n").at(-1));
   assert.equal(result.loginStatus,200); assert.equal(result.meStatus,200);
   assert.equal(result.invalidLoginStatus,401); assert.equal(result.readinessStatus,200);
-  assert.equal(result.appliedMigrationCount,47); assert.equal(result.runtimeProvisioningCompatible,true);
+  assert.equal(result.appliedMigrationCount,48); assert.equal(result.runtimeProvisioningCompatible,true);
   const cms=spawnSync(process.execPath,["--input-type=module","-e",`
     import app from './src/app.js'; import pool from './src/config/database.js';
     const server=app.listen(0,'127.0.0.1'); await new Promise(r=>server.once('listening',r));

@@ -20,7 +20,7 @@ export function folderPath({ namespace, category, identifier, site, year }) {
 }
 export async function storageContext({gatePassId,category,cloudCategory,namespace='gate-pass'}) {
   let row;
-  if (namespace === 'cms' && gatePassId === 'branding' && category === 'logo') return {namespace,category,identifier:'Branding',site:'Company',entityId:'branding',siteId:null};
+  if (namespace === 'cms' && gatePassId === 'branding' && ['logo','app-icon'].includes(category)) return {namespace,category,identifier:'Branding',site:'Company',entityId:'branding',siteId:null};
   if (!/^[a-f0-9-]{36}$/i.test(gatePassId || '')) throw new ServiceUnavailableError('Invalid storage owner.');
   if (namespace === 'workforce') {
     row = (await pool.query(category==='draft'

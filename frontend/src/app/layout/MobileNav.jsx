@@ -2,11 +2,13 @@ import { useEffect, useRef } from "react";
 import { NavList } from "./NavList.jsx";
 import { CloseIcon } from "../../shared/icons.jsx";
 import { MobileKineticBackground } from "../../shared/components/MobileKineticBackground.jsx";
+import { useCompanyLogo } from "../../modules/cms/company-logo.js";
 import styles from "./MobileNav.module.css";
 
 const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function MobileNav({ open, onClose, triggerRef }) {
+  const logoUrl = useCompanyLogo();
   const closeButtonRef = useRef(null);
   const drawerRef = useRef(null);
 
@@ -75,7 +77,7 @@ export function MobileNav({ open, onClose, triggerRef }) {
         <div className={styles.header}>
           <div className={styles.brand}>
             <span className={styles.brandMark} aria-hidden="true">
-              ES
+              {logoUrl ? <img src={logoUrl} alt="" /> : "ES"}
             </span>
             <span className={styles.brandName}>E-Set DMS</span>
           </div>

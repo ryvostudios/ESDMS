@@ -7,6 +7,7 @@ import gridStyles from "../../shared/components/MobileKineticBackground.module.c
 vi.mock("../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({ hasPermission: () => true }),
 }));
+vi.mock("../../modules/cms/company-logo.js", () => ({ useCompanyLogo: () => "blob:managed-logo" }));
 
 function stubCanvasContext() {
   const ctx = {
@@ -69,6 +70,7 @@ describe("MobileNav focus trap", () => {
     });
 
     const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector('img')?.src).toContain('blob:managed-logo');
     const focusable = dialog.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
