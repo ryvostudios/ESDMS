@@ -167,12 +167,18 @@ not part of this migration.
 | Role | `search_path` (set with `ALTER ROLE ... SET`) |
 | --- | --- |
 | ESDMS migration/operator identity, `esdms_runtime` | unchanged (`public`) |
-| `permit_migrator`, `permit_runtime`, `permit_privileged` | `permit, pg_catalog` |
-| `attendance_migrator`, `attendance_runtime` | `attendance, pg_catalog` |
+| `permit_migrator`, `permit_runtime`, `permit_privileged` | `pg_catalog, permit, pg_temp` (tested, Permit Phase 2) |
+| `attendance_migrator`, `attendance_runtime` | `pg_catalog, attendance, pg_temp` |
+
+`pg_catalog` comes first so no application object can shadow a built-in,
+and `pg_temp` is listed last so a temporary object can never shadow an
+application table. `public` is never on a Permit or Attendance path.
 
 Additionally:
-- Every SECURITY DEFINER function sets `SET search_path = <own schema>,
-  pg_catalog` (Permit already pins it; re-pin to `permit`).
+- Every SECURITY DEFINER function sets `search_path = pg_catalog, pg_temp`
+  and schema-qualifies every application object it touches (for example
+  `permit.privileged_access_events`). Invoker functions that rely on
+  unqualified names pin `pg_catalog, <own schema>`.
 - Extensions used by Permit (e.g. `gen_random_uuid()` is core in PG 13+;
   anything else) are referenced schema-qualified (`extensions.x`) where
   Supabase installs them outside `pg_catalog`.
@@ -364,6 +370,16 @@ objects are **not** part of database backups (§16).
 
 Existing Permit objects are copied bucket→bucket with checksum verification;
 object keys stored in `permit` rows are preserved so no row rewrite is needed.
+
+**Decision: application database roles get no access to Supabase's managed
+`storage` schema.** Permit's standalone backend reads `storage.buckets`
+during its private-bucket readiness check. In the shared database
+`permit_runtime` has neither BYPASSRLS nor any grant outside `permit`, so
+that read returns nothing and document generation fails closed. This is a
+known storage-phase blocker that must be resolved before the Permit
+cut-over. The resolution is to check the Permit private bucket through
+Permit's existing S3/storage interface, not to grant Permit database roles
+access to `storage`. It is not implemented yet.
 
 ## 13. Migration ownership, ledgers and locking
 

@@ -55,8 +55,10 @@ In the Permit repository:
 1. Migration runner: ledger `permit.schema_migrations`; platform migration
    lock; connects as `permit_migrator`.
 2. Role provisioning: `permit_migrator`, `permit_runtime` (**NOBYPASSRLS**),
-   `permit_privileged` only where required; `search_path = permit,
-   pg_catalog`; revokes for `PUBLIC`/`anon`/`authenticated`/`service_role`.
+   `permit_privileged` only where required; `search_path = pg_catalog,
+   permit, pg_temp` (SECURITY DEFINER functions: `pg_catalog, pg_temp`
+   with every object schema-qualified); revokes for
+   `PUBLIC`/`anon`/`authenticated`/`service_role`.
 3. Verified final-state baseline (0038) schema-qualified into `permit`,
    explicit per-table policies `TO permit_runtime`, SECURITY DEFINER
    `search_path` re-pinned.
@@ -188,3 +190,7 @@ period, with final archived dumps kept.
 5. ESDMS `service_role` exposure on `public` — separate ESDMS assessment.
 6. Remote human access to Attendance needs its own auth design before any
    exposure beyond the current trusted/local boundary.
+7. Permit document generation's bucket readiness check reads Supabase
+   `storage.buckets`, which Permit roles cannot (and will not) access in the
+   shared database. Before the Permit cut-over, replace it with a check
+   through Permit's S3/storage interface (architecture §12).
