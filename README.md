@@ -23,7 +23,10 @@ procedure.
 [`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md),
 [`docs/PRE_HANDOVER_AUDIT.md`](docs/PRE_HANDOVER_AUDIT.md),
 [`docs/MULTIPART_SECURITY.md`](docs/MULTIPART_SECURITY.md) and
-[`docs/DEFERRED_WORK.md`](docs/DEFERRED_WORK.md).
+[`docs/DEFERRED_WORK.md`](docs/DEFERRED_WORK.md). Production deployment:
+[`docs/PRODUCTION_ENVIRONMENT.md`](docs/PRODUCTION_ENVIRONMENT.md),
+[`docs/PRODUCTION_RUNBOOK.md`](docs/PRODUCTION_RUNBOOK.md) and
+[`docs/GO_LIVE_CHECKLIST.md`](docs/GO_LIVE_CHECKLIST.md).
 
 No production deployment exists yet: deployment is explicitly gated on
 independent re-review of the fix passes. See `docs/ARCHITECTURE.md` §13 and

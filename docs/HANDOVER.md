@@ -187,5 +187,8 @@ Never paste credentials, connection strings or tokens into tickets or chat.
 
 ## Related documents
 
+[PRODUCTION_ENVIRONMENT.md](./PRODUCTION_ENVIRONMENT.md) ·
+[PRODUCTION_RUNBOOK.md](./PRODUCTION_RUNBOOK.md) ·
+[GO_LIVE_CHECKLIST.md](./GO_LIVE_CHECKLIST.md) ·
 [DEFERRED_WORK.md](./DEFERRED_WORK.md) ·
 [SECURITY.md](./SECURITY.md) · [MULTIPART_SECURITY.md](./MULTIPART_SECURITY.md)
