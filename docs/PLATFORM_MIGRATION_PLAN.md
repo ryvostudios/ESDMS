@@ -1,7 +1,10 @@
 # Platform migration plan
 
-**Status: plan only. Only Phase 0 (this document and the architecture
-contract) is done.** Architecture and invariants:
+**Status (Phase 6): Phases 0-8 are implemented on feature branches and
+rehearsed on disposable databases only; nothing is deployed.** The go-live
+procedure, with its exact tooling, order and rollback, is now
+[PLATFORM_GO_LIVE_RUNBOOK.md](./PLATFORM_GO_LIVE_RUNBOOK.md), which
+supersedes phases 9-13 below. Architecture and invariants:
 [PLATFORM_DATABASE_ARCHITECTURE.md](./PLATFORM_DATABASE_ARCHITECTURE.md).
 
 Starting point (real current state):
@@ -181,6 +184,20 @@ persistence only after explicit written approval and the agreed retention
 period, with final archived dumps kept.
 
 ## Open blockers
+
+Status after Phase 6 (details in PLATFORM_GO_LIVE_RUNBOOK.md):
+
+| # | Status |
+| --- | --- |
+| 1 | Still open: the real `attendance.db` is a deployment prerequisite (read-only rehearsal on a private copy only after approval). |
+| 2 | Resolved on the rehearsal machine: E2E 69/69. |
+| 3 | Open until the production preflight (runbook step 10): aggregate prefix counts only. |
+| 4 | Still open. |
+| 5 | Measured: 242 operations on `public`; none in `permit`/`attendance`. See DEFERRED_WORK.md. |
+| 6 | Enforced for now: Attendance fails startup on a non-loopback bind and refuses non-loopback Host headers. |
+| 7 | Resolved in Permit Phase 4 (storage-provider readiness). |
+
+Original list:
 
 1. A copy of the live company-PC `attendance.db` (Phase 1/7).
 2. Permit E2E needs `npx playwright install chromium` on the test machine.

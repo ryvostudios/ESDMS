@@ -25,3 +25,21 @@ application works without them.
      purchasing has been closed.
    - Site-wide reviewers and Procurement can read (not edit) draft Demands at
      their site.
+6. **`service_role` privileges on `public` (found by the Phase 6 platform
+   rehearsal).** On Supabase, default privileges grant `service_role` all
+   privileges on the objects ESDMS migrations create in `public`.
+   `provision-db-roles.sql` revokes `anon`/`authenticated` but not
+   `service_role`. The rehearsal counted 242 allowed operations and EXECUTE
+   on `esdms_schema_migration_state`. `service_role` has no privilege in
+   `permit` or `attendance`.
+
+   Decision needed: revoke in provisioning (and confirm nothing, including
+   Supabase Storage usage, needs it), or document the acceptance. Until
+   then the service-role key stays server-only, and `public` must not be
+   exposed through the Supabase Data API.
+7. **`esdms_schema_migration_state(text)` search_path hygiene.** Its
+   SECURITY DEFINER `search_path` is `pg_catalog, public`, without
+   `pg_temp` last. It is not exploitable, because the body reads only the
+   schema-qualified `public.pgmigrations`. Add `pg_temp` last in a future
+   expand-only migration; the platform audit lists it as a reviewed
+   exception until then.

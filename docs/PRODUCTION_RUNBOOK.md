@@ -1,5 +1,9 @@
 # Production runbook
 
+> **Shared-platform go-live (ESDMS + Permit + Attendance):** follow
+> [PLATFORM_GO_LIVE_RUNBOOK.md](./PLATFORM_GO_LIVE_RUNBOOK.md). This document
+> remains the ESDMS-only procedure it references.
+
 Operator procedure for the first company production deployment and later
 releases. Configuration details live in
 [PRODUCTION_ENVIRONMENT.md](./PRODUCTION_ENVIRONMENT.md); the tick-list is
