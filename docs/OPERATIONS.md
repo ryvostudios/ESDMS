@@ -75,59 +75,68 @@ migration merges records, and neither leaves a partially applied ledger.
 | `/health/ready` 200 but login fails | Should now be impossible — report it | Capture `problems` and the request id |
 | Frontend and backend revisions differ | Deploy skew | Redeploy the lagging side; `/diagnostics` shows both |
 
-## Safe non-production data reset
+## Safe local operational-data reset
 
-`backend/scripts/reset-operational-data.js` clears operational/demo data so an
-owner can rebuild their organization by hand through the UI. It is **not** a
-migration-down, not a `TRUNCATE`, and it never weakens an application
-guarantee: the runtime database role still cannot delete a Gate Pass or
-rewrite an audit log after it has run.
+`backend/scripts/reset-operational-data.js` is an offline maintenance tool,
+not an application API or a production reset mechanism. Its owner credential
+must never be installed in the API environment.
 
-```bash
-cd backend
-DATABASE_URL=postgresql://localhost:5432/eset_dev \
-ESDMS_RESET_CONFIRM=eset_dev \
-ESDMS_ORIGINAL_CEO_EMAIL=ceo@company.example \
-npm run reset:operational-data
-```
+Start with `npm run reset:operational-data -- --dry-run` from `backend`, with
+`DATABASE_URL` and `ESDMS_ORIGINAL_CEO_EMAIL` supplied privately. Dry run opens
+an explicit read-only transaction and returns counts, business file references,
+cloud object IDs/paths, safe connection status, and blockers. It neither
+contacts storage providers nor changes database rows. Its inventory contains
+identifiers: keep it private and outside Git.
 
-It refuses to run when:
+Execution requires all of the following:
 
-* `NODE_ENV=production`;
-* the database name or host looks like production (matches `prod`);
-* `ESDMS_RESET_CONFIRM` does not exactly equal the target database name;
-* `ESDMS_ORIGINAL_CEO_EMAIL` is missing or does not identify the active CEO
-  role account created as this environment's permanent original CEO — so the
-  reset never relies on an age/name heuristic or leaves the database with no
-  way back in.
+- Explicit human approval of the exact environment, permanent CEO and inventory.
+- Local PostgreSQL, non-production environment, and an active existing CEO
+  matching `ESDMS_ORIGINAL_CEO_EMAIL`; no account is created or selected by age.
+- `ESDMS_RESET_CONFIRM` exactly matching the database name.
+- A fresh database **and file** backup, verified by restoring into isolation;
+  acknowledge that check with `ESDMS_RESET_BACKUP_CONFIRMED` matching the name.
+  This is an operator attestation, not an automated backup-verification claim.
+- API and outbox workers stopped; external provider deactivated; reviewed file
+  cleanup completed and verified; personal connections revoked through CMS.
+- No individual CEO override/bundle assignments that would be silently erased;
+  such a target requires an explicitly reviewed authority-preservation plan.
+- No connected/encrypted cloud credentials, active cloud provider, or undeleted
+  cloud registry objects. A retained cloud-backed logo blocks deletion too.
+- Referenced local files absent under an explicitly configured `STORAGE_DIR`
+  and `STORAGE_PROVIDER=local`. Supabase-backed cleanup is not implemented by
+  this tool and is refused; it needs a separately verified provider workflow.
 
-Everything happens in one transaction, and the script verifies before
-committing that each table it claims to clear is empty and that the reference
-data, the single Site and the configured permanent original CEO survived.
+The tool never deletes provider objects or revokes tokens. Do not merely mark
+cloud rows deleted to bypass its guard. Storage operations cannot be rolled
+back by PostgreSQL; follow the backup and reconciliation sequence in
+[PRE_HANDOVER_AUDIT.md](PRE_HANDOVER_AUDIT.md).
 
-**Preserved:** schema/migrations, roles, permissions, capability bundles,
-units of measure, document-number settings, one Site, and the configured
-permanent original CEO login (same id, email, password hash and authority).
+**Preserved:** the original CEO identity, password and scope; all sites,
+departments, positions and workforce configuration; roles, permissions,
+capability definitions and metadata; units; document settings; CMS content and
+branding; migration history and security/provisioning objects. Review these
+rows separately: preservation does not certify a QA-only reference as company
+data. References to removed users in CMS/document-setting updater fields are
+cleared; setting values are preserved. Empty provider definition rows remain,
+with personal account metadata cleared.
 
-**Cleared:** every operational record — users other than the original CEO,
-employees and assignments, departments, positions, workforce configuration
-catalogs, materials, Demands, pricing, IPOs, Delivery Challans, receipts, Gate
-Passes and their evidence, Drivers and Vehicles, leave/contracts/documents,
-governance and procurement audit rows, the notification outbox, and every
-document-number counter (so a rebuilt organization starts numbering at 1).
+**Removed after safeguards pass:** other users; employee/assignment/history,
+compensation/contracts/documents/leave/rotation data; materials/catalogs;
+Demands/pricing/approvals; IPOs/purchases; receipts/Delivery Challans; Gate
+Passes/evidence/fleet; QA audit logs, notification outbox, per-user grants and
+bundles, number counters, expired/pending OAuth states, and already-cleaned
+cloud registry rows. The explicit child-before-parent order is maintained in
+the script. Unclassified new public tables fail closed.
 
-After a reset, sign in as the original CEO and rebuild through the UI:
-Departments and Positions and Employment Types under Workforce Config,
-Employees under Employees (each can be given a login from its own page, which
-starts at EMPLOYEE role), then role and capability-bundle assignment under
-Governance — Site Administrator, Site Manager, Team Lead, Gate Keeper (role
-code `GATE_GUARD`), plus the
-Procurement Staff and Formal / Financial Approver bundles. Drivers, Vehicles
-and Materials each have their own screen. No manual SQL is required.
+Execution locks the classified tables with a bounded lock wait, then deletes
+in one transaction. Protective triggers are restored before commit; any
+failure rolls everything back. It verifies empty operational tables,
+reference-table counts and the surviving CEO. No `TRUNCATE CASCADE` is used.
 
-An HR Position named "Administration Team Lead" grants zero application
-authority: the account's role and capability bundles are the only source of
-authority, and they are set separately in Governance.
+The isolated reset test also runs the supported database release command and
+checks real CEO login and readiness using the restricted runtime role after
+reset. Actual target reset requires its own fresh post-reset checks.
 
 ## WhatsApp document delivery
 

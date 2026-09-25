@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import pg from "pg";
+import argon2 from "argon2";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // This suite runs against a database of its OWN, created and dropped here.
 //
@@ -26,19 +30,23 @@ const targetUrl = (() => {
 let admin;
 let target;
 let originalCeoBefore;
+const storageRoot=fs.mkdtempSync(path.join(os.tmpdir(),"esdms-reset-storage-"));
 
-function runReset(env = {}) {
+function runReset(env = {}, args = []) {
   const childEnv = {
     ...process.env,
     DATABASE_URL: targetUrl,
+    STORAGE_PROVIDER:"local",
+    STORAGE_DIR:storageRoot,
     ESDMS_RESET_CONFIRM: databaseName,
+    ESDMS_RESET_BACKUP_CONFIRMED: databaseName,
     ESDMS_ORIGINAL_CEO_EMAIL: "bootstrap-ceo@test.eset.local",
     ...env,
   };
   for (const [name, value] of Object.entries(childEnv)) {
     if (value === undefined) delete childEnv[name];
   }
-  return spawnSync(process.execPath, ["scripts/reset-operational-data.js"], {
+  return spawnSync(process.execPath, ["scripts/reset-operational-data.js", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: childEnv,
@@ -73,10 +81,10 @@ before(async () => {
 
   const ceo = await target.query(
     `INSERT INTO users (email, password_hash, full_name, role_id, site_id)
-     SELECT 'bootstrap-ceo@test.eset.local', 'x', 'Bootstrap CEO', r.id, $1
+     SELECT 'bootstrap-ceo@test.eset.local', $2, 'Bootstrap CEO', r.id, $1
      FROM roles r WHERE r.name = 'CEO'
      RETURNING id`,
-    [site.rows[0].id],
+    [site.rows[0].id, await argon2.hash("Reset-Rehearsal-Password-123!")],
   );
   const ceoId = ceo.rows[0].id;
   originalCeoBefore = (
@@ -130,6 +138,7 @@ before(async () => {
 });
 
 after(async () => {
+  fs.rmSync(storageRoot,{recursive:true,force:true});
   if (target) await target.end();
   if (admin) {
     await admin.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`);
@@ -137,7 +146,8 @@ after(async () => {
   }
 });
 
-test("the reset refuses production, an unconfirmed target, and a production-looking database", () => {
+test("the reset refuses production, an unconfirmed target, and a production-looking database", async () => {
+  assert.match(runReset({ DATABASE_URL:"postgresql://example.invalid/demo" }).stderr,/only a verified local environment/);
   assert.match(runReset({ NODE_ENV: "production" }).stderr, /NODE_ENV is production/);
   assert.match(runReset({ ESDMS_RESET_CONFIRM: "" }).stderr, /set ESDMS_RESET_CONFIRM/);
   assert.match(runReset({ ESDMS_RESET_CONFIRM: "not-the-database" }).stderr, /set ESDMS_RESET_CONFIRM/);
@@ -155,7 +165,60 @@ test("the reset refuses production, an unconfirmed target, and a production-look
   );
 
   // A refused run must not have touched anything.
-  assert.ok(count("gate_passes"), "refusals leave the data alone");
+  assert.ok(await count("gate_passes"), "refusals leave the data alone");
+});
+
+test("dry run is read-only, includes current storage/configuration and never exposes encrypted credentials", async () => {
+  const before = await count("gate_passes");
+  const result = runReset({ ESDMS_RESET_CONFIRM: undefined }, ["--dry-run"]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout.slice(result.stdout.indexOf("{")));
+  assert.equal(report.remove.gate_passes, before);
+  assert.ok(report.preserve.departments > 0);
+  assert.equal(report.preserve.cms_settings, 9);
+  assert.equal(report.connections.length, 2);
+  assert.equal(await count("gate_passes"), before);
+});
+
+test("cloud dependencies and missing backup confirmation refuse before deleting any business rows", async () => {
+  const before = await count("gate_passes");
+  await target.query("UPDATE cloud_storage_connections SET credentials='encrypted-test-placeholder',status='connected' WHERE provider='dropbox'");
+  let result = runReset();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cloud objects\/connections/);
+  assert.doesNotMatch(result.stdout + result.stderr, /encrypted-test-placeholder/);
+  assert.equal(await count("gate_passes"), before);
+  await target.query("UPDATE cloud_storage_connections SET credentials=NULL,status='disconnected' WHERE provider='dropbox'");
+  result = runReset({ ESDMS_RESET_BACKUP_CONFIRMED: undefined });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /freshly verified backup/);
+  assert.equal(await count("gate_passes"), before);
+});
+
+test("unclassified tables and undeleted cloud objects fail closed", async () => {
+  await target.query("CREATE TABLE unclassified_reset_fixture(id integer)");
+  let result=runReset({},["--dry-run"]);
+  assert.notEqual(result.status,0); assert.match(result.stderr,/unclassified public tables/);
+  await target.query("DROP TABLE unclassified_reset_fixture");
+  await target.query("INSERT INTO cloud_storage_objects(connection_id,account_id,kind,logical_path) SELECT id,'test-account','folder','ESDMS/reset-test' FROM cloud_storage_connections WHERE provider='dropbox'");
+  result=runReset();
+  assert.notEqual(result.status,0); assert.match(result.stderr,/cloud objects\/connections/);
+  assert.ok(await count("gate_passes"));
+  await target.query("UPDATE cloud_storage_objects SET state='deleted'");
+  await target.query("INSERT INTO user_permission_overrides(user_id,permission_id,effect,granted_by_user_id) SELECT $1,id,'DENY',$1 FROM permissions LIMIT 1",[originalCeoBefore.id]);
+  result=runReset();
+  assert.notEqual(result.status,0); assert.match(result.stderr,/individual authority assignments/);
+  await target.query("DELETE FROM user_permission_overrides WHERE user_id=$1",[originalCeoBefore.id]);
+  const gatePass=(await target.query("SELECT id FROM gate_passes LIMIT 1")).rows[0];
+  fs.writeFileSync(path.join(storageRoot,"reset-fixture.pdf"),"test-file");
+  await target.query(`INSERT INTO gate_pass_files(gate_pass_id,file_type,storage_key,mime_type,size_bytes,checksum_sha256,created_by_user_id)
+    VALUES ($1,'APPROVED_PDF','reset-fixture.pdf','application/pdf',9,$2,$3)`,[gatePass.id,"a".repeat(64),originalCeoBefore.id]);
+  result=runReset();
+  assert.notEqual(result.status,0); assert.match(result.stderr,/referenced local files still exist/);
+  assert.ok(fs.existsSync(path.join(storageRoot,"reset-fixture.pdf")),"refusal never deletes bytes");
+  assert.equal(await count("gate_pass_files"),1,"refusal retains the owning metadata");
+  fs.unlinkSync(path.join(storageRoot,"reset-fixture.pdf"));
+  await target.query("UPDATE cms_settings SET updated_by_user_id=(SELECT id FROM users WHERE email='demo-lead@test.eset.local') WHERE key='login.heading'");
 });
 
 test("the reset clears operational data, preserves the security model, and keeps the permanent original CEO", async () => {
@@ -173,16 +236,16 @@ test("the reset clears operational data, preserves the security model, and keeps
     "drivers",
     "vehicles",
     "employees",
-    "departments",
-    "positions",
     "company_items",
     "notification_outbox",
     "governance_audit_log",
+    "cloud_storage_objects",
+    "cloud_storage_oauth_states",
   ]) {
     assert.equal(await count(table), 0, `${table} must be empty after the reset`);
   }
 
-  for (const table of ["roles", "permissions", "role_permissions", "permission_bundles", "units_of_measure"]) {
+  for (const table of ["roles", "permissions", "role_permissions", "permission_bundles", "units_of_measure", "departments", "positions", "cms_settings"]) {
     assert.ok((await count(table)) > 0, `${table} must be preserved`);
   }
 
@@ -234,14 +297,43 @@ test("the reset clears operational data, preserves the security model, and keeps
   );
 });
 
+test("post-reset release verification, restricted-runtime CEO login and readiness remain healthy", () => {
+  const runtimePassword = crypto.randomBytes(32).toString("hex");
+  const runtimeUrl = new URL(targetUrl);
+  runtimeUrl.username = "esdms_runtime"; runtimeUrl.password = runtimePassword;
+  const env = { ...process.env, MIGRATION_DATABASE_URL:targetUrl, DATABASE_URL:runtimeUrl.toString(), ESDMS_RUNTIME_PASSWORD:runtimePassword };
+  const release = spawnSync(process.execPath,["scripts/release-database.js"],{encoding:"utf8",env});
+  assert.equal(release.status,0,release.stderr);
+  assert.ok(!(release.stdout+release.stderr).includes(runtimePassword));
+  const smoke = spawnSync(process.execPath,["test/fixtures/runtime-auth-smoke.mjs"],{encoding:"utf8",env:{...env,
+    ESDMS_RUNTIME_SMOKE_EMAIL:"bootstrap-ceo@test.eset.local",ESDMS_RUNTIME_SMOKE_PASSWORD:"Reset-Rehearsal-Password-123!"}});
+  assert.equal(smoke.status,0,smoke.stderr);
+  const result=JSON.parse(smoke.stdout.trim().split("\n").at(-1));
+  assert.equal(result.loginStatus,200); assert.equal(result.meStatus,200);
+  assert.equal(result.invalidLoginStatus,401); assert.equal(result.readinessStatus,200);
+  assert.equal(result.appliedMigrationCount,47); assert.equal(result.runtimeProvisioningCompatible,true);
+  const cms=spawnSync(process.execPath,["--input-type=module","-e",`
+    import app from './src/app.js'; import pool from './src/config/database.js';
+    const server=app.listen(0,'127.0.0.1'); await new Promise(r=>server.once('listening',r));
+    try {
+      const base='http://127.0.0.1:'+server.address().port+'/api/v1';
+      const login=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:process.env.ESDMS_RUNTIME_SMOKE_EMAIL,password:process.env.ESDMS_RUNTIME_SMOKE_PASSWORD})});
+      const cookie=login.headers.get('set-cookie')?.split(';')[0]; const codes=[];
+      for(const route of ['/cms','/cms/settings/branding','/cms/permissions']) codes.push((await fetch(base+route,{headers:{Cookie:cookie||''}})).status);
+      console.log(JSON.stringify(codes));
+    } finally { await new Promise(r=>server.close(r)); await pool.end(); }
+  `],{encoding:"utf8",env:{...env,ESDMS_RUNTIME_SMOKE_EMAIL:"bootstrap-ceo@test.eset.local",ESDMS_RUNTIME_SMOKE_PASSWORD:"Reset-Rehearsal-Password-123!"}});
+  assert.equal(cms.status,0,cms.stderr);
+  assert.deepEqual(JSON.parse(cms.stdout.trim().split("\n").at(-1)),[200,200,200]);
+});
+
 test("the reset is repeatable", async () => {
-  // The previous test deliberately left one department and one Gate Pass
-  // behind, so this proves a second run clears them too rather than only
-  // proving a no-op against an already-empty database.
+  // The previous reset test left a department and a Gate Pass behind.
+  // The next run clears the operational pass while retaining configuration.
   const result = runReset();
   assert.equal(result.status, 0, result.stderr);
   assert.equal(await count("gate_passes"), 0);
-  assert.equal(await count("departments"), 0);
+  assert.ok(await count("departments"));
 
   const third = runReset();
   assert.equal(third.status, 0, third.stderr);
