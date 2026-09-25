@@ -70,6 +70,7 @@ function LogoEditor({row,onSaved}) {
   return <section className={styles.panel}><h2>{row.label}</h2><p>{row.description}</p>
     <div className={styles.logoPreview}>{logoUrl?<img src={logoUrl} alt="Current company logo"/>:<span>Logo unavailable — documents show the company name only.</span>}</div>
     <p className={styles.secondary}>{row.logo.description}</p>
+    <p className={styles.secondary}>For clear documents, upload a tightly cropped logo with little or no empty padding, on a transparent or light background (documents are printed on white). PNG or JPEG only, up to 2 MB, 32–4096 pixels per side. The current logo stays active until a new one is uploaded.</p>
     <form onSubmit={upload}><FormField label="Replace logo (PNG or JPEG, up to 2 MB)" htmlFor="companyLogo"><input id="companyLogo" type="file" accept="image/png,image/jpeg" onChange={choose}/></FormField>
       <Button type="submit" loading={saving} disabled={!file}>Upload logo</Button>
       {row.logo.source==='uploaded'&&<Button type="button" variant="secondary" disabled={saving} onClick={()=>run(()=>apiClient.del('/cms/branding/logo',{body:{revision:row.revision}}))}>Restore default E-Set logo</Button>}
@@ -85,6 +86,19 @@ function PermissionEditor({row,editable}) {
   async function save(e){e.preventDefault();try{await apiClient.patch(`/cms/permissions/${row.code}`,form);setMessage('Metadata saved. Enforcement is unchanged.');}catch(error){setMessage(error.message);}}
   return <details className={styles.panel}><summary>{form.displayName}</summary><p>{form.description}</p><p className={styles.secondary}>Immutable code: {row.code}</p>{editable&&<form onSubmit={save}>{[['displayName','Display name',150],['description','Description',1000],['category','Category',80],['helpText','Help text',500]].map(([key,label,max])=><FormField key={key} label={label} htmlFor={`${row.code}-${key}`}><Input id={`${row.code}-${key}`} value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})} maxLength={max} required={key!=='helpText'}/></FormField>)}<Button type="submit">Save metadata</Button>{message&&<p role="status">{message}</p>}</form>}</details>;
 }
+// An override is a configuration change, not a refused request: "permission
+// denied" alone read like an access error.
+const AUDIT_ACTION_LABELS = {
+  PERMISSION_GRANTED:'GRANT override applied',
+  PERMISSION_DENIED:'DENY override applied',
+  PERMISSION_OVERRIDE_REMOVED:'Permission override removed',
+};
+const auditActionLabel = action => AUDIT_ACTION_LABELS[action] || action.toLowerCase().replaceAll('_',' ');
+function auditTarget(row) {
+  if (row.target_user_name) return `${row.target_user_name} (${row.target_user_email})`;
+  if (row.target_employee_name) return `${row.target_employee_name} · ${row.target_employee_code}`;
+  return '';
+}
 function AuditCenter() {
   const {user}=useAuth();const [filters,setFilters]=useState({action:'',siteId:'',from:'',to:''}),[query,setQuery]=useState(''),[page,setPage]=useState(1),[data,setData]=useState(null),[error,setError]=useState('');
   useEffect(()=>{let active=true;apiClient.get(`/cms/audit?page=${page}&${query}`).then(r=>{if(active){setData(r.data);setError('');}}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[page,query]);
@@ -93,6 +107,6 @@ function AuditCenter() {
     <FormField label="Action code (optional)" htmlFor="auditAction"><Input id="auditAction" value={filters.action} onChange={e=>setFilters({...filters,action:e.target.value})}/></FormField>
     {user.role==='CEO'&&<FormField label="Site ID (optional)" htmlFor="auditSite"><Input id="auditSite" value={filters.siteId} onChange={e=>setFilters({...filters,siteId:e.target.value})}/></FormField>}
     {['from','to'].map(key=><FormField key={key} label={key==='from'?'From':'Until'} htmlFor={`audit-${key}`}><Input id={`audit-${key}`} type="datetime-local" value={filters[key]} onChange={e=>setFilters({...filters,[key]:e.target.value})}/></FormField>)}<Button type="submit">Apply filters</Button></form>
-    {error&&<ErrorState message={error}/>}{data?.items.map(row=><article className={styles.panel} key={row.id}><h3>{row.action.toLowerCase().replaceAll('_',' ')}</h3><p>{row.actor_name} · {new Date(row.created_at).toLocaleString()}</p>{row.configuration_key&&<p>{row.configuration_key}{row.configuration_target_id && ` · ${row.configuration_target_id}`}</p>}{row.change&&<p>Before: {String(row.change.before)}<br/>After: {String(row.change.after)}</p>}<small>Event {row.id}</small></article>)}{data?.items.length===0&&<p>No matching events.</p>}
+    {error&&<ErrorState message={error}/>}{data?.items.map(row=><article className={styles.panel} key={row.id}><h3>{auditActionLabel(row.action)}</h3><p>{row.actor_name} · {new Date(row.created_at).toLocaleString()}</p>{auditTarget(row)&&<p>Target: {auditTarget(row)}</p>}{row.capability_code&&<p className={styles.secondary}>Capability: {row.capability_code}</p>}{row.configuration_key&&<p>{row.configuration_key}{row.configuration_target_id && ` · ${row.configuration_target_id}`}</p>}{row.change&&<p>Before: {String(row.change.before)}<br/>After: {String(row.change.after)}</p>}<small>Event {row.id}</small></article>)}{data?.items.length===0&&<p>No matching events.</p>}
     <div className={styles.pager}><Button disabled={page===1} onClick={()=>setPage(page-1)}>Previous</Button><span>Page {page}</span><Button disabled={!data?.hasMore} onClick={()=>setPage(page+1)}>Next</Button></div></>;
 }

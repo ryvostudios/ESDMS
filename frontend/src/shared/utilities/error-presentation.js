@@ -10,7 +10,7 @@ export function describeApiError(error, fallback = "Unable to load this record."
   }
 
   if (error.status === 401) return { title: "Session expired", message: "Please sign in again to continue.", retryable: false };
-  if (error.status === 403) return { title: "Access denied", message: "You don't have permission to view this.", retryable: false };
+  if (error.status === 403) return { title: "Access denied", message: "You do not have permission to view this or perform this action.", retryable: false };
   if (error.status === 404) return { title: "Not found", message: "Record not found or unavailable.", retryable: false };
   if (error.status === 409) return { title: "This has already changed", message: error.message || "Someone else changed this record. Reload to see the current state.", retryable: true };
   if (error.status === 400) return { title: "Invalid request", message: firstValidationMessage(error) || error.message || fallback, retryable: false };

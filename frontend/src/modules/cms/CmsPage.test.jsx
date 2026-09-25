@@ -69,4 +69,17 @@ describe('CMS area and content boundaries',()=>{
   expect(document.querySelector('img')).toBeNull();
   expect(screen.queryByRole('button',{name:'Restore default E-Set logo'})).toBeNull();
  });
+ test('audit center names the target and override capability, with an unambiguous override label',async()=>{
+  const items=[
+   {id:'e1',action:'PERMISSION_DENIED',actor_name:'Test CEO',created_at:'2026-09-25T00:00:00Z',target_user_name:'Test Employee',target_user_email:'employee@example.test',capability_code:'demand.view'},
+   {id:'e2',action:'EMPLOYEE_CREATED',actor_name:'Test HR',created_at:'2026-09-25T00:00:00Z',target_employee_name:'QA Person',target_employee_code:'QA-1'},
+  ];
+  state.get.mockImplementation(url=>Promise.resolve({data:url==='/cms'?[{id:'audit',label:'Audit Center'}]:{items,hasMore:false,page:1}}));
+  mount('/cms/audit');
+  expect(await screen.findByText('DENY override applied')).toBeTruthy();
+  expect(screen.queryByText('permission denied')).toBeNull();
+  expect(screen.getByText('Target: Test Employee (employee@example.test)')).toBeTruthy();
+  expect(screen.getByText('Capability: demand.view')).toBeTruthy();
+  expect(screen.getByText('Target: QA Person · QA-1')).toBeTruthy();
+ });
 });

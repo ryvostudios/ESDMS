@@ -12,8 +12,17 @@ export async function audit({ scope, query, ceo }) {
            WHEN a.action='CLOUD_STORAGE_CHANGED' THEN a.metadata->>'event'
            WHEN a.action='PERMISSION_METADATA_CHANGED' THEN a.metadata->>'code'
            WHEN a.action='CONFIGURATION_CHANGED' THEN a.metadata->>'table' END AS configuration_key,
-      CASE WHEN a.action='CMS_SETTING_CHANGED' THEN jsonb_build_object('before',a.metadata->'before','after',a.metadata->'after') END AS change
+      CASE WHEN a.action='CMS_SETTING_CHANGED' THEN jsonb_build_object('before',a.metadata->'before','after',a.metadata->'after') END AS change,
+      -- Who the event was about, from the audit row's own target columns, plus
+      -- the permission/bundle code of an override event. Never the free-text
+      -- reason or any other raw metadata.
+      tu.full_name AS target_user_name,tu.email AS target_user_email,
+      te.full_legal_name AS target_employee_name,te.employee_code AS target_employee_code,
+      CASE WHEN a.action IN ('PERMISSION_GRANTED','PERMISSION_DENIED','PERMISSION_OVERRIDE_REMOVED') THEN a.metadata->>'permissionCode'
+           WHEN a.action IN ('CAPABILITY_BUNDLE_ASSIGNED','CAPABILITY_BUNDLE_REMOVED') THEN a.metadata->>'bundleCode' END AS capability_code
     FROM governance_audit_log a JOIN users u ON u.id=a.actor_user_id
+    LEFT JOIN users tu ON tu.id=a.target_user_id
+    LEFT JOIN employees te ON te.id=a.target_employee_id
     WHERE ($1::boolean OR a.scope_site_id=$2)
       AND ($3::uuid IS NULL OR a.scope_site_id=$3)
       AND ($4::text IS NULL OR a.action=$4) AND ($5::uuid IS NULL OR a.actor_user_id=$5)

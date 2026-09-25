@@ -11,7 +11,7 @@ const GUARD_PERMISSIONS = ["gate_pass.verify", "gate_pass.exit", "gate_pass.retu
 export const NAV_ITEMS = [
   { label: "Dashboard", to: "/", icon: HomeIcon, end: true, permission: OFFICE_PERMISSIONS },
   { label: "Gate Passes", to: "/gate-passes", icon: TruckIcon, permission: OFFICE_PERMISSIONS },
-  { label: "Approvals", to: "/approvals", icon: ClipboardCheckIcon, permission: ["gate_pass.approve"] },
+  { label: "Gate Approvals", to: "/approvals", icon: ClipboardCheckIcon, permission: ["gate_pass.approve"] },
   { label: "Gate", to: "/guard", icon: ScanIcon, end: true, permission: GUARD_PERMISSIONS },
   // ESDMS-018: no `permission` gate here — My Workforce bundles several
   // independently-gated self-service capabilities (documents/rotation/

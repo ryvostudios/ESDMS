@@ -128,3 +128,20 @@ test('reference update rolls back when its audit cannot be recorded',async()=>{
     async client=>(await client.query("UPDATE departments SET name='Must roll back' WHERE id=$1 RETURNING id",[users.departmentA])).rows[0]),{code:'23503'});
   assert.equal((await pool.query('SELECT name FROM departments WHERE id=$1',[users.departmentA])).rows[0].name,before);
 });
+
+test('audit names the target user and override capability, never the free-text reason',async()=>{
+  const denied=await call(tokens.ceo,'PUT',`/users/${users.employee}/permissions/demand.view`,{effect:'DENY',reason:'DO_NOT_DISCLOSE_REASON'});
+  assert.equal(denied.status,200,JSON.stringify(denied.body));
+  try{
+    const result=await call(tokens.ceo,'GET','/cms/audit?action=PERMISSION_DENIED&pageSize=5');
+    assert.equal(result.status,200);
+    const row=result.body.data.items.find(item=>item.target_user_id===users.employee);
+    assert.ok(row,'the DENY event is listed');
+    assert.equal(row.target_user_email,'employee@test.eset.local');
+    assert.equal(row.target_user_name,'Test Employee');
+    assert.equal(row.capability_code,'demand.view');
+    assert.ok(!JSON.stringify(result.body).includes('DO_NOT_DISCLOSE_REASON'));
+  }finally{
+    await call(tokens.ceo,'DELETE',`/users/${users.employee}/permissions/demand.view`);
+  }
+});

@@ -66,6 +66,8 @@ export function GatePassFormPage() {
     };
   }, [id, isEdit, navigate]);
 
+  // The saved Gate Pass opens at its top, not at the long form's scroll
+  // offset (the window keeps it across in-app navigation).
   async function handleSubmit(values) {
     if (isEdit) {
       await updateGatePassDraft(id, values);
@@ -74,6 +76,7 @@ export function GatePassFormPage() {
       const response = await createGatePass(values);
       navigate(`/gate-passes/${response.data.id}`);
     }
+    window.scrollTo(0, 0);
   }
 
   if (loadStatus === "loading") {
