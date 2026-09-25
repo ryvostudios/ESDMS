@@ -45,7 +45,8 @@ can be created as soon as the database exists; otherwise the order is:
     `esdms_session` as `Secure; HttpOnly; SameSite=Lax`; no CORS errors.
 16. **Create the protected CEO** with `npm run user:create-ceo`
     (PRODUCTION_ENVIRONMENT.md §7). Can be done any time after step 7.
-17. **CEO first login;** change password if a temporary one was handed over.
+17. **CEO first login** with the CEO-approved password entered at the hidden
+    prompt (no forced password change for the CEO).
 18. **Organization and branding** in CMS (issuer name decision, logo,
     departments to deactivate, contact line).
 19. **Real users** through Employees → login, roles and bundles.
@@ -90,7 +91,8 @@ is done, restore is unverified.
 
 Use one controlled smoke-test employee/user and clearly named test records.
 
-- **Auth:** CEO signs in; password change works (`/change-password`); CEO shows
+- **Auth:** CEO signs in (no forced change for the CEO); voluntary change at
+  `/change-password` works if exercised; CEO shows
   no role/deactivate/override controls in Users & Access.
 - **System:** `/api/v1/health` ok; `/api/v1/health/ready` ready, 47/47; CMS
   areas open for CEO; Audit Center shows the setup actions.

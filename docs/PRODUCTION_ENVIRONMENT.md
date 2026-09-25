@@ -225,13 +225,13 @@ its callback registered accordingly; keep one arrangement and document it.
   shell history.
 - There is no API path that creates a CEO. Every CEO-role account is protected
   from governance actions (role change, deactivation, overrides).
-- **Finding:** the bootstrap does **not** set `must_change_password`, so the
-  first login does not force a password change. Until the company decides
-  otherwise, use the safer procedure: the CEO enters their own password at the
-  hidden prompt while the operator runs the script (no hand-off). If a
-  temporary password must be handed over, hand it over directly (never by
-  email/chat/Git) and have the CEO change it immediately at
-  `/change-password`.
+- **Password (company decision):** the operator enters a strong,
+  CEO-approved password at the hidden prompt; it may be the CEO's long-term
+  password. The bootstrap intentionally does **not** force a password change
+  at first login (unlike HR-created employee logins); the CEO can change it
+  voluntarily at any time at `/change-password`. Never store or send the
+  password in Git, documentation, tickets, logs or chat; keep it only in the
+  company password manager if it must be recorded.
 - Record the CEO email as `ESDMS_ORIGINAL_CEO_EMAIL` in the company's
   secure operations record.
 

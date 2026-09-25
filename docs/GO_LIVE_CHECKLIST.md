@@ -47,7 +47,7 @@ Never write secret values on this list.
 ## CEO
 - [ ] Permanent CEO created with `npm run user:create-ceo` (hidden password prompt)
 - [ ] `ESDMS_ORIGINAL_CEO_EMAIL` recorded in the secure operations record
-- [ ] CEO signed in; password set by the CEO (or changed at `/change-password`)
+- [ ] CEO signed in with the strong CEO-approved password entered at the prompt (no forced change; stored only in the company password manager if recorded)
 - [ ] CEO protection confirmed in Users & Access
 
 ## CMS/branding

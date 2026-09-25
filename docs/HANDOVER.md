@@ -54,9 +54,10 @@ Bundles and overrides are managed in **System Administration → Users & Access*
 1. After the database release, create exactly **one** permanent original CEO
    with `npm run user:create-ceo` (hidden password prompt; no password in
    arguments, files or docs). Record its email as `ESDMS_ORIGINAL_CEO_EMAIL`.
-2. Sign in as that CEO. If the account is flagged for a password change,
-   the app requires it before anything else; after changing it, sign in again
-   and confirm you reach the dashboard (no repeated prompt).
+2. Sign in as that CEO and confirm you reach the dashboard. The CEO account
+   is not forced to change its password; the password entered at the prompt
+   may be the CEO's long-term password (it can be changed any time at
+   `/change-password`).
 3. Verify CEO protection: in Users & Access the original CEO shows no role,
    deactivate or override controls.
 4. Create employees in **Employees → Add Employee**, then give each the
