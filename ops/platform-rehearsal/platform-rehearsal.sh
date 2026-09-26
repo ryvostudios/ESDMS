@@ -6,7 +6,7 @@
 #
 # Builds, in the production order, ONE database holding
 #   public     ESDMS      (its own db:release: 48 migrations + runtime provisioning)
-#   permit     Permit     (roles, baseline without reference data + 0039-0042,
+#   permit     Permit     (roles, baseline without reference data + 0039-0044,
 #                          then the standalone import of a synthetic OLD database)
 #   attendance Attendance (roles, migrations, then the SQLite import of a
 #                          synthetic 48k-event database)
@@ -144,7 +144,7 @@ quiet esdms-ceo.log env -C "$ESDMS_BACKEND" DATABASE_URL="$(url esdms_runtime)" 
   CEO_PASSWORD="$(cat "$SECRETS/ceo_password")" node scripts/create-ceo-user.js
 echo "ESDMS users: $(admin "$PGPORT" -d "$DB" -Atc 'SELECT count(*) FROM public.users')"
 
-step "3. Permit roles; baseline WITHOUT reference data + 0039-0042 (the data-import target)"
+step "3. Permit roles; baseline WITHOUT reference data + 0039-0044 (the data-import target)"
 provision_permit "$PGPORT"
 permit_run permit-migrate.log "$PGPORT" npx tsx src/db/migrate.ts --baseline-without-reference-data
 echo "Permit ledger: $(admin "$PGPORT" -d "$DB" -Atc 'SELECT count(*) FROM permit.schema_migrations') migrations"
@@ -381,9 +381,18 @@ old_ready=$(env -C "$RB/attendance-old/backend" ATTENDANCE_DB_SSL=disable ATTEND
 echo "  pre-Phase-6 Attendance build ($ROLLBACK_ATTENDANCE_OLD_COMMIT) against this database: $old_ready (documented: its readiness predates rollback tolerance)"
 admin "$PGPORT" -d "$DB" -c "ALTER TABLE attendance.devices DROP COLUMN rehearsal_note; DELETE FROM attendance.schema_migrations WHERE version = 3" > /dev/null
 
-# Permit: the previous build (no Permit migration since) on the Phase 6 database.
+# Permit: the previous build on the current database. The current build added
+# forward-only migrations (0043 lifecycle guards, 0044 upload ledger), so the
+# previous runner must REFUSE the newer ledger (rollback never runs
+# migrations), and the previous application must still work against it.
 export_build "$PERMIT_REPO" "$ROLLBACK_PERMIT_COMMIT" "$RB/permit-previous" "$PERMIT_REPO/backend/node_modules"
-quiet rollback-permit-previous-migrate.log env -C "$RB/permit-previous/backend" $(permit_env "$PGPORT") npx tsx src/db/migrate.ts
+if env -C "$RB/permit-previous/backend" $(permit_env "$PGPORT") npx tsx src/db/migrate.ts > "$REPORT/rollback-permit-previous-migrate.log" 2>&1; then
+  grep -q "No pending migrations" "$REPORT/rollback-permit-previous-migrate.log" \
+    || { echo "FAILED - the previous Permit runner changed the current database"; exit 1; }
+else
+  grep -q "is missing from the migrations directory" "$REPORT/rollback-permit-previous-migrate.log" \
+    || { echo "FAILED - see $REPORT/rollback-permit-previous-migrate.log"; exit 1; }
+fi
 sed "s|$PERMIT_REPO/backend|$RB/permit-previous/backend|g; s|HSE@example.test|CRO@example.test|; s|hse@example.test|cro@example.test|" \
   "$REPORT/permit-runtime-login.mts" > "$RB/permit-previous-login.mts"
 quiet rollback-permit-previous-login.log env -C "$RB/permit-previous/backend" $(permit_env "$PGPORT") npx tsx "$RB/permit-previous-login.mts"

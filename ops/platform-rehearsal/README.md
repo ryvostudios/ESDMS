@@ -40,7 +40,7 @@ REHEARSAL_REPORT_DIR=<empty dir> \
 1. ESDMS `db:release` on a fresh database, under the Supabase platform state
    and Supabase's default privileges.
 2. An ESDMS business sample, created through ESDMS's CEO bootstrap.
-3. Permit roles, and the baseline without reference data plus 0039–0042.
+3. Permit roles, and the baseline without reference data plus 0039–0044.
 4. A synthetic OLD standalone Permit database: the 0001–0038 replay plus
    `auth.users` with bcrypt fixtures, history from the real services
    covering all 20 identity relationships, and legacy document objects.

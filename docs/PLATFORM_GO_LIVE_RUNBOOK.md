@@ -376,7 +376,12 @@ locally with both real backends under company-style hostnames
   - The old runner refuses to migrate an unknown ledger, which is correct:
     rollback never migrates.
   - The previous Permit (`2f22e53`) and ESDMS (`f89c11b`) builds run
-    against the Phase 6 database.
+    against the current database. Permit's previous runner refuses the
+    newer 0043/0044 ledger (rollback never migrates); its application
+    still signs in imported users. Under that build the 0043 triggers
+    keep enforcing the storage lifecycle: its unguarded health-check
+    write onto a disconnecting connection is refused rather than
+    reviving it.
 - **Constraints:**
   - Migrations must be expand-only (additive, nullable or defaulted) so the
     previous build stays compatible.
