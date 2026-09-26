@@ -266,13 +266,11 @@ for entry in esdms_runtime:public:runtime permit_runtime:permit:runtime permit_p
   IFS=: read -r role own kind <<< "$entry"
   as_role "$role" -v own="$own" -v kind="$kind" -f "$HERE/security-matrix.sql" 2>&1 | sed 's/^psql:[^ ]* NOTICE:  /  /'
 done
-for role in anon authenticated; do
+# service_role included: ESDMS provisioning revokes Supabase's default grants, so
+# it is denied on ESDMS objects exactly like the browser roles (and on Permit/Attendance).
+for role in anon authenticated service_role; do
   admin "$PGPORT" -d "$DB" -c "SET ROLE $role" -v own=none -v kind=runtime -f "$HERE/security-matrix.sql" 2>&1 | sed 's/^psql:[^ ]* NOTICE:  /  /'
 done
-# service_role: denied on permit and attendance (required); its access to ESDMS's
-# public is Supabase's default and a separately owned ESDMS item - reported, counted.
-admin "$PGPORT" -d "$DB" -c "SET ROLE service_role" -v own=none -v kind=runtime -v report_only=public \
-  -f "$HERE/security-matrix.sql" 2>&1 | sed 's/^psql:[^ ]* NOTICE:  /  /'
 as_role esdms_owner -Atc "SELECT 'esdms_owner (migration owner): createrole=' || rolcreaterole || ' bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname = current_user"
 
 step "10. SECURITY DEFINER / search_path / dynamic SQL audit"

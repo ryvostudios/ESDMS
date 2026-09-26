@@ -39,6 +39,13 @@ application commit and the schema must always match (see §9).
 | Attendance | `database/roles/provision-attendance-roles.sql`; `npm run db:migrate`; `npm run db:import-sqlite -- --sqlite <copy> [--execute \| --verify]`; `npm run agent-key:hash` |
 | Platform (ESDMS `ops/platform-rehearsal/`) | `security-matrix.sql`, `security-definer-audit.sql`, `platform-fingerprint.sql`, `platform-rehearsal.sh` and `topology-check.sh` (disposable rehearsal only) |
 
+**Database identities.** Each application's runtime uses only its own
+restricted login (`esdms_runtime`, `permit_runtime`/`permit_privileged`,
+`attendance_runtime`). Supabase's `service_role` is not an application
+database identity and holds no privilege on any application object. Any
+Supabase Storage access through the service key is a separate backend
+integration concern.
+
 **Rules that hold for every step**
 - **Secrets.** Secrets come only from the company secret manager and are
   typed with `read -rs` into environment variables, never on command lines,
@@ -157,10 +164,11 @@ locally with both real backends under company-style hostnames
    - Run `ops/platform-rehearsal/platform-fingerprint.sql` and
      `security-definer-audit.sql` against production as the administrator.
      They are read-only; save the output.
-   - Run `security-matrix.sql` for `anon` and `authenticated` (with
-     `own=none`) and for `service_role` (with `own=none -v
-     report_only=public`). This is **read-only**: every probe runs in a
-     rolled-back transaction, so save the output.
+   - Run `security-matrix.sql` for `anon`, `authenticated` and
+     `service_role` (with `own=none`, via `SET ROLE`). This is **read-only**:
+     every probe runs in a rolled-back transaction, so save the output.
+     Before step 12, `service_role` is expected to still hold Supabase's
+     default grants on ESDMS objects. After step 12 it must pass.
    - Confirm schemas `permit` and `attendance` do **not** exist yet, and are
      not in the Supabase Data API exposed schemas.
 10. **Real Permit auth inspection, without printing hashes.** On the old
@@ -311,9 +319,8 @@ locally with both real backends under company-style hostnames
       `attendance_runtime` (real logins);
     - as the API roles via `SET ROLE`.
 
-    Also re-run `security-definer-audit.sql`. Everything must pass. The only
-    reported (not failed) item is the ESDMS `service_role` access on
-    `public` (§ Known items).
+    Also re-run `security-definer-audit.sql`. Everything must pass,
+    including `service_role` denied on all three schemas.
 33. **CEO/admin acceptance** in each application.
 34. **Permit workflow smoke:** draft → submit → CRO → HSE → issue → PDF,
     then close, on clearly labelled smoke records.
@@ -389,14 +396,16 @@ locally with both real backends under company-style hostnames
 These are reported by the rehearsal, owned by ESDMS, and accepted by
 nothing yet. The audit decides on them.
 
-- **ESDMS `service_role` on `public`.** Supabase's default privileges grant
-  `service_role` all privileges on objects the owner creates in `public`,
-  and ESDMS provisioning revokes `anon`/`authenticated` but not
-  `service_role`. The rehearsal counted 242 allowed operations and EXECUTE
-  on `esdms_schema_migration_state`. `service_role` has **no** privilege in
-  `permit` or `attendance` (proven). The service-role key must stay
-  server-only and `public` should not be exposed through the Data API. See
-  DEFERRED_WORK.md.
+- **Supabase `service_role` (resolved).**
+  - It is not an application database identity. ESDMS uses
+    `esdms_runtime`, Permit `permit_runtime`/`permit_privileged`, and
+    Attendance `attendance_runtime`.
+  - ESDMS provisioning revokes Supabase's default grants on every current
+    and future ESDMS object and fails the release otherwise. Permit and
+    Attendance never grant it anything.
+  - The rehearsal denies it on all three schemas.
+  - The Supabase service key remains a backend-only credential, used only
+    for the Supabase Storage API.
 - **ESDMS `esdms_schema_migration_state(text)`** pins
   `search_path = pg_catalog, public` without `pg_temp`. It is not
   exploitable: the body references only `public.pgmigrations`, qualified.

@@ -221,6 +221,35 @@ SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') AS authen
     REVOKE EXECUTE ON FUNCTIONS FROM authenticated;
 \endif
 
+-- Supabase's service_role is NOT an ESDMS application database identity.
+-- ESDMS reads and writes its data only as esdms_runtime; the Supabase service
+-- credential is used by the backend solely for the Supabase Storage HTTP API,
+-- which never needs SQL authority over ESDMS objects. Supabase's own default
+-- privileges grant service_role everything this migration owner creates in
+-- public (tables, sequences, functions), so remove it from current objects,
+-- from this owner's future-object defaults (global and public-specific), and
+-- drop its direct schema grant. Every privilege is re-verified below.
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') AS service_role_exists
+\gset
+\if :service_role_exists
+  REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM service_role;
+  REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM service_role;
+  REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM service_role;
+  REVOKE ALL PRIVILEGES ON SCHEMA public FROM service_role;
+  ALTER DEFAULT PRIVILEGES
+    REVOKE ALL PRIVILEGES ON TABLES FROM service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM service_role;
+  ALTER DEFAULT PRIVILEGES
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM service_role;
+  ALTER DEFAULT PRIVILEGES
+    REVOKE ALL PRIVILEGES ON FUNCTIONS FROM service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON FUNCTIONS FROM service_role;
+\endif
+
 -- Functions in public are trigger implementation details, not an application
 -- authorization surface. PostgreSQL's built-in PUBLIC EXECUTE default is
 -- global, and per-schema defaults are additive, so revoke both the global
@@ -947,6 +976,82 @@ SELECT NOT EXISTS (
 \else
   \warn 'ERROR: migration-owner defaults grant future function EXECUTE to PUBLIC or browser roles.'
   DO $abort$ BEGIN RAISE EXCEPTION 'function default privilege verification failed'; END $abort$;
+\endif
+
+-- service_role holds NO authority over any ESDMS object: no effective table,
+-- column, sequence or function privilege (has_*_privilege counts PUBLIC and
+-- inherited role memberships), no direct schema grant, no ownership (directly
+-- or through a role it belongs to), and no default ACL of this migration owner
+-- that would grant it future objects. Supabase-managed schemas are untouched.
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') AS service_role_exists
+\gset
+\if :service_role_exists
+  -- ESDMS-owned: created by this migration owner, not an extension member.
+  WITH public_relations AS (
+    SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+  ),
+  public_sequences AS (
+    SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'S'
+      AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+  ),
+  public_functions AS (
+    SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+  ),
+  public_owners AS (
+    SELECT c.relowner AS owner FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public'
+    UNION SELECT p.proowner FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'
+    UNION SELECT t.typowner FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public'
+    UNION SELECT nspowner FROM pg_namespace WHERE nspname = 'public'
+  )
+  SELECT
+    NOT EXISTS (
+      SELECT 1 FROM public_relations t
+      CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) p(privilege_type)
+      WHERE has_table_privilege('service_role', t.oid, p.privilege_type)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public_relations t
+      CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')) p(privilege_type)
+      WHERE has_any_column_privilege('service_role', t.oid, p.privilege_type)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public_sequences s
+      CROSS JOIN (VALUES ('USAGE'), ('SELECT'), ('UPDATE')) p(privilege_type)
+      WHERE has_sequence_privilege('service_role', s.oid, p.privilege_type)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public_functions f WHERE has_function_privilege('service_role', f.oid, 'EXECUTE')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+      WHERE n.nspname = 'public' AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public_owners o WHERE pg_has_role('service_role', o.owner, 'USAGE')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_default_acl d
+      LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+      CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+      WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+        AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+        AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role')
+    ) AS service_role_boundary_valid
+  \gset
+  \if :service_role_boundary_valid
+  \else
+    \warn 'ERROR: service_role retains authority over an ESDMS object in public.'
+    DO $abort$ BEGIN RAISE EXCEPTION 'service_role boundary verification failed'; END $abort$;
+  \endif
 \endif
 
 COMMIT;

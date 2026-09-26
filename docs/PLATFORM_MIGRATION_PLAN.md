@@ -193,7 +193,7 @@ Status after Phase 6 (details in PLATFORM_GO_LIVE_RUNBOOK.md):
 | 2 | Resolved on the rehearsal machine: E2E 69/69. |
 | 3 | Open until the production preflight (runbook step 10): aggregate prefix counts only. |
 | 4 | Still open. |
-| 5 | Measured: 242 operations on `public`; none in `permit`/`attendance`. See DEFERRED_WORK.md. |
+| 5 | Resolved: ESDMS provisioning revokes `service_role` from all current and future ESDMS objects and verifies it on every release; denied in all three schemas. |
 | 6 | Enforced for now: Attendance fails startup on a non-loopback bind and refuses non-loopback Host headers. |
 | 7 | Resolved in Permit Phase 4 (storage-provider readiness). |
 

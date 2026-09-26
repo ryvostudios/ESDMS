@@ -89,13 +89,7 @@ BEGIN
        WHERE a.privilege_type = 'EXECUTE'
          AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) IN ('anon', 'authenticated', 'service_role'))
     LOOP
-      IF writer = 'service_role' AND f.nspname = 'public' THEN
-        -- Supabase's default grant on ESDMS's public: the separately owned
-        -- ESDMS service_role item (see the security matrix report). Reported.
-        RAISE NOTICE 'carried ESDMS item: % is executable by service_role (Supabase default on public)', f.name;
-      ELSE
-        problems := problems || format('%s: EXECUTE granted to %s', f.name, writer);
-      END IF;
+      problems := problems || format('%s: EXECUTE granted to %s', f.name, writer);
     END LOOP;
   END LOOP;
 

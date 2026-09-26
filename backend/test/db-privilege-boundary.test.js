@@ -889,6 +889,124 @@ test("provisioning removes effective table, sequence, and default privileges fro
   }
 });
 
+async function cleanupServiceRole() {
+  const exists = await pool.query("SELECT 1 FROM pg_roles WHERE rolname = 'service_role'");
+  if (exists.rowCount === 0) {
+    return;
+  }
+  const owner = (await pool.query("SELECT current_user AS name")).rows[0].name;
+  await pool.query(`REVOKE "${owner}" FROM service_role`).catch(() => {});
+  for (const kind of ["TABLES", "SEQUENCES", "FUNCTIONS"]) {
+    await pool.query(`ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON ${kind} FROM service_role`);
+    await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL PRIVILEGES ON ${kind} FROM service_role`);
+  }
+  await pool.query("DROP OWNED BY service_role");
+  await pool.query("DROP ROLE service_role");
+}
+
+// Supabase grants service_role everything the migration owner creates in
+// public. Every ESDMS object must deny it; the future-object defaults too.
+async function serviceRoleAuthority() {
+  const { rows: [row] } = await pool.query(`
+    WITH esdms_relations AS (
+      SELECT c.oid, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+        AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+    ),
+    esdms_functions AS (
+      SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+    )
+    SELECT
+      (SELECT count(*)::int FROM esdms_relations WHERE relkind <> 'S') AS tables,
+      (SELECT count(*)::int FROM esdms_relations r,
+         unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
+       WHERE r.relkind <> 'S' AND has_table_privilege('service_role', r.oid, p)) AS table_privileges,
+      (SELECT count(*)::int FROM esdms_relations r, unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) p
+       WHERE r.relkind <> 'S' AND has_any_column_privilege('service_role', r.oid, p)) AS column_privileges,
+      (SELECT count(*)::int FROM esdms_relations r, unnest(ARRAY['USAGE','SELECT','UPDATE']) p
+       WHERE r.relkind = 'S' AND has_sequence_privilege('service_role', r.oid, p)) AS sequence_privileges,
+      (SELECT count(*)::int FROM esdms_functions f WHERE has_function_privilege('service_role', f.oid, 'EXECUTE')) AS function_execute,
+      (SELECT count(*)::int FROM pg_namespace n, aclexplode(n.nspacl) a
+       WHERE n.nspname = 'public' AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role')) AS schema_grants,
+      (SELECT count(*)::int FROM pg_default_acl d, aclexplode(d.defaclacl) a
+       WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+         AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role')) AS default_grants`);
+  return row;
+}
+
+test("provisioning removes all service_role authority over ESDMS objects, current and future", async (t) => {
+  const databaseUrl = assertIsDisposableTestDatabase();
+  if (!assertPsqlAvailable(t)) {
+    return;
+  }
+
+  const runtimePassword = crypto.randomBytes(24).toString("base64url");
+  await cleanupRuntimeRole();
+  await cleanupServiceRole();
+  await pool.query(`DROP SEQUENCE IF EXISTS public.${TEST_SEQUENCE}`);
+
+  try {
+    // Supabase's service_role and its platform grants on the migration owner's objects.
+    await pool.query("CREATE ROLE service_role NOLOGIN BYPASSRLS");
+    await pool.query(`CREATE SEQUENCE public.${TEST_SEQUENCE}`);
+    await pool.query("GRANT USAGE ON SCHEMA public TO service_role");
+    for (const kind of ["TABLES", "SEQUENCES", "FUNCTIONS"]) {
+      await pool.query(`GRANT ALL PRIVILEGES ON ALL ${kind} IN SCHEMA public TO service_role`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON ${kind} TO service_role`);
+      await pool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON ${kind} TO service_role`);
+    }
+    await pool.query("GRANT SELECT (email) ON public.users TO service_role");
+    const before = await serviceRoleAuthority();
+    assert.ok(before.table_privileges > 0 && before.function_execute > 0 && before.default_grants > 0);
+
+    const result = runProvisioning(databaseUrl, { runtimePassword });
+    assertProvisioningSucceeded(result, "service_role boundary provisioning");
+    assertSecretAbsent(result, runtimePassword);
+
+    const { tables, ...after } = await serviceRoleAuthority();
+    assert.ok(tables >= 70, `every ESDMS table enumerated (${tables})`);
+    assert.deepEqual(after, { table_privileges: 0, column_privileges: 0, sequence_privileges: 0,
+      function_execute: 0, schema_grants: 0, default_grants: 0 });
+
+    // Real refusals as service_role on sensitive ESDMS data.
+    const client = await pool.connect();
+    try {
+      for (const table of ["users", "employees", "employee_personal_details", "employee_compensation_records",
+        "ipos", "material_demand_pricing_lines", "gate_passes", "governance_audit_log", "cloud_storage_connections", "cms_settings"]) {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL ROLE service_role");
+        await assert.rejects(client.query(`SELECT * FROM public.${table} LIMIT 1`), { code: "42501" }, table);
+        await client.query("ROLLBACK");
+      }
+    } finally {
+      client.release();
+    }
+
+    // Objects a future migration creates stay closed to service_role.
+    await pool.query("CREATE TABLE public.esdms_service_role_future (id int)");
+    await pool.query("CREATE FUNCTION public.esdms_service_role_future_fn() RETURNS int LANGUAGE sql AS 'SELECT 1'");
+    const future = await pool.query(`SELECT
+      has_table_privilege('service_role', 'public.esdms_service_role_future', 'SELECT') AS table_select,
+      has_function_privilege('service_role', 'public.esdms_service_role_future_fn()', 'EXECUTE') AS function_execute`);
+    assert.deepEqual(future.rows[0], { table_select: false, function_execute: false });
+
+    // Authority through an inherited role is refused: the release fails closed.
+    const owner = (await pool.query("SELECT current_user AS name")).rows[0].name;
+    await pool.query(`GRANT "${owner}" TO service_role`);
+    const inherited = runProvisioning(databaseUrl, { runtimePassword });
+    assert.notEqual(inherited.status, 0, "provisioning must refuse service_role inheriting the ESDMS owner");
+    assert.match(`${inherited.stdout}${inherited.stderr}`, /service_role retains authority over an ESDMS object/);
+    assertSecretAbsent(inherited, runtimePassword);
+  } finally {
+    await pool.query("DROP TABLE IF EXISTS public.esdms_service_role_future");
+    await pool.query("DROP FUNCTION IF EXISTS public.esdms_service_role_future_fn()");
+    await cleanupRuntimeRole();
+    await cleanupServiceRole();
+    await pool.query(`DROP SEQUENCE IF EXISTS public.${TEST_SEQUENCE}`);
+  }
+});
+
 test("function hardening and default-ACL verification are scoped to the migration owner", async (t) => {
   const databaseUrl = assertIsDisposableTestDatabase();
   if (!assertPsqlAvailable(t)) {

@@ -3,32 +3,23 @@
 -- with `SET ROLE <role>` first. Every check runs in a transaction that is
 -- rolled back; nothing is left behind.
 --
---   psql -v own=public|permit|attendance|none -v kind=runtime|owner [-v report_only=public] -f security-matrix.sql
+--   psql -v own=public|permit|attendance|none -v kind=runtime|owner -f security-matrix.sql
 --
 -- `own` is the application schema this role serves (none for the Supabase
 -- API roles). `kind=owner` is an application's migration owner: DDL in its
 -- own schema is its job, so only the cross-application checks apply.
--- `report_only` names a schema whose access is REPORTED instead of failed:
--- used only for service_role on ESDMS's public (a known, separately owned
--- ESDMS item; Supabase grants it by default). The role must be refused (42501) for every read, write, DDL,
+-- The role must be refused (42501) for every read, write, DDL,
 -- TRUNCATE and DROP on every table of every OTHER application schema, and
 -- for DDL, CREATE SCHEMA, CREATE ROLE and SET ROLE anywhere. It must carry
 -- no elevated attribute or membership, and hold EXECUTE on no function of
 -- another application's schema.
 \set ON_ERROR_STOP on
 BEGIN;
-\if :{?report_only}
-\else
-  \set report_only none
-\endif
-SELECT set_config('matrix.own', :'own', true) AS configured, set_config('matrix.kind', :'kind', true) AS kind,
-       set_config('matrix.report_only', :'report_only', true) AS report_only \gset matrix_
+SELECT set_config('matrix.own', :'own', true) AS configured, set_config('matrix.kind', :'kind', true) AS kind \gset matrix_
 DO $matrix$
 DECLARE
   own text := current_setting('matrix.own');
   kind text := current_setting('matrix.kind');
-  report_only text := current_setting('matrix.report_only');
-  reported int := 0;
   target record;
   first_column text;
   attempt text;
@@ -62,21 +53,13 @@ BEGIN
     ] LOOP
       BEGIN
         EXECUTE attempt;
-        IF target.nspname = report_only THEN
-          reported := reported + 1;
-        ELSE
-          problems := problems || ('ALLOWED: ' || attempt);
-        END IF;
+        problems := problems || ('ALLOWED: ' || attempt);
       EXCEPTION
         WHEN insufficient_privilege THEN NULL;
-        WHEN OTHERS THEN
-          IF target.nspname <> report_only THEN problems := problems || (SQLSTATE || ' (not 42501): ' || attempt); END IF;
+        WHEN OTHERS THEN problems := problems || (SQLSTATE || ' (not 42501): ' || attempt);
       END;
     END LOOP;
   END LOOP;
-  IF report_only <> 'none' THEN
-    RAISE NOTICE 'REPORTED (not failed) %: % operations allowed on % tables (carried ESDMS item)', current_user, reported, report_only;
-  END IF;
 
   -- 2. Its own schema (runtime roles): data access by grant only; no DDL, no TRUNCATE, no DROP.
   IF own <> 'none' AND kind = 'runtime' THEN
@@ -122,7 +105,7 @@ BEGIN
   --    SET ROLE is judged by the SESSION user, so this and the attribute check
   --    apply to real logins only; an impersonated NOLOGIN API role is reported.
   IF session_user <> current_user THEN
-    RAISE NOTICE '% is NOLOGIN (impersonated): attributes super=% bypassrls=% (no privilege in permit/attendance to bypass)',
+    RAISE NOTICE '% is NOLOGIN (impersonated): attributes super=% bypassrls=% (holds no application-schema privilege to bypass)',
       current_user, (SELECT rolsuper FROM pg_roles WHERE rolname = current_user), (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user);
   ELSE
   FOR other IN SELECT rolname FROM pg_roles
@@ -149,7 +132,7 @@ BEGIN
 
   -- 6. EXECUTE on no function of another application schema.
   FOR fn IN SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-             WHERE n.nspname IN ('public', 'permit', 'attendance') AND n.nspname <> own AND n.nspname <> report_only
+             WHERE n.nspname IN ('public', 'permit', 'attendance') AND n.nspname <> own
                AND has_function_privilege(p.oid, 'EXECUTE') LOOP
     problems := problems || ('EXECUTE allowed on ' || fn);
   END LOOP;
