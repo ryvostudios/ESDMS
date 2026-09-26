@@ -21,10 +21,10 @@ this runbook before it is approved.
 
 ## 0. What is being released
 
-| Application | Branch (feature, not merged) | Head at Phase 6 | Migrations |
+| Application | Branch (feature, not merged) | Head after the final remediation pass | Migrations |
 | --- | --- | --- | --- |
-| ESDMS | `feature/cms-web-pwa-branding` | `f89c11b` + Phase 6 commits on the branch | 48 (`public.pgmigrations`) |
-| Permit | `feature/permit-storage-cms` | `c3acaa6` or later on the branch | 42 (`permit.schema_migrations`: baseline 0001–0038 + 0039–0042) |
+| ESDMS | `feature/cms-web-pwa-branding` | the approved commit on the branch (at least the final remediation commits) | 48 (`public.pgmigrations`) |
+| Permit | `feature/permit-storage-cms` | `da6fc90` or later on the branch | 44 (`permit.schema_migrations`: baseline 0001–0038 + 0039–0044) |
 | Attendance | `feature/postgres-attendance` | `20f1c62` or later on the branch | 2 (`attendance.schema_migrations`) |
 
 Record the exact commits approved by the audit here before starting. The
@@ -201,7 +201,7 @@ locally with both real backends under company-style hostnames
        SHARED_DATABASE.md open item). Grant it for this step only, then
        revoke it.
     3. Run `npm run migrate -- --baseline-without-reference-data` as
-       `permit_migrator`. Expect 42 migrations and **no reference rows**:
+       `permit_migrator`. Expect 44 migrations and **no reference rows**:
        the history brings its own.
 14. **Migrate Permit identity and data.** From the approved Permit commit,
     with `STANDALONE_DATABASE_URL` set to a login on the old project that
@@ -283,8 +283,18 @@ locally with both real backends under company-style hostnames
     - Set `CORS_ALLOWED_ORIGINS`, `SITE_TIMEZONE`, `TRUST_PROXY_CIDRS`, the
       storage variables and the Dropbox variables.
     - No Supabase Auth variables (removed).
-26. **Permit readiness.** `/health` and `/ready`. Readiness is
-    database-only by design: sign-in never depends on Dropbox.
+    - `NODE_VERSION=24`, an official Node.js build (Permit `.node-version`):
+      issued-PDF bytes depend on the zlib linked into Node.
+26. **Permit readiness.** Permit mounts its health routes under `/api/v1`
+    (not `/api/v1/health/ready`, which is ESDMS):
+    - `https://permit-api.eset.pk/api/v1/health` returns 200 (liveness);
+    - `https://permit-api.eset.pk/api/v1/ready` returns 200 (`503
+      not_ready` means the database is unreachable);
+    - after step 27, the same two paths on `https://permit.eset.pk`
+      return the same answers through the `/api/v1/*` rewrite.
+
+    Readiness is database-only by design: sign-in never depends on
+    Dropbox.
 27. **Deploy the Permit frontend** with `VITE_API_BASE_URL` empty and the
     `/api/v1/*` rewrite.
 28. **Auth, CMS and PDF smoke.**
