@@ -42,7 +42,7 @@ router.get('/permissions',requirePermission('cms.permissions.view','cms.permissi
 router.patch('/permissions/:code',requirePermission('cms.permissions.manage'),reply(req=>service.updatePermission(req.user,req.params.code,service.parse(metadataSchema,req.body))));
 for (const category of ['branding','content']) router.get(`/settings/${category}`,requirePermission(`cms.${category}.manage`),reply(()=>service.listSettings(category)));
 router.patch('/settings/:key',requirePermission('cms.branding.manage','cms.content.manage'),reply(req=>service.updateSetting(req.user,req.params.key,req.body)));
-router.put('/branding/logo',requirePermission('cms.branding.manage'),logoUpload,reply(req=>service.replaceLogo(req.user,req.body,extractLogo(req))));
+router.put('/branding/logo',requirePermission('cms.branding.manage'),logoUpload,reply(async req=>service.replaceLogo(req.user,req.body,await extractLogo(req))));
 router.delete('/branding/logo',requirePermission('cms.branding.manage'),reply(req=>service.resetLogo(req.user,req.body)));
 router.put('/branding/app-icon',requirePermission('cms.branding.manage'),logoUpload,reply(async req=>service.replaceAppIcon(req.user,req.body,await extractAppIcon(req))));
 router.delete('/branding/app-icon',requirePermission('cms.branding.manage'),reply(req=>service.resetAppIcon(req.user,req.body)));

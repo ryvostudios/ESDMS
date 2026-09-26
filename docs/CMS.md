@@ -102,7 +102,7 @@ developer Desktop path.
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/cms/branding/logo` | Public read of the active logo (sign-in needs it). Served only as its validated `image/png`/`image/jpeg`, `nosniff`, ETag. |
-| `PUT /api/v1/cms/branding/logo` | Multipart `logo` + `revision`. PNG/JPEG only, ≤ 2 MB, 32–4096 px. The declared type is re-checked against the bytes, PNG pixel data is fully inflated and the image is parsed as the PDF renderer will parse it. SVG and anything else is rejected. The client filename is ignored; bytes go through the existing storage service under a server-generated key. |
+| `PUT /api/v1/cms/branding/logo` | Multipart `logo` + `revision`. PNG/JPEG only, ≤ 2 MB, 32–4096 px. The image is fully decoded (sharp, failing on any decoder warning, so truncated or corrupt files are refused), its decoded format must match the declared type, and it is re-encoded canonically in that format (PNG transparency kept; trailing bytes and metadata dropped); the canonical bytes are what is stored, and they are parsed as the PDF renderer will parse them. SVG and anything else is rejected. The client filename is ignored; bytes go through the existing storage service under a server-generated key. |
 | `DELETE /api/v1/cms/branding/logo` | `{ revision }` — restore the bundled default. |
 
 Every change requires the current revision and writes `CMS_SETTING_CHANGED`

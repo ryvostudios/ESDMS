@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import sharp from "sharp";
 import pool from "../src/config/database.js";
 import config from "../src/config/env.js";
 import { startTestServer, seedUsers } from "./setup.js";
@@ -207,12 +208,16 @@ test("logo uploads accept only real, decodable PNG/JPEG within limits, never tru
   revision = accepted.body.data.revision;
   const files = storedLogos();
   assert.equal(files.length, before + 1);
-  assert.ok(files.every((name) => /^[0-9a-f-]{36}\.png$/.test(name)));
+  assert.ok(files.every((name) => /^[0-9a-f-]{36}\.(png|jpg)$/.test(name)), "server-generated names only");
 
+  // What is stored and served is the canonical re-encoding of the pixels.
   const served = await fetch(`${server.baseUrl}/api/v1/cms/branding/logo`);
   assert.equal(served.status, 200);
   assert.equal(served.headers.get("content-type"), "image/png");
-  assert.equal(sha(Buffer.from(await served.arrayBuffer())), sha(real));
+  const servedMeta = await sharp(Buffer.from(await served.arrayBuffer())).metadata();
+  const realMeta = await sharp(real).metadata();
+  assert.deepEqual([servedMeta.format, servedMeta.width, servedMeta.height, servedMeta.hasAlpha],
+    ["png", realMeta.width, realMeta.height, realMeta.hasAlpha]);
 
   // Stale revision: rejected, and the bytes it just wrote are cleaned up.
   const stale = await call(tokens.ceo, "PUT", "/cms/branding/logo", logoForm(png(64, 64), { revision: revision - 1 }), true);
@@ -229,6 +234,59 @@ test("logo uploads accept only real, decodable PNG/JPEG within limits, never tru
   const reset = await call(tokens.ceo, "DELETE", "/cms/branding/logo", { revision });
   assert.equal(reset.status, 200, JSON.stringify(reset.body));
   assert.equal(reset.body.data.logo.source, "default");
+});
+
+test("A04: logos are fully decoded, type-checked against their bytes and canonically re-encoded", async () => {
+  let revision = (await brandingRows())["company.logo"].revision;
+  const before = storedLogos().length;
+  const upload = (buffer, options) => call(tokens.ceo, "PUT", "/cms/branding/logo", logoForm(buffer, { revision, ...options }), true);
+  const image = (width, height, format, background = { r: 20, g: 90, b: 160, alpha: 1 }) =>
+    sharp({ create: { width, height, channels: 4, background } })[format]().toBuffer();
+  const jpeg = await image(200, 100, "jpeg");
+
+  // Truncated JPEG that still starts with SOI and ends with EOI.
+  const truncatedJpeg = Buffer.concat([jpeg.subarray(0, Math.floor(jpeg.length / 2)), Buffer.from([0xff, 0xd9])]);
+  assert.equal((await upload(truncatedJpeg, { type: "image/jpeg", filename: "logo.jpg" })).status, 400);
+  // Declared type must match the decoded bytes, whatever the filename says.
+  assert.equal((await upload(jpeg, { type: "image/png" })).status, 400, "JPEG declared as PNG");
+  assert.equal((await upload(await image(64, 64, "png"), { type: "image/jpeg", filename: "logo.jpg" })).status, 400, "PNG declared as JPEG");
+  const webp = await image(64, 64, "webp");
+  assert.equal((await upload(webp, { type: "image/png" })).status, 400, "WebP declared as PNG");
+  assert.equal((await upload(webp, { type: "image/webp", filename: "logo.webp" })).status, 400, "WebP is not a supported format");
+  // Malformed PNG: a valid header followed by garbage pixel data.
+  const malformed = Buffer.from(await image(64, 64, "png"));
+  malformed.fill(0x00, 40, malformed.length - 12);
+  assert.equal((await upload(malformed)).status, 400);
+  // Dimensions outside 32-4096 on either side.
+  assert.equal((await upload(await image(4097, 32, "png"))).status, 400);
+  assert.equal((await upload(await image(32, 31, "png"))).status, 400);
+  assert.equal(storedLogos().length, before, "a rejected upload stores nothing");
+
+  // Valid JPEG: accepted, stored as the canonical JPEG, trailing bytes and metadata dropped.
+  const withTrailer = Buffer.concat([await sharp(jpeg).withMetadata({ exif: { IFD0: { Copyright: "synthetic" } } }).jpeg().toBuffer(),
+    Buffer.from("<script>trailing payload</script>")]);
+  let accepted = await upload(withTrailer, { type: "image/jpeg", filename: "logo.jpg" });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  assert.match(accepted.body.data.logo.description, /^Uploaded JPEG 200×100/);
+  revision = accepted.body.data.revision;
+  let served = Buffer.from(await (await fetch(`${server.baseUrl}/api/v1/cms/branding/logo`)).arrayBuffer());
+  assert.ok(!served.includes("trailing payload"), "bytes after the image are not stored");
+  const jpegMeta = await sharp(served).metadata();
+  assert.deepEqual([jpegMeta.format, jpegMeta.width, jpegMeta.height, jpegMeta.exif], ["jpeg", 200, 100, undefined]);
+
+  // Valid PNG with transparency: the alpha channel survives re-encoding.
+  accepted = await upload(await image(120, 60, "png", { r: 0, g: 0, b: 0, alpha: 0.25 }));
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  revision = accepted.body.data.revision;
+  served = Buffer.from(await (await fetch(`${server.baseUrl}/api/v1/cms/branding/logo`)).arrayBuffer());
+  const pngMeta = await sharp(served).metadata();
+  assert.deepEqual([pngMeta.format, pngMeta.width, pngMeta.height, pngMeta.hasAlpha], ["png", 120, 60, true]);
+  const { data } = await sharp(served).raw().toBuffer({ resolveWithObject: true });
+  assert.ok(data[3] > 0 && data[3] < 255, "partially transparent pixels stay partially transparent");
+  assert.equal(storedLogos().length, before + 2);
+
+  const reset = await call(tokens.ceo, "DELETE", "/cms/branding/logo", { revision });
+  assert.equal(reset.status, 200, JSON.stringify(reset.body));
 });
 
 test("new documents carry the configured branding; missing optional branding never blocks generation", async () => {
@@ -314,5 +372,6 @@ test("an issued Gate Pass PDF keeps its bytes after branding changes", async () 
   assert.equal(await download(), issued, "historical PDF bytes are unchanged");
   const brand = await loadDocumentBranding();
   assert.equal(brand.companyName, "Renamed Issuer", "new documents use the current branding");
-  assert.equal(sha(brand.logo), sha(png(120, 60)));
+  const logo = await sharp(brand.logo).metadata();
+  assert.deepEqual([logo.format, logo.width, logo.height], ["png", 120, 60], "new documents use the uploaded logo, canonically re-encoded");
 });

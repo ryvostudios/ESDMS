@@ -26,8 +26,8 @@ in services after parsing; they do not grant arbitrary upload authority.
 
 Documents accept PDF/JPEG/PNG/WebP, check signatures and the configured document
 type allowlist; contracts narrow to PDF. Profile/Gate photos accept JPEG/PNG/
-WebP with signature validation. Logos accept PNG/JPEG with decoding and dimension
-checks. Imports accept XLSX MIME plus ZIP signature and workbook validation.
+WebP with signature validation. Logos accept PNG/JPEG with full decoding, declared-type and dimension
+checks, and are stored as a canonical re-encoding. Imports accept XLSX MIME plus ZIP signature and workbook validation.
 
 Limits follow current forms: documentTypeId/expiryDate; no profile text;
 confirmationToken/confirmWarnings; logo revision; odometer/remarks or kind/note.
