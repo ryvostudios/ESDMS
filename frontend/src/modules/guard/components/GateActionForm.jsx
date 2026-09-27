@@ -27,10 +27,6 @@ export function GateActionForm({ mode, minOdometer, onSubmit }) {
       nextErrors.odometer = `Must be at least ${minOdometer} (departure reading).`;
     }
 
-    if (!photos.length) {
-      nextErrors.photo = "At least one photo is required.";
-    }
-
     setErrors(nextErrors);
     setFormError(null);
 
@@ -74,10 +70,9 @@ export function GateActionForm({ mode, minOdometer, onSubmit }) {
       </FormField>
 
       <FormField
-        label={isReturn ? "Return Photos" : "Departure Photos"}
-        required
+        label={isReturn ? "Return Photos (optional)" : "Departure Photos (optional)"}
         error={errors.photo}
-        hint="Capture as many angles as you need."
+        hint="Optional evidence — capture as many angles as you need. The odometer reading is still required."
       >
         <EvidencePhotoInput
           value={photos}

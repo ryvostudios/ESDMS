@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { GatePassDetailPage } from "./GatePassDetailPage.jsx";
 
@@ -35,13 +35,15 @@ const baseGatePass = {
   auditLog: [{ id: "audit-1", action: "CREATE", actorName: "Test Creator", createdAt: "2026-01-01T00:00:00.000Z", metadata: {} }],
 };
 
+let mockGatePass = baseGatePass;
+
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, useParams: () => ({ id: "gp-1" }), useNavigate: () => vi.fn() };
 });
 
 vi.mock("../hooks/useGatePass.js", () => ({
-  useGatePass: () => ({ gatePass: baseGatePass, status: "ready", error: null, reload: vi.fn() }),
+  useGatePass: () => ({ gatePass: mockGatePass, status: "ready", error: null, reload: vi.fn() }),
 }));
 
 vi.mock("../../../core/auth/AuthContext.jsx", () => ({
@@ -59,6 +61,7 @@ vi.mock("../api.js", () => ({
 
 afterEach(() => {
   cleanup();
+  mockGatePass = baseGatePass;
 });
 
 async function renderPage() {
@@ -101,5 +104,73 @@ describe("GatePassDetailPage layout — direct grid children stay shrinkable", (
     const tableWrapper = container.querySelector('[class*="tableWrapper"]');
     expect(tableWrapper).toBeTruthy();
     expect(tableWrapper.querySelector('[class*="itemsTable"]')).toBeTruthy();
+  });
+});
+
+describe("GatePassDetailPage — optional items, Gate Keeper wording and distance", () => {
+  const evidence = (odometer) => ({ fileId: `f-${odometer}`, odometer, recordedAt: "2026-01-01T01:00:00.000Z", recordedByName: "Test Guard" });
+  const completed = {
+    ...baseGatePass,
+    status: "COMPLETED",
+    departureOdometer: 42150,
+    returnOdometer: 42238,
+    departureAt: "2026-01-01T01:00:00.000Z",
+    returnAt: "2026-01-01T03:00:00.000Z",
+    distanceKm: 88,
+    departureEvidence: evidence(42150),
+    returnEvidence: evidence(42238),
+  };
+
+  test("a zero-item Gate Pass shows 'No material items' instead of an empty table", async () => {
+    mockGatePass = { ...baseGatePass, items: [] };
+    const { container } = await renderPage();
+
+    expect(screen.getByText("No material items")).toBeTruthy();
+    expect(container.querySelector('[class*="itemsTable"]')).toBeNull();
+  });
+
+  test("gate evidence is attributed to the Gate Keeper, never the Guard", async () => {
+    mockGatePass = completed;
+    await renderPage();
+
+    expect(screen.getAllByText("Gate Keeper")).toHaveLength(2);
+    expect(screen.queryByText("Guard")).toBeNull();
+  });
+
+  test("the distance shown is the server's distanceKm, including a genuine zero", async () => {
+    mockGatePass = completed;
+    await renderPage();
+    expect(screen.getByText("88 km")).toBeTruthy();
+    cleanup();
+
+    mockGatePass = { ...completed, returnOdometer: 42150, distanceKm: 0 };
+    await renderPage();
+    expect(screen.getByText("0 km")).toBeTruthy();
+  });
+});
+
+describe("GatePassDetailPage — optional gate photos", () => {
+  test("a movement recorded without photos says so and offers no photo to view", async () => {
+    mockGatePass = {
+      ...baseGatePass,
+      status: "COMPLETED",
+      departureOdometer: 10,
+      returnOdometer: 20,
+      departureAt: "2026-01-01T01:00:00.000Z",
+      returnAt: "2026-01-01T02:00:00.000Z",
+      distanceKm: 10,
+      departureEvidence: null,
+      returnEvidence: null,
+    };
+    await renderPage();
+
+    expect(screen.getByText("No photographic evidence was captured.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View Photo" })).toBeNull();
+    expect(screen.getByText("10 km")).toBeTruthy();
+  });
+
+  test("a pass that has not left the gate shows no evidence section at all", async () => {
+    await renderPage();
+    expect(screen.queryByText("No photographic evidence was captured.")).toBeNull();
   });
 });

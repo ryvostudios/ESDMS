@@ -90,8 +90,15 @@ export function DemandForm({ initialDemand, initialLines, submitLabel, onSubmit 
     event.preventDefault();
     if (submitting) return;
 
+    // A selected material is never silently dropped: an empty, zero, negative
+    // or non-numeric quantity is reported so the user fixes it (or unchecks
+    // the item) instead of saving a Demand that is missing a line.
+    if (Object.values(selections).some((quantity) => !(Number(quantity) > 0))) {
+      setFormError("Enter a quantity greater than zero for every selected material, or unselect it.");
+      return;
+    }
+
     const lines = Object.entries(selections)
-      .filter(([, quantity]) => quantity !== "" && Number(quantity) > 0)
       .map(([catalogEntryId, quantity]) => {
         const source = carryForward[catalogEntryId];
         return {

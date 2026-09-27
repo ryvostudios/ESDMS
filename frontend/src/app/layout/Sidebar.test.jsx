@@ -7,6 +7,7 @@ import gridStyles from "./SidebarKineticBackground.module.css";
 vi.mock("../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({ user: { employeeId: "employee-1" }, hasPermission: () => true }),
 }));
+vi.mock("../../modules/cms/company-logo.js", () => ({ useCompanyLogo: () => "blob:managed-logo" }));
 
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
@@ -48,6 +49,7 @@ describe("Sidebar", () => {
     const canvas = container.querySelector("canvas");
     expect(canvas).toBeTruthy();
     expect(canvas.className).toContain(gridStyles.canvas);
+    expect(container.querySelector('img')?.src).toContain('blob:managed-logo');
   });
 
   test("navigation remains real links, reachable by role", () => {

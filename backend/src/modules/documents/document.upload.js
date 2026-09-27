@@ -1,4 +1,5 @@
 import multer from "multer";
+import { flatMultipartLimits } from "../../shared/http/multipart-limits.js";
 import { ValidationError } from "../../shared/errors/app-error.js";
 import { guardParsedBody } from "../../shared/http/text-safety.js";
 
@@ -34,7 +35,7 @@ const SIGNATURE_CHECKS = {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_DOCUMENT_BYTES, files: 1 },
+  limits: flatMultipartLimits({ fileSize: MAX_DOCUMENT_BYTES, fields: 2, fieldSize: 37, fieldNameSize: 14 }),
   fileFilter(req, file, callback) {
     if (!SIGNATURE_CHECKS[file.mimetype]) {
       return callback(new ValidationError("Unsupported file type."));

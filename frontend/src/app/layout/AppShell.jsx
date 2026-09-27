@@ -1,3 +1,4 @@
+import { ApplicationNotice } from "../../modules/cms/ApplicationNotice.jsx";
 import { useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar.jsx";
@@ -26,6 +27,7 @@ export function AppShell() {
         </div>
         <TopBar onOpenMenu={() => setMobileNavOpen(true)} menuButtonRef={menuButtonRef} menuOpen={mobileNavOpen} />
         <main id="main-content" className={styles.content}>
+          <ApplicationNotice />
           <Outlet />
         </main>
       </div>

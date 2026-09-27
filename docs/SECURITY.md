@@ -275,6 +275,16 @@ invariants are centralized in one place,
   `PRIVILEGE_ESCALATION_ATTEMPT` in `governance_audit_log` **before** the
   `403` is returned — a denied privileged request is never invisible.
 
+Delegated governance is bounded by the actor's effective permissions. Existing
+ordinary Employee role capabilities remain assignable through authorized user
+management; other role/bundle permissions must be held by the delegate.
+Governance, account-management and company-wide scope permissions cannot be
+redelegated by non-CEO actors. Accounts holding these powers require CEO
+administration. A delegate cannot replace or remove another actor's DENY.
+Mutation targets are locked and rechecked for current site and protected status.
+Workforce treats EMPLOYEE accounts with explicit grants or bundles as privileged
+for credential reset, offboarding and automatic site synchronization.
+
 Effective permissions (`role permissions + individual grants + active named
 bundles - individual denials`, explicit denial always winning) are computed once, in
 `getUserProfileById` (§8.2's `user_permission_overrides` table), and reused
@@ -351,6 +361,14 @@ drifted database ready. It exposes no connection details, SQL, paths or errors.
 - `DATABASE_URL` — the `esdms_runtime` login used by the API process. It receives only the explicitly reviewed table privileges named in `scripts/provision-db-roles.sql`: most application tables receive CRUD, capability-bundle definitions are read-only, and bundle assignments deliberately omit `UPDATE`. That allowlist is authoritative and grows only when a migration adds a reviewed runtime dependency. Runtime also receives `USAGE` on `public` and `EXECUTE` on only the two narrow readiness functions. It has no sequence privileges, no privilege on `public.pgmigrations`, no schema `CREATE`, and must have `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, and `BYPASSRLS` all disabled.
 
 The security migration `1787401000000_database-runtime-security-boundary.js` enables (but does not `FORCE`) RLS on all 13 current public tables and revokes table/sequence and applicable default privileges from Supabase's `anon` and `authenticated` roles when those roles exist. Browser clients therefore do not access ESDMS tables directly through Supabase Data APIs. RLS is an additional database boundary; authentication, permissions, site/department isolation, and workflow authorization remain enforced by the backend.
+
+Supabase's `service_role` is **not** an ESDMS application database identity. ESDMS reads and writes its data only as `esdms_runtime`. The Supabase service-role key is a separate backend integration concern: the backend uses it only for the Supabase Storage HTTP API, which gives it no SQL authority over ESDMS objects. Supabase's default privileges would otherwise give `service_role` every table, sequence and function the migration owner creates in `public`, so `scripts/provision-db-roles.sql`, run by every `npm run db:release`, handles it in three ways:
+
+- **Current objects:** it revokes all table (and column), sequence and function privileges on current objects, plus the direct schema grant.
+- **Future objects:** it revokes the migration owner's global and `public` default privileges, so future ESDMS objects stay closed.
+- **Verification:** the release fails unless `service_role` holds no effective privilege on any ESDMS-owned table, column, sequence or function, owns nothing directly or through a role it belongs to, and appears in none of the owner's default ACLs.
+
+`public` keeps PostgreSQL's built-in `PUBLIC` USAGE. That permits only name lookup, is shared by every login in the database (including Supabase-managed roles whose needs cannot be verified outside a real Supabase project), and grants no object access. Supabase-managed schemas (`storage`, `auth` and others) are not touched.
 
 The follow-up migration `1787402000000_public-function-execution-boundary.js` revokes `EXECUTE` on current public functions from `PUBLIC` and the browser roles, and removes both global and public-schema function defaults belonging to the migration owner. PostgreSQL trigger execution does not require the table caller to hold direct `EXECUTE` on the trigger function, so the API runtime receives no direct function grant. Future functions created by the migration owner therefore do not become publicly/browser executable by default.
 

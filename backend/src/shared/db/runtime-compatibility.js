@@ -21,6 +21,12 @@ expected_critical_privileges(table_name, privilege_type) AS (
   SELECT t.table_name, p.privilege_type
   FROM standard_critical_tables t CROSS JOIN dml_privileges p
   UNION ALL VALUES
+    ('cloud_storage_connections', 'SELECT'), ('cloud_storage_connections', 'UPDATE'),
+    ('cloud_storage_active', 'SELECT'), ('cloud_storage_active', 'UPDATE'),
+    ('cloud_storage_oauth_states', 'SELECT'), ('cloud_storage_oauth_states', 'INSERT'), ('cloud_storage_oauth_states', 'DELETE'),
+    ('cloud_storage_objects', 'SELECT'), ('cloud_storage_objects', 'INSERT'), ('cloud_storage_objects', 'UPDATE'),
+    ('cms_settings', 'SELECT'),
+    ('cms_settings', 'UPDATE'),
     ('permission_bundles', 'SELECT'),
     ('permission_bundle_permissions', 'SELECT'),
     ('user_permission_bundle_assignments', 'SELECT'),

@@ -19,6 +19,15 @@ employee self-service. See `docs/DECISIONS.md` for the security boundaries
 and current deferred scope, and `docs/OPERATIONS.md` for the ordered release
 procedure.
 
+**Handover documents:** [`docs/HANDOVER.md`](docs/HANDOVER.md) (start here),
+[`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md),
+[`docs/PRE_HANDOVER_AUDIT.md`](docs/PRE_HANDOVER_AUDIT.md),
+[`docs/MULTIPART_SECURITY.md`](docs/MULTIPART_SECURITY.md) and
+[`docs/DEFERRED_WORK.md`](docs/DEFERRED_WORK.md). Production deployment:
+[`docs/PRODUCTION_ENVIRONMENT.md`](docs/PRODUCTION_ENVIRONMENT.md),
+[`docs/PRODUCTION_RUNBOOK.md`](docs/PRODUCTION_RUNBOOK.md) and
+[`docs/GO_LIVE_CHECKLIST.md`](docs/GO_LIVE_CHECKLIST.md).
+
 No production deployment exists yet: deployment is explicitly gated on
 independent re-review of the fix passes. See `docs/ARCHITECTURE.md` §13 and
 `docs/MODULES.md` §15 for current per-module status. Three things in

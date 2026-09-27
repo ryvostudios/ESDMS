@@ -1,5 +1,5 @@
+import { loadDocumentBranding } from "../../shared/documents/branding.js";
 import {
-  COMPANY,
   createDocument,
   documentHeader,
   fieldGrid,
@@ -17,10 +17,13 @@ import {
 // the IPO PDF, gated on commercial authority (spec §36, §38 of the build
 // prompt). Approval REASONS are also omitted: a FINAL rejection reason is
 // protected commercial context (see material-demand.service.js).
-export async function generateDemandListPdf({ demand, lines, approvals }) {
+// `branding` is resolved centrally when not supplied (tests pass it).
+export async function generateDemandListPdf({ demand, lines, approvals }, branding) {
+  const brand = branding ?? (await loadDocumentBranding());
   const { doc, buffer } = createDocument();
 
   documentHeader(doc, {
+    branding: brand,
     title: "Material Demand List",
     reference: demand.demand_number,
     subtitle: `Revision ${demand.revision}`,
@@ -78,7 +81,7 @@ export async function generateDemandListPdf({ demand, lines, approvals }) {
 
   footer(
     doc,
-    `${COMPANY.footer} Requested quantities only. This document records a material request and its approvals; it is not a purchase order and not a stock statement.`,
+    `${brand.footer} Requested quantities only. This document records a material request and its approvals; it is not a purchase order and not a stock statement.`,
   );
 
   doc.end();

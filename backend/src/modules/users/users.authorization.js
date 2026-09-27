@@ -1,4 +1,5 @@
-import { ForbiddenError } from "../../shared/errors/app-error.js";
+import { ForbiddenError, NotFoundError } from "../../shared/errors/app-error.js";
+import { getUserProfileById } from "../../shared/users/user-profile.repository.js";
 import pool from "../../config/database.js";
 import { recordGovernanceAudit } from "../../shared/audit/governance-audit.repository.js";
 
@@ -84,4 +85,41 @@ export async function guardUmCreateAuthority(actor, requestedRole) {
   });
 
   throw new ForbiddenError("Creating an Upper Management account requires explicit UM authority.");
+}
+
+// Delegation is bounded by effective authority, never by position/title.
+// Authority to administer access is itself CEO-delegated, not transitive.
+export function isReservedDelegationPermission(code) {
+  return code === "cms.integrations.manage" || code.startsWith("users.") || code.startsWith("permission_overrides.") ||
+    code.startsWith("employees.account.") || code.endsWith(".all_sites") ||
+    code.endsWith(".all_departments");
+}
+
+export function canDelegatePermissions(actor, codes) {
+  return actor.role === CEO_ROLE || codes.every((code) =>
+    actor.permissions.has(code) && !isReservedDelegationPermission(code));
+}
+
+export function assertDelegablePermissions(actor, codes) {
+  if (!canDelegatePermissions(actor, codes)) {
+    throw new ForbiddenError("Delegation requires permissions you hold; governance and company-wide authority can only be delegated by CEO.");
+  }
+}
+
+// Called inside the mutation transaction, AFTER locking the target User.
+// No separate-connection audit while holding its FK row lock.
+export async function assertLockedGovernanceTarget(client, actor, target, nextRole = target?.role) {
+  if (!target || (actor.role !== CEO_ROLE && target.site_id !== actor.siteId)) {
+    throw new NotFoundError("User not found.");
+  }
+  if (target.role === CEO_ROLE || target.id === actor.id ||
+      ((target.role === UM_ROLE || nextRole === UM_ROLE) && !actor.permissions.has(UM_MANAGE_PERMISSION))) {
+    throw new ForbiddenError("This account is protected from this governance action.");
+  }
+  if (actor.role !== CEO_ROLE) {
+    const profile = await getUserProfileById(target.id, client);
+    if (profile.permissions.some(isReservedDelegationPermission)) {
+      throw new ForbiddenError("Only CEO can administer an account with delegated governance or company-wide authority.");
+    }
+  }
 }

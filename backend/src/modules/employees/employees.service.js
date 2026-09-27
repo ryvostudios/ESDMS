@@ -10,7 +10,7 @@ import { findDepartmentById } from "../departments/departments.repository.js";
 import { findPositionById } from "../positions/positions.repository.js";
 import { findEmploymentTypeById } from "../employment-types/employment-types.repository.js";
 import { findRoleByName, findUserById } from "../users/users.repository.js";
-import { guardGovernanceTarget, UM_MANAGE_PERMISSION, CEO_ROLE, UM_ROLE } from "../users/users.authorization.js";
+import { guardGovernanceTarget, assertLockedGovernanceTarget, UM_MANAGE_PERMISSION, CEO_ROLE, UM_ROLE } from "../users/users.authorization.js";
 import { findPolicyById } from "../rotation/rotation.repository.js";
 import { currentDateInAppTimezone } from "../../shared/time/app-timezone.js";
 import {
@@ -185,7 +185,13 @@ async function lockLinkedUserRoleAndActive(client, userId) {
   if (!row) return null;
 
   const role = await client.query("SELECT name FROM roles WHERE id = $1", [row.role_id]);
-  return { role: role.rows[0]?.name || null, is_active: row.is_active, site_id: row.site_id };
+  const access = await client.query(
+    `SELECT EXISTS (SELECT 1 FROM user_permission_overrides WHERE user_id = $1 AND effect = 'GRANT')
+       OR EXISTS (SELECT 1 FROM user_permission_bundle_assignments WHERE user_id = $1) AS delegated`,
+    [userId],
+  );
+  return { role: role.rows[0]?.name || null, is_active: row.is_active, site_id: row.site_id,
+    ordinary: role.rows[0]?.name === "EMPLOYEE" && !access.rows[0].delegated };
 }
 
 export async function checkDuplicates(actor, input) {
@@ -414,7 +420,7 @@ export async function changeEmployeeStatus(actor, employeeId, input) {
     // not block offboarding, and is never touched here. CEO accounts are
     // covered by the same "privileged" branch (defense in depth; a CEO
     // wouldn't realistically be linked through Workforce at all).
-    if (goingInactive && lockedLinkedUser && lockedLinkedUser.role !== "EMPLOYEE" && lockedLinkedUser.is_active) {
+    if (goingInactive && lockedLinkedUser && !lockedLinkedUser.ordinary && lockedLinkedUser.is_active) {
       throw new ForbiddenError(
         "The linked application account holds a privileged role and is still active. Deactivate it through Governance before offboarding this Employee.",
       );
@@ -433,7 +439,7 @@ export async function changeEmployeeStatus(actor, employeeId, input) {
     // reactivating (INACTIVE -> ACTIVE) never touches the linked User —
     // security account activation stays an explicit Governance operation.
     // Reuses the SAME locked snapshot taken above — not a fresh read.
-    if (goingInactive && lockedLinkedUser && lockedLinkedUser.role === "EMPLOYEE" && lockedLinkedUser.is_active) {
+    if (goingInactive && lockedLinkedUser && lockedLinkedUser.ordinary && lockedLinkedUser.is_active) {
       await client.query("UPDATE users SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [
         locked.user_id,
       ]);
@@ -513,7 +519,7 @@ export async function createTransfer(actor, employeeId, input) {
       // does not block.
       if (
         lockedLinkedUser &&
-        lockedLinkedUser.role !== "EMPLOYEE" &&
+        !lockedLinkedUser.ordinary &&
         lockedLinkedUser.is_active &&
         lockedLinkedUser.site_id !== siteId
       ) {
@@ -564,7 +570,7 @@ export async function createTransfer(actor, employeeId, input) {
         siteId,
       ]);
 
-      if (lockedLinkedUser?.role === "EMPLOYEE") {
+      if (lockedLinkedUser?.ordinary) {
         // Safe to synchronize: an ordinary self-service account has no
         // authority tied to site beyond scoping its own record. Clear a
         // now-mismatched department_id in the same statement so this
@@ -725,6 +731,8 @@ export async function linkExistingUserForEmployee(actor, employeeId, input) {
           "Managing an Upper Management account requires explicit UM authority.",
         );
       }
+
+      await assertLockedGovernanceTarget(client, actor, targetUser);
 
       if (!targetUser.is_active) {
         throw new ValidationError("An inactive User account cannot be linked to an Employee.");
@@ -914,7 +922,7 @@ export async function resetEmployeeLoginPassword(actor, employeeId) {
     // regenerateTemporaryPassword in users.service.js — not duplicated
     // here).
     const lockedLinkedUser = await lockLinkedUserRoleAndActive(client, locked.user_id);
-    if (!lockedLinkedUser || lockedLinkedUser.role !== "EMPLOYEE") {
+    if (!lockedLinkedUser || !lockedLinkedUser.ordinary) {
       throw new ForbiddenError(
         "A privileged linked account cannot be reset through Workforce. Use the governance workflow.",
       );

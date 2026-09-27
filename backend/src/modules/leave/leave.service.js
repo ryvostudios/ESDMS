@@ -1,3 +1,4 @@
+import { mutateConfiguration } from "../../shared/audit/configuration-audit.js";
 import { ForbiddenError, ValidationError, NotFoundError, ConflictError } from "../../shared/errors/app-error.js";
 import { getEmployee } from "../employees/employees.service.js";
 import { recordHistory } from "../workforce/business-history.repository.js";
@@ -9,14 +10,14 @@ function isSelfActor(actor, employeeId) {
   return actor.employeeId === employeeId;
 }
 
-export async function createType(input) {
-  return repo.insertType(input);
+export async function createType(input, actor) {
+  return mutateConfiguration(actor, "leave_types", null, client => repo.insertType(input, client));
 }
 
-export async function updateType(id, input) {
+export async function updateType(id, input, actor) {
   const type = await repo.findTypeById(id);
   if (!type) throw new NotFoundError("Leave type not found.");
-  return repo.updateTypeFields(id, input);
+  return mutateConfiguration(actor, "leave_types", id, client => repo.updateTypeFields(id, input, client));
 }
 
 export { listTypes } from "./leave.repository.js";

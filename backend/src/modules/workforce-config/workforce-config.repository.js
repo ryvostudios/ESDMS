@@ -15,8 +15,8 @@ export async function findSectionById(id) {
   return result.rows[0] || null;
 }
 
-export async function insertSection({ name, description, sortOrder }) {
-  const result = await pool.query(
+export async function insertSection({ name, description, sortOrder }, executor = pool) {
+  const result = await executor.query(
     `INSERT INTO employee_profile_sections (name, description, sort_order)
      VALUES ($1, $2, COALESCE($3, 0)) RETURNING id, name, description, sort_order, is_active`,
     [name, description || null, sortOrder ?? null],
@@ -24,8 +24,8 @@ export async function insertSection({ name, description, sortOrder }) {
   return result.rows[0];
 }
 
-export async function updateSectionFields(id, { name, description, sortOrder, isActive }) {
-  const result = await pool.query(
+export async function updateSectionFields(id, { name, description, sortOrder, isActive }, executor = pool) {
+  const result = await executor.query(
     `UPDATE employee_profile_sections
      SET name = COALESCE($2, name),
          description = CASE WHEN $3::boolean THEN $4 ELSE description END,
@@ -56,8 +56,8 @@ export async function listFields({ activeOnly = false } = {}) {
   return result.rows;
 }
 
-export async function findFieldById(id) {
-  const result = await pool.query(`SELECT ${FIELD_COLUMNS}, field_type FROM employee_custom_fields WHERE id = $1`, [id]);
+export async function findFieldById(id, executor = pool) {
+  const result = await executor.query(`SELECT ${FIELD_COLUMNS}, field_type FROM employee_custom_fields WHERE id = $1`, [id]);
   return result.rows[0] || null;
 }
 
@@ -71,8 +71,8 @@ export async function fieldHasValues(fieldId) {
   return result.rowCount > 0;
 }
 
-export async function insertField(input) {
-  const result = await pool.query(
+export async function insertField(input, executor = pool) {
+  const result = await executor.query(
     `INSERT INTO employee_custom_fields
        (section_id, label, field_key, field_type, help_text, is_required,
         employee_can_view, employee_can_edit, hr_can_view, hr_can_edit, management_can_view,
@@ -123,7 +123,7 @@ const UPDATABLE_FIELD_COLUMNS = [
   ["is_active", "isActive"],
 ];
 
-export async function updateFieldFields(id, input) {
+export async function updateFieldFields(id, input, executor = pool) {
   const sets = [];
   const params = [id];
 
@@ -138,11 +138,11 @@ export async function updateFieldFields(id, input) {
     sets.push(`validation = $${params.length}::jsonb`);
   }
   if (sets.length === 0) {
-    return findFieldById(id);
+    return findFieldById(id, executor);
   }
 
   sets.push("updated_at = CURRENT_TIMESTAMP");
-  const result = await pool.query(
+  const result = await executor.query(
     `UPDATE employee_custom_fields SET ${sets.join(", ")} WHERE id = $1 RETURNING ${FIELD_COLUMNS}`,
     params,
   );
@@ -164,8 +164,8 @@ export async function listDocumentTypes({ activeOnly = false } = {}) {
   return result.rows;
 }
 
-export async function findDocumentTypeById(id) {
-  const result = await pool.query(`SELECT ${DOC_TYPE_COLUMNS} FROM employee_document_types WHERE id = $1`, [id]);
+export async function findDocumentTypeById(id, executor = pool) {
+  const result = await executor.query(`SELECT ${DOC_TYPE_COLUMNS} FROM employee_document_types WHERE id = $1`, [id]);
   return result.rows[0] || null;
 }
 
@@ -174,8 +174,8 @@ export async function documentTypeNameExists(name) {
   return result.rowCount > 0;
 }
 
-export async function insertDocumentType(input) {
-  const result = await pool.query(
+export async function insertDocumentType(input, executor = pool) {
+  const result = await executor.query(
     `INSERT INTO employee_document_types
        (name, is_required, employee_can_upload, hr_can_upload, employee_can_view, hr_can_view,
         expiry_required, verification_required, allowed_mime_types, sort_order)
@@ -211,7 +211,7 @@ const UPDATABLE_DOC_TYPE_COLUMNS = [
   ["is_active", "isActive"],
 ];
 
-export async function updateDocumentTypeFields(id, input) {
+export async function updateDocumentTypeFields(id, input, executor = pool) {
   const sets = [];
   const params = [id];
   for (const [column, key] of UPDATABLE_DOC_TYPE_COLUMNS) {
@@ -220,10 +220,10 @@ export async function updateDocumentTypeFields(id, input) {
       sets.push(`${column} = $${params.length}`);
     }
   }
-  if (sets.length === 0) return findDocumentTypeById(id);
+  if (sets.length === 0) return findDocumentTypeById(id, executor);
 
   sets.push("updated_at = CURRENT_TIMESTAMP");
-  const result = await pool.query(
+  const result = await executor.query(
     `UPDATE employee_document_types SET ${sets.join(", ")} WHERE id = $1 RETURNING ${DOC_TYPE_COLUMNS}`,
     params,
   );

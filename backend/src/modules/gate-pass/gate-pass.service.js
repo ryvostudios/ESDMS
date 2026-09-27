@@ -608,7 +608,7 @@ export async function getGuardDashboard(actor) {
 // compensating cleanup in their catch block can remove all of them if the
 // transaction does not survive — the same discipline the single-photo path
 // already used, extended to a batch.
-async function storeEvidenceBatch(client, { gatePassId, photos, fileType, actorId, note, uploaded, category }) {
+async function storeEvidenceBatch(client, { gatePassId, photos, fileType, actorId, note, uploaded, category, cloudCategory }) {
   const existing = await repo.countEvidenceFiles(client, gatePassId);
   if (existing + photos.length > MAX_EVIDENCE_PHOTOS_PER_GATE_PASS) {
     throw new ValidationError(
@@ -623,6 +623,7 @@ async function storeEvidenceBatch(client, { gatePassId, photos, fileType, actorI
     const saved = await storageService.save(photo.buffer, {
       gatePassId,
       category,
+      cloudCategory,
       extension: photo.extension,
     });
     uploaded.push(saved.storageKey);
@@ -644,7 +645,7 @@ async function storeEvidenceBatch(client, { gatePassId, photos, fileType, actorI
     version += 1;
   }
 
-  return fileIds[0];
+  return fileIds[0] ?? null;
 }
 
 // Additional gate evidence captured outside the exit/return transitions.
@@ -701,6 +702,7 @@ export async function addEvidence(actor, id, { kind, note, photos }) {
         note: note ?? null,
         uploaded,
         category: outbound ? "departure" : "return",
+        cloudCategory: "additional",
       });
 
       await repo.insertAuditLog(client, {
@@ -751,11 +753,9 @@ export async function recordExit(actor, id, { odometer, photo, photos }) {
     throw new ForbiddenError();
   }
 
+  // Photos are optional evidence: none means "no photographic evidence was
+  // captured", recorded as a NULL reference — never a placeholder file.
   const evidence = photos?.length ? photos : photo ? [photo] : [];
-
-  if (!evidence.length) {
-    throw new ValidationError("A departure photo is required.");
-  }
 
   // Every state-dependent check runs, under the row lock, before a single
   // byte is written to disk — a rejected transition never creates a file
@@ -812,10 +812,6 @@ export async function recordReturn(actor, id, { odometer, photo, photos, remarks
   }
 
   const evidence = photos?.length ? photos : photo ? [photo] : [];
-
-  if (!evidence.length) {
-    throw new ValidationError("A return photo is required.");
-  }
 
   // Same ordering as recordExit: validate under the row lock first, write
   // to disk only once the transition is known-good, and compensate with a

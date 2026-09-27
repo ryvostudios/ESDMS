@@ -1,5 +1,5 @@
+import { loadDocumentBranding } from "../../shared/documents/branding.js";
 import {
-  COMPANY,
   createDocument,
   documentHeader,
   fieldGrid,
@@ -36,17 +36,20 @@ import {
 // (Inquiry #, Ref. CPO #, Fulfil By, per-item Brand/Specs) are rendered from
 // real data where it exists and left blank otherwise. They are never invented
 // to make the page look complete.
-export async function generateIpoPdf({ ipo, lines, approvals }) {
+// `branding` is resolved centrally when not supplied (tests pass it).
+export async function generateIpoPdf({ ipo, lines, approvals }, branding) {
+  const brand = branding ?? (await loadDocumentBranding());
   const { doc, buffer } = createDocument();
 
   documentHeader(doc, {
+    branding: brand,
     title: "Internal Purchase Order",
     reference: ipo.ipo_number,
-    subtitle: `Generated ${formatDateTime(ipo.generated_at)} · ${COMPANY.system}`,
+    subtitle: `Generated ${formatDateTime(ipo.generated_at)} · ${brand.system}`,
   });
 
   partiesBlock(doc, {
-    from: `${COMPANY.name}\n${ipo.department_name} Department\n${ipo.site_name}`,
+    from: `${brand.companyName}\n${ipo.department_name} Department\n${ipo.site_name}`,
     to: "Procurement Team",
   });
 
@@ -108,7 +111,7 @@ export async function generateIpoPdf({ ipo, lines, approvals }) {
 
   footer(
     doc,
-    `${COMPANY.footer} Confidential — contains commercial information. This document records approved purchasing authority only; it is not a stock or inventory statement.`,
+    `${brand.footer} Confidential — contains commercial information. This document records approved purchasing authority only; it is not a stock or inventory statement.`,
   );
 
   doc.end();

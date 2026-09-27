@@ -20,11 +20,11 @@ export const listTypes = asyncHandler(async (req, res) => {
 });
 export const createType = asyncHandler(async (req, res) => {
   const input = parseBody(createTypeSchema, req.body);
-  res.status(201).json({ success: true, data: await service.createType(input) });
+  res.status(201).json({ success: true, data: await service.createType(input, req.user) });
 });
 export const updateType = asyncHandler(async (req, res) => {
   const input = parseBody(updateTypeSchema, req.body);
-  res.status(200).json({ success: true, data: await service.updateType(req.params.typeId, input) });
+  res.status(200).json({ success: true, data: await service.updateType(req.params.typeId, input, req.user) });
 });
 
 export const submit = asyncHandler(async (req, res) => {

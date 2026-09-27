@@ -17,5 +17,14 @@ describe("formatEnumLabel", () => {
     expect(formatEnumLabel("ADMIN")).toBe("Site Administrator");
     expect(formatEnumLabel("CEO")).toBe("CEO");
     expect(formatEnumLabel("TEAM_LEAD")).toBe("Team Lead");
+    // Display only: the role code itself stays GATE_GUARD.
+    expect(formatEnumLabel("GATE_GUARD")).toBe("Gate Keeper");
+    expect(formatEnumLabel("HR")).toBe("HR");
+  });
+
+  test("keeps business acronyms upper-case", () => {
+    expect(formatEnumLabel("IPO_GENERATED")).toBe("IPO Generated");
+    expect(formatEnumLabel("READY_FOR_IPO")).toBe("Ready For IPO");
+    expect(formatEnumLabel("IPO_CANCELLED")).toBe("IPO Cancelled");
   });
 });

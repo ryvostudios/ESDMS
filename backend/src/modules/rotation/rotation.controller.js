@@ -20,11 +20,11 @@ export const listPolicies = asyncHandler(async (req, res) => {
 });
 export const createPolicy = asyncHandler(async (req, res) => {
   const input = parseBody(createPolicySchema, req.body);
-  res.status(201).json({ success: true, data: await service.createPolicy(input) });
+  res.status(201).json({ success: true, data: await service.createPolicy(input, req.user) });
 });
 export const updatePolicy = asyncHandler(async (req, res) => {
   const input = parseBody(updatePolicySchema, req.body);
-  res.status(200).json({ success: true, data: await service.updatePolicy(req.params.policyId, input) });
+  res.status(200).json({ success: true, data: await service.updatePolicy(req.params.policyId, input, req.user) });
 });
 
 export const status = asyncHandler(async (req, res) => {

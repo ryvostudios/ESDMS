@@ -25,7 +25,7 @@ async function renderForm(onSubmit = vi.fn()) {
 }
 
 describe("GatePassForm items — mobile card structure and item management", () => {
-  test("a single item renders with its index label, all four fields, and a disabled remove button", async () => {
+  test("a single item renders with its index label, all four fields, and a remove button (items are optional)", async () => {
     await renderForm();
 
     expect(screen.getByText("Item 1")).toBeTruthy();
@@ -33,7 +33,36 @@ describe("GatePassForm items — mobile card structure and item management", () 
     expect(screen.getByLabelText(/part number/i)).toBeTruthy();
     expect(screen.getByLabelText(/^quantity/i)).toBeTruthy();
     expect(screen.getByLabelText(/^unit/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remove item 1" }).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Remove item 1" }).disabled).toBe(false);
+  });
+
+  test("removing the last item submits a Gate Pass with zero items — no placeholder row is sent", async () => {
+    const onSubmit = await renderForm();
+
+    fireEvent.change(screen.getByLabelText(/issuing department/i), { target: { value: "dept-1" } });
+    fireEvent.change(screen.getByLabelText(/requested by/i), { target: { value: "Ali" } });
+    fireEvent.change(screen.getByLabelText(/issued to.*destination/i), { target: { value: "Warehouse" } });
+    fireEvent.change(screen.getByLabelText(/driver name/i), { target: { value: "Bilal" } });
+    fireEvent.change(screen.getByLabelText(/driver phone/i), { target: { value: "03001234567" } });
+    fireEvent.change(screen.getByLabelText(/vehicle registration/i), { target: { value: "abc-123" } });
+    fireEvent.change(screen.getByLabelText(/^purpose/i), { target: { value: "SALES" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove item 1" }));
+
+    expect(screen.getByText(/no material items/i)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ items: [] }));
+  });
+
+  test("editing a zero-item draft opens with zero items rather than inventing an empty row", async () => {
+    await act(async () => {
+      render(<GatePassForm submitLabel="Save" onSubmit={vi.fn()} initialItems={[]} />);
+    });
+
+    expect(screen.queryByText("Item 1")).toBeNull();
+    expect(screen.getByText(/no material items/i)).toBeTruthy();
   });
 
   test("Add item appends a second card with its own index and an enabled remove button", async () => {

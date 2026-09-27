@@ -130,3 +130,9 @@
   font-size: var(--text-sm);
   margin-bottom: var(--space-4);
 }
+
+.noItems {
+  color: var(--color-text-muted);
+  font-style: italic;
+  margin-bottom: var(--space-4);
+}

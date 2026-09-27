@@ -246,6 +246,13 @@ test("the runtime access contract and provision-db-roles.sql describe the same b
   for (const table of grantBlock(/GRANT SELECT, INSERT, DELETE ON TABLE\n([\s\S]*?)\nTO esdms_runtime;/)) {
     granted.set(table, ["SELECT", "INSERT", "DELETE"]);
   }
+  for (const table of grantBlock(/GRANT SELECT, UPDATE ON TABLE\s+([^;]*?)\s+TO esdms_runtime;/)) {
+    granted.set(table, ["SELECT", "UPDATE"]);
+  }
+
+  for (const table of grantBlock(/GRANT SELECT, INSERT, UPDATE ON TABLE\s+([^;]*?)\s+TO esdms_runtime;/)) {
+    granted.set(table, ["SELECT", "INSERT", "UPDATE"]);
+  }
 
   assert.deepEqual(
     [...granted.keys()].sort(),

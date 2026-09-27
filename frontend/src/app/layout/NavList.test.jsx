@@ -20,13 +20,13 @@ describe("permission-driven Workforce navigation", () => {
     authState.user = { employeeId: null };
   });
 
-  test("a Gate Guard sees no Workforce or governance navigation", () => {
+  test("a Gate Keeper sees no Workforce or governance navigation", () => {
     authState.permissions = new Set(["gate_pass.verify", "gate_pass.exit", "gate_pass.return"]);
     render(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Gate" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Employees" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Reports" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Governance" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "System Administration" })).toBeNull();
   });
 
   test("My Workforce requires only a linked Employee record — not profile.self.view (ESDMS-018)", () => {
@@ -49,7 +49,7 @@ describe("permission-driven Workforce navigation", () => {
     const { rerender } = render(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Employees" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Reports" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Governance" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "System Administration" })).toBeTruthy();
 
     authState.permissions.add("workforce.export");
     rerender(<MemoryRouter><NavList /></MemoryRouter>);
@@ -75,7 +75,7 @@ describe("permission-driven Workforce navigation", () => {
     expect(screen.getByRole("link", { name: "Receiving" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Procurement" })).toBeNull();
 
-    // Gate Guard gains nothing from this phase.
+    // Gate Keeper gains nothing from this phase.
     authState.permissions = new Set(["gate_pass.verify", "gate_pass.exit", "gate_pass.return"]);
     rerender(<MemoryRouter><NavList /></MemoryRouter>);
     expect(screen.queryByRole("link", { name: "IPOs" })).toBeNull();

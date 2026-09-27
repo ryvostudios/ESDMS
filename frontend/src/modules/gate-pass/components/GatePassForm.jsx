@@ -79,7 +79,7 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
     ...(isDepartmentLocked ? { issuingDepartmentId: user.departmentId } : {}),
     ...initialValues,
   }));
-  const [items, setItems] = useState(() => initialItems?.length ? initialItems : [{ ...EMPTY_ITEM }]);
+  const [items, setItems] = useState(() => initialItems ?? [{ ...EMPTY_ITEM }]);
   const [fieldErrors, setFieldErrors] = useState({});
   const [itemErrors, setItemErrors] = useState([]);
   const [formError, setFormError] = useState(null);
@@ -98,7 +98,7 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
   }
 
   function removeItem(index) {
-    setItems((prev) => (prev.length > 1 ? prev.filter((_, itemIndex) => itemIndex !== index) : prev));
+    setItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
   }
 
   async function handleSubmit(event) {
@@ -319,7 +319,11 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
       </div>
 
       <div className={styles.section}>
-        <h2 className={styles.sectionTitle}>Items</h2>
+        <h2 className={styles.sectionTitle}>Items (optional)</h2>
+
+        {items.length === 0 && (
+          <p className={styles.noItems}>No material items — this Gate Pass covers a vehicle or person movement only.</p>
+        )}
 
         {items.map((item, index) => (
           <div className={styles.itemRow} key={index}>
@@ -379,7 +383,7 @@ export function GatePassForm({ initialValues, initialItems, submitLabel, onSubmi
               variant="ghost"
               className={styles.removeButton}
               onClick={() => removeItem(index)}
-              disabled={submitting || items.length === 1}
+              disabled={submitting}
               aria-label={`Remove item ${index + 1}`}
             >
               <TrashIcon width={16} height={16} />

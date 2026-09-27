@@ -263,28 +263,32 @@ export function GatePassDetailPage() {
 
           <div className={styles.section}>
             <h2 className={styles.sectionTitle}>Items</h2>
-            <div className={styles.tableWrapper}>
-              <table className={styles.itemsTable}>
-                <thead>
-                  <tr>
-                    <th>Description</th>
-                    <th>Part Number</th>
-                    <th>Quantity</th>
-                    <th>Unit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {gatePass.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.description}</td>
-                      <td>{item.partNumber || "—"}</td>
-                      <td>{item.quantity}</td>
-                      <td>{item.unit || "—"}</td>
+            {gatePass.items.length === 0 ? (
+              <p className={styles.noItems}>No material items</p>
+            ) : (
+              <div className={styles.tableWrapper}>
+                <table className={styles.itemsTable}>
+                  <thead>
+                    <tr>
+                      <th>Description</th>
+                      <th>Part Number</th>
+                      <th>Quantity</th>
+                      <th>Unit</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {gatePass.items.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.description}</td>
+                        <td>{item.partNumber || "—"}</td>
+                        <td>{item.quantity}</td>
+                        <td>{item.unit || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {(gatePass.departureOdometer !== null || gatePass.returnOdometer !== null) && (
@@ -295,16 +299,19 @@ export function GatePassDetailPage() {
                 <DetailField label="Departure Time" value={formatDateTime(gatePass.departureAt)} />
                 <DetailField label="Return Odometer" value={gatePass.returnOdometer} />
                 <DetailField label="Return Time" value={formatDateTime(gatePass.returnAt)} />
-                <DetailField label="Distance" value={gatePass.distanceKm !== null ? `${gatePass.distanceKm} km` : null} />
+                <DetailField label="Distance Travelled" value={gatePass.distanceKm !== null ? `${gatePass.distanceKm} km` : null} />
                 {gatePass.returnRemarks && <DetailField label="Return Remarks" value={gatePass.returnRemarks} />}
               </dl>
             </div>
           )}
 
-          {(gatePass.departureEvidence || gatePass.returnEvidence) && (
+          {(gatePass.departureAt || gatePass.departureEvidence || gatePass.returnEvidence) && (
             <div className={styles.section}>
               <h2 className={styles.sectionTitle}>Evidence</h2>
               {evidenceError && <p className={styles.pdfError}>{evidenceError}</p>}
+              {!gatePass.departureEvidence && !gatePass.returnEvidence && (
+                <p className={styles.noItems}>No photographic evidence was captured.</p>
+              )}
               <div className={styles.evidenceGrid}>
                 {gatePass.departureEvidence && (
                   <div className={styles.evidenceCard}>
@@ -315,7 +322,7 @@ export function GatePassDetailPage() {
                         label="Recorded"
                         value={formatDateTime(gatePass.departureEvidence.recordedAt)}
                       />
-                      <DetailField label="Guard" value={gatePass.departureEvidence.recordedByName} />
+                      <DetailField label="Gate Keeper" value={gatePass.departureEvidence.recordedByName} />
                     </dl>
                     <Button
                       variant="secondary"
@@ -335,7 +342,7 @@ export function GatePassDetailPage() {
                         label="Recorded"
                         value={formatDateTime(gatePass.returnEvidence.recordedAt)}
                       />
-                      <DetailField label="Guard" value={gatePass.returnEvidence.recordedByName} />
+                      <DetailField label="Gate Keeper" value={gatePass.returnEvidence.recordedByName} />
                     </dl>
                     <Button
                       variant="secondary"

@@ -2844,7 +2844,8 @@ Department and Position rows have no relationship to application roles or
 permissions. An Administration employee in a Team Lead position receives no
 authority until Governance explicitly assigns an application role.
 
-Procurement is an application function, not a Department or role. Governance
+Procurement is also a real organizational Department. Its membership grants no
+application authority. Procurement Staff remains an application capability bundle. Governance
 stores named bundle assignment provenance separately from individual
 permission overrides. `PROCUREMENT_STAFF` grants the minimum operational set
 (`demand.view`, `procurement.site_scope`, pricing, purchasing, IPO view, and
@@ -2888,3 +2889,39 @@ compatibility, and production additionally proves the active connection is
 so a missing grant on any login/profile dependency fails before cutover. A new
 migration that adds an application table must update the explicit grants; it
 cannot become ready merely by advancing `pgmigrations`.
+
+
+## 2026-09-24 — Company structure and bounded governance delegation
+
+The MAIN-site additive reference migration supplies Administration, Civil, WTG,
+HSE, Procurement and HR and their confirmed positions. Existing departments and
+positions are retained, including inactive records; no people or accounts are
+created or reassigned. WTG's lead, assistant lead and technician positions carry
+no application authority. CEO can explicitly assign UPPER_MANAGEMENT to the
+current WTG lead through Governance while the employee's WTG position remains.
+Other sites retain independent catalogs. Site Manager/CFO/CTO positions have no
+invented department affiliation.
+
+HR retains its workforce baseline. User governance for HR, UM and Site Manager
+remains explicitly delegated by CEO using existing users.* and
+permission_overrides.* permissions (plus employees.account.link_existing for
+linking). No role or title receives new automatic authority. Delegates may
+assign roles and bundles only when every underlying permission is effectively
+held, except the established ordinary EMPLOYEE role baseline already authorized
+by user creation and Workforce onboarding. They cannot redelegate users.*, permission_overrides.*,
+employees.account.*, or company-wide *.all_sites / *.all_departments powers.
+CEO must administer accounts holding these reserved powers. UM creation and
+management additionally retain their distinct explicit capabilities.
+
+Delegates can create/revoke ordinary restrictions within their authority, but
+cannot replace/remove another actor's DENY; CEO can. All governance writes lock
+and recheck target identity, site and protected status. Workforce automatic
+account reset, offboarding and site coordination treat an EMPLOYEE with explicit
+GRANTs or bundle assignments as privileged, preventing an alternate credential
+or scope path around Governance. Original CEO protection continues to cover
+ALL CEO accounts; terminal bootstrap remains a separate infrastructure procedure,
+not an application power or ordinary administrator route.
+
+The conservative delegation ceiling does not define a new company-approved role
+matrix. Roles/bundles beyond a delegate's own effective permissions require CEO
+assignment until a narrower approved delegation catalog is specified.

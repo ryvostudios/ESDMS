@@ -54,9 +54,23 @@ Current status:
 
 Authentication (cookie session + revocation), users/roles/departments/sites,
 authorization, audit logging, notification outbox (in-app + WhatsApp,
-site-scoped), file/evidence storage (local + Supabase-ready), and security
+site-scoped), file/evidence storage (legacy local/Supabase plus connected Dropbox/Google Drive), and security
 middleware are implemented and used by Gate Pass. Reporting/export remains
 unstarted.
+
+---
+
+## System Administration
+
+**Foundation implemented.** The integrated CMS reuses Organization, Governance
+and Workforce configuration, adds human-readable permission metadata, controlled
+public branding/content, safe integration status, Audit Center and System info.
+Company logo management and E-Set document branding (Gate Pass, IPO, Delivery
+Challan, Demand List) are in place; see "Document branding" in
+[CMS.md](./CMS.md). Cloud storage Phase 1 has automated and simulated browser
+verification plus disposable local Dropbox OAuth/upload/download verification.
+Google Drive live OAuth remains deferred; see [CLOUD_STORAGE.md](./CLOUD_STORAGE.md).
+Attendance remains deferred.
 
 ---
 

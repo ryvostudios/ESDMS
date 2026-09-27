@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import { formatDate, formatDateTime } from "../time/app-timezone.js";
+import { drawBrandHeader } from "./branding.js";
 
 // Presentation primitives shared by every Procurement/Receiving PDF
 // template. Business/workflow code never touches pdfkit directly: a service
@@ -8,20 +9,8 @@ import { formatDate, formatDateTime } from "../time/app-timezone.js";
 // when the owner supplies the authentic E-Set IPO/DC artwork — the exchange
 // is the data object, not the drawing code.
 //
-// Gate Pass keeps its own bespoke QR-and-column layout (gate-pass.pdf.js)
-// untouched; it predates this module and re-plumbing a shipped, tested
-// document for cosmetic uniformity would be risk without benefit.
-
-// Company identity for printed documents. Sourced here, once, rather than
-// from any per-document field a caller could supply — a business document
-// must never be able to claim a different issuer than the system it came
-// from. The authentic letterhead artwork replaces these values without any
-// change to workflow, schema or document data.
-export const COMPANY = {
-  name: "E-Set Engineering Services",
-  system: "E-Set Digital Management System",
-  footer: "E-Set Engineering Services · This is a system-generated document.",
-};
+// Gate Pass keeps its own bespoke QR-and-column layout (gate-pass.pdf.js);
+// it shares only the brand header (branding.js) with these templates.
 
 const INK = "#0f172a";
 const MUTED = "#475569";
@@ -39,12 +28,11 @@ export function createDocument() {
   return { doc, buffer };
 }
 
-// Company identity comes from the existing application branding, not from a
-// per-document field a caller could forge.
-export function documentHeader(doc, { title, reference, subtitle }) {
-  doc.font("Helvetica-Bold").fontSize(16).fillColor(INK).text(COMPANY.name);
-  doc.font("Helvetica").fontSize(11).fillColor(MUTED).text(title);
-  doc.moveDown(0.8);
+// Issuer identity (logo, company name, contact line) comes from the central
+// document branding — see branding.js — never from a per-document field a
+// caller could forge.
+export function documentHeader(doc, { title, reference, subtitle, branding }) {
+  drawBrandHeader(doc, branding, { title });
   doc.font("Helvetica-Bold").fontSize(14).fillColor(INK).text(reference);
   if (subtitle) {
     doc.font("Helvetica").fontSize(9).fillColor(FAINT).text(subtitle);

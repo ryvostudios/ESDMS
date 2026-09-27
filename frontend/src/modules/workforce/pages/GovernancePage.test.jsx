@@ -343,3 +343,32 @@ describe("GovernancePage desktop User selection is keyboard-operable (ADV-P2-02)
     expect(screen.queryByText("Abc123XYZ")).toBeNull();
   });
 });
+
+test("role choices use the server delegation ceiling and retain the Site Administrator label", async () => {
+  mockPermissions = new Set(["users.update"]);
+  mockListUsers.mockResolvedValue({ data: [HR_USER] });
+  mockGetUserPermissions.mockResolvedValue({ data: { ...emptyOverview, assignableRoles: ["EMPLOYEE", "ADMIN"] } });
+  await renderPage(); await selectUser("Hana Rahim");
+  expect(screen.getByRole("option", { name: "Site Administrator" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "Upper Management" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Site Manager" })).toBeNull();
+});
+
+test("a bundle outside the server delegation ceiling cannot be assigned from the UI", async () => {
+  mockPermissions = new Set(["permission_overrides.manage"]);
+  mockListUsers.mockResolvedValue({ data: [HR_USER] });
+  mockGetUserPermissions.mockResolvedValue({ data: { ...emptyOverview, availableBundles: [{ code: "PROCUREMENT_STAFF", displayName: "Procurement Staff", description: "Operations", permissionCodes: ["procurement.purchase"], canDelegate: false }] } });
+  await renderPage(); await selectUser("Hana Rahim");
+  expect(screen.queryByRole("button", { name: "Assign Procurement Staff" })).toBeNull();
+});
+
+test("users.update remains usable without permission_overrides.view", async () => {
+  mockPermissions = new Set(["users.update"]);
+  mockListUsers.mockResolvedValue({ data: [HR_USER] });
+  mockGetUserPermissions.mockRejectedValue(new Error("Permission overview is not authorized"));
+  await renderPage(); await selectUser("Hana Rahim");
+  expect(screen.getByRole("option", { name: "Employee" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "HR" })).toBeTruthy();
+  await act(async () => fireEvent.change(screen.getByLabelText("Role"), { target: { value: "EMPLOYEE" } }));
+  expect(mockChangeUserRole).toHaveBeenCalledWith("u1", "EMPLOYEE");
+});

@@ -256,3 +256,13 @@
   height: 16px;
   cursor: pointer;
 }
+
+/* Company logo from CMS branding; aspect ratio preserved, never stretched. */
+.cardLogo {
+  display: block;
+  height: 56px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  margin-bottom: var(--space-4);
+}

@@ -1,3 +1,4 @@
+import { mutateConfiguration } from "../../shared/audit/configuration-audit.js";
 import { asyncHandler } from "../../shared/http/async-handler.js";
 import { ValidationError, ConflictError, NotFoundError } from "../../shared/errors/app-error.js";
 import { createEmploymentTypeSchema, updateEmploymentTypeSchema } from "./employment-types.validation.js";
@@ -29,7 +30,7 @@ export const create = asyncHandler(async (req, res) => {
   const input = parseBody(createEmploymentTypeSchema, req.body);
   if (await codeExists(input.code)) throw new ConflictError("An employment type with this code already exists.");
 
-  const created = await insertEmploymentType(input.code, input.name);
+  const created = await mutateConfiguration(req.user, "employment_types", null, client => insertEmploymentType(input.code, input.name, client));
   res.status(201).json({ success: true, data: created });
 });
 
@@ -42,6 +43,6 @@ export const update = asyncHandler(async (req, res) => {
     throw new ConflictError("Cannot archive an employment type with active employees assigned.");
   }
 
-  const updated = await updateEmploymentTypeFields(existing.id, input);
+  const updated = await mutateConfiguration(req.user, "employment_types", existing.id, client => updateEmploymentTypeFields(existing.id, input, client));
   res.status(200).json({ success: true, data: updated });
 });

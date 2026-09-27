@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import "dotenv/config";
 import { spawn } from "node:child_process";
+import pg from "pg";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -96,6 +97,29 @@ function run(command, args, env, secrets, label) {
   });
 }
 
+// ONE application migration/release at a time in the shared E-Set database
+// (docs/PLATFORM_GO_LIVE_RUNBOOK.md, "Platform migration lock"). ESDMS,
+// Permit and Attendance migration tooling all take this same session-level
+// advisory lock before any DDL; a second release fails fast instead of
+// running DDL concurrently. The API never takes it.
+export const PLATFORM_MIGRATION_LOCK_KEY = 1_163_085_140; // "ESET"
+
+async function acquirePlatformLock(migrationDatabaseUrl) {
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(migrationDatabaseUrl).hostname);
+  const client = new pg.Client({
+    connectionString: migrationDatabaseUrl,
+    connectionTimeoutMillis: 10_000,
+    ssl: local ? undefined : { rejectUnauthorized: true },
+  });
+  await client.connect();
+  const { rows } = await client.query("SELECT pg_try_advisory_lock($1) AS acquired", [PLATFORM_MIGRATION_LOCK_KEY]);
+  if (!rows[0].acquired) {
+    await client.end();
+    throw new Error("Another E-Set platform migration or release holds the platform lock; wait for it to finish.");
+  }
+  return client;
+}
+
 function step(number, description) {
   process.stdout.write(`\n[${number}/3] ${description}\n`);
 }
@@ -133,6 +157,15 @@ async function main() {
     decodeURIComponent(runtimeUrl.password),
   ];
 
+  const platformLock = await acquirePlatformLock(migrationDatabaseUrl);
+  try {
+    await releaseSteps(migrationDatabaseUrl, runtimeDatabaseUrl, runtimePassword, migrationUrl, secrets);
+  } finally {
+    await platformLock.end();
+  }
+}
+
+async function releaseSteps(migrationDatabaseUrl, runtimeDatabaseUrl, runtimePassword, migrationUrl, secrets) {
   step(1, "Applying schema migrations as the migration owner");
   await run(
     process.execPath,
@@ -170,7 +203,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  process.stderr.write(`\n${error.message}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().catch((error) => {
+    process.stderr.write(`\n${error.message}\n`);
+    process.exitCode = 1;
+  });
+}

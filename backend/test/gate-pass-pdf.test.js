@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import PDFDocument from "pdfkit";
 import { generateGatePassPdf } from "../src/modules/gate-pass/gate-pass.pdf.js";
+import { recordLayout } from "./pdf-layout-recorder.js";
 
 // pdfkit FlateDecode-compresses every content stream by default, so a raw
 // byte search over the finished PDF can't see rendered text. Recording
@@ -144,4 +145,63 @@ test("intentionally long metadata values (destination, requester, driver, vehicl
     recorder.calls.some((call) => call.text === veryLongRemarks),
     "expected the long remarks value to be drawn",
   );
+});
+
+// Realistic worst case: every free-text field near its validation maximum,
+// several long items. Before the fix the metadata column ran past page 1
+// and the QR clamp was then applied on page 2, drawing the items table on
+// top of the driver/vehicle fields.
+function longGatePass() {
+  const repeat = (text, times) => Array.from({ length: times }, () => text).join(" ");
+  return baseGatePass({
+    issuing_department_name: repeat("Mechanical Maintenance and Heavy Equipment Department", 2),
+    requested_by: repeat("Muhammad Abdullah Rehman Siddiqui", 4).slice(0, 150),
+    destination: repeat("Lahore Repair Workshop Industrial Estate Phase", 4).slice(0, 200),
+    driver_name: repeat("Chaudhry Muhammad Imran Khalid Mehmood", 3).slice(0, 150),
+    vehicle_registration: "LES-4471-TRAILER-HEAVY-123456",
+    job_order_id: "JO-2026-0000000000000000000000000000000000000001",
+    purpose: "REPAIR_RECTIFICATION",
+    expected_return_date: "2026-10-01",
+    remarks: repeat("Handle with care, fragile components.", 30).slice(0, 1000),
+    created_by_name: repeat("Creator Full Name", 5),
+    approved_by_name: repeat("Approver Full Name", 5),
+  });
+}
+
+const longItems = Array.from({ length: 8 }, (_, index) => ({
+  description: Array.from({ length: 8 }, () => `Hydraulic pump assembly item ${index}`).join(" ").slice(0, 300),
+  part_number: "PN-ABCDEFGHIJ ".repeat(7).trim().slice(0, 100),
+  quantity: "1234567.25",
+  unit: "cubic-metres-long-unit",
+}));
+
+test("approval PDF: long values in every field produce no overlapping or out-of-page text, across pages", async () => {
+  const layout = recordLayout();
+  try {
+    await generateGatePassPdf(longGatePass(), longItems, "https://example.test/verify#token");
+  } finally {
+    layout.restore();
+  }
+
+  assert.ok(layout.pageCount() >= 2, "the long pass must actually exercise pagination");
+  assert.deepEqual(layout.overlaps(), []);
+  assert.deepEqual(layout.outOfBounds(), []);
+  // Nothing is truncated to make it fit.
+  assert.ok(layout.boxes.some((box) => box.text === longGatePass().remarks));
+  assert.ok(layout.boxes.some((box) => box.text === longItems[7].description));
+});
+
+test("approval PDF: a Gate Pass with zero items prints 'No material items' instead of an empty table", async () => {
+  const layout = recordLayout();
+  try {
+    await generateGatePassPdf(longGatePass(), [], "https://example.test/verify#token");
+  } finally {
+    layout.restore();
+  }
+
+  const drawn = layout.boxes.map((box) => box.text);
+  assert.ok(drawn.includes("No material items"));
+  assert.ok(!drawn.includes("Part Number"), "no orphan table header");
+  assert.deepEqual(layout.overlaps(), []);
+  assert.deepEqual(layout.outOfBounds(), []);
 });

@@ -11,19 +11,19 @@ import { useAuth } from "../../../core/auth/AuthContext.jsx";
 // manage / departments.manage / positions.manage / employment_types.manage,
 // each already independent server-side permissions. The deliberately plain
 // controls still expose create and archive/reactivate lifecycle operations.
-export function WorkforceConfigPage() {
+export function WorkforceConfigPage({ section = "all" }) {
   const { hasPermission } = useAuth();
   return (
     <div>
-      <PageHeader title="Workforce Configuration" />
-      {hasPermission("departments.manage") && <DepartmentsSection />}
-      {hasPermission("positions.manage") && <PositionsSection />}
-      {hasPermission("employment_types.manage") && <EmploymentTypesSection />}
-      {hasPermission("workforce.configuration.manage") && <ProfileSectionsSection />}
-      {hasPermission("workforce.configuration.manage") && <CustomFieldsSection />}
-      {hasPermission("workforce.configuration.manage") && <DocumentTypesSection />}
-      {hasPermission("rotation.manage") && <RotationPoliciesSection />}
-      {hasPermission("leave.manage") && <LeaveTypesSection />}
+      {section === "all" && <PageHeader title="Workforce Configuration" />}
+      {section !== "workforce" && hasPermission("departments.manage") && <DepartmentsSection />}
+      {section !== "workforce" && hasPermission("positions.manage") && <PositionsSection />}
+      {section !== "organization" && hasPermission("employment_types.manage") && <EmploymentTypesSection />}
+      {section !== "organization" && hasPermission("workforce.configuration.manage") && <ProfileSectionsSection />}
+      {section !== "organization" && hasPermission("workforce.configuration.manage") && <CustomFieldsSection />}
+      {section !== "organization" && hasPermission("workforce.configuration.manage") && <DocumentTypesSection />}
+      {section !== "organization" && hasPermission("rotation.manage") && <RotationPoliciesSection />}
+      {section !== "organization" && hasPermission("leave.manage") && <LeaveTypesSection />}
     </div>
   );
 }
