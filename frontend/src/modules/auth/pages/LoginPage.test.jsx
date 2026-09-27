@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 import { LoginPage } from "./LoginPage.jsx";
 import { ApiError } from "../../../core/api/client.js";
+import styles from "./LoginPage.module.css";
 
 // The mesh/grid backgrounds are decorative canvases with their own
 // dedicated test files (LoginMeshBackground.test.jsx,
@@ -20,12 +21,16 @@ vi.mock("../../../shared/components/MobileKineticBackground.jsx", () => ({
   MobileKineticBackground: () => null,
 }));
 
+const logo = vi.hoisted(() => ({ url: null }));
+vi.mock("../../cms/company-logo.js", () => ({ useCompanyLogo: () => logo.url }));
+
 const mockLogin = vi.fn();
 vi.mock("../../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({ status: "unauthenticated", login: (...args) => mockLogin(...args) }),
 }));
 
 afterEach(() => {
+  logo.url = null;
   cleanup();
   mockLogin.mockReset();
 });
@@ -42,6 +47,27 @@ describe("LoginPage — visual/structural", () => {
   test("renders the E-Set title", () => {
     renderPage();
     expect(screen.getByRole("heading", { name: /e-set digital management system/i })).toBeTruthy();
+  });
+});
+
+describe("LoginPage — company logo", () => {
+  test("desktop panel, mobile brand strip and card all show the logo with no styled tile", () => {
+    logo.url = "blob:company-logo";
+    const { container } = renderPage();
+    for (const className of [styles.brandLogo, styles.mobileBrandLogo, styles.cardLogo]) {
+      expect(container.querySelector(`img.${className}`)?.getAttribute("src")).toBe("blob:company-logo");
+    }
+    expect(container.querySelector(`.${styles.brandMark}`)).toBeNull();
+    expect(container.querySelector(`.${styles.mobileBrandMark}`)).toBeNull();
+    expect(screen.getByLabelText(/password/i, { selector: "input" })).toBeTruthy();
+  });
+
+  test("without a logo the ES marks remain and sign-in is still available", () => {
+    const { container } = renderPage();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(`.${styles.brandMark}`).textContent).toBe("ES");
+    expect(container.querySelector(`.${styles.mobileBrandMark}`).textContent).toBe("ES");
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy();
   });
 });
 

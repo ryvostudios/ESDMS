@@ -3,11 +3,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Sidebar } from "./Sidebar.jsx";
 import gridStyles from "./SidebarKineticBackground.module.css";
+import styles from "./Sidebar.module.css";
 
 vi.mock("../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({ user: { employeeId: "employee-1" }, hasPermission: () => true }),
 }));
-vi.mock("../../modules/cms/company-logo.js", () => ({ useCompanyLogo: () => "blob:managed-logo" }));
+const logo = vi.hoisted(() => ({ url: "blob:managed-logo" }));
+vi.mock("../../modules/cms/company-logo.js", () => ({ useCompanyLogo: () => logo.url }));
 
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
@@ -33,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  logo.url = "blob:managed-logo";
   cleanup();
   vi.restoreAllMocks();
   delete globalThis.ResizeObserver;
@@ -50,6 +53,29 @@ describe("Sidebar", () => {
     expect(canvas).toBeTruthy();
     expect(canvas.className).toContain(gridStyles.canvas);
     expect(container.querySelector('img')?.src).toContain('blob:managed-logo');
+  });
+
+  test("a real logo is a bare image, never inside the gradient ES tile", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    );
+    const img = container.querySelector("img");
+    expect(img.className).toBe(styles.brandLogo);
+    expect(img.closest(`.${styles.brandMark}`)).toBeNull();
+    expect(container.querySelector(`.${styles.brandMark}`)).toBeNull();
+  });
+
+  test("without a logo the styled ES fallback mark remains", () => {
+    logo.url = null;
+    const { container } = render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(`.${styles.brandMark}`).textContent).toBe("ES");
   });
 
   test("navigation remains real links, reachable by role", () => {

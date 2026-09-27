@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { NavList } from "./NavList.jsx";
 import { SidebarKineticBackground } from "./SidebarKineticBackground.jsx";
 import { useCompanyLogo } from "../../modules/cms/company-logo.js";
+import { CompanyMark } from "../../modules/cms/CompanyMark.jsx";
 import styles from "./Sidebar.module.css";
 
 export function Sidebar() {
@@ -18,9 +19,7 @@ export function Sidebar() {
         <SidebarKineticBackground interactionRef={sidebarRef} />
       </div>
       <div className={styles.brand}>
-        <span className={styles.brandMark} aria-hidden="true">
-          {logoUrl ? <img src={logoUrl} alt="" /> : "ES"}
-        </span>
+        <CompanyMark logoUrl={logoUrl} logoClassName={styles.brandLogo} fallbackClassName={styles.brandMark} />
         <span className={styles.brandText}>
           <span className={styles.brandName}>E-Set DMS</span>
           <span className={styles.brandSub}>Digital Management</span>

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 import { MobileNav } from "./MobileNav.jsx";
 import gridStyles from "../../shared/components/MobileKineticBackground.module.css";
+import styles from "./MobileNav.module.css";
 
 vi.mock("../../core/auth/AuthContext.jsx", () => ({
   useAuth: () => ({ hasPermission: () => true }),
@@ -70,7 +71,10 @@ describe("MobileNav focus trap", () => {
     });
 
     const dialog = screen.getByRole("dialog");
-    expect(dialog.querySelector('img')?.src).toContain('blob:managed-logo');
+    const img = dialog.querySelector('img');
+    expect(img?.src).toContain('blob:managed-logo');
+    expect(img.className).toBe(styles.brandLogo);
+    expect(dialog.querySelector(`.${styles.brandMark}`)).toBeNull();
     const focusable = dialog.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
     const first = focusable[0];
     const last = focusable[focusable.length - 1];

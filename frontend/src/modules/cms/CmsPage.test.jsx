@@ -44,7 +44,7 @@ describe('CMS area and content boundaries',()=>{
   globalThis.URL.createObjectURL=vi.fn(()=>'blob:logo');globalThis.URL.revokeObjectURL=vi.fn();
   state.put.mockResolvedValue({data:{}});state.del.mockResolvedValue({data:{}});
   mount('/cms/branding');
-  expect(await screen.findByAltText('Current company logo')).toBeTruthy();
+  expect(await screen.findByAltText('Current application and document logo')).toBeTruthy();
   expect(screen.getByLabelText('Document issuer name')).toBeTruthy();
   const input=screen.getByLabelText(/Replace logo/);
   fireEvent.change(input,{target:{files:[new File(['<svg/>'],'logo.svg',{type:'image/svg+xml'})]}});
@@ -61,6 +61,17 @@ describe('CMS area and content boundaries',()=>{
   fireEvent.click(await screen.findByRole('button',{name:'Restore default E-Set logo'}));
   await waitFor(()=>expect(state.del).toHaveBeenCalledWith('/cms/branding/logo',{body:{revision:4}}));
  });
+ test('branding page leads with the logo, then the browser tab & app icon, then text settings',async()=>{
+  const rows=[
+   {key:'company.app_icon',label:'Browser Tab & App Icon',description:'i',type:'logo',revision:1,logo:{source:'default',description:'No custom icon'}},
+   {key:'company.display_name',label:'Company display name',description:'n',value:'E-Set',revision:1,max:100,min:1},
+   {key:'company.logo',label:'Application & Document Logo',description:'l',type:'logo',revision:1,logo:{source:'default',description:'Default E-Set logo'}},
+  ];
+  state.get.mockImplementation(url=>Promise.resolve({data:url==='/cms'?[{id:'branding',label:'Branding'}]:rows}));
+  mount('/cms/branding');
+  await screen.findByText('Application & Document Logo');
+  expect(screen.getAllByRole('heading',{level:2}).map(h=>h.textContent)).toEqual(['Application & Document Logo','Browser Tab & App Icon','Company display name']);
+ });
  test('branding logo unavailable: honest text fallback, no substitute image',async()=>{
   const logoRow={key:'company.logo',label:'Company logo',description:'d',type:'logo',revision:1,logo:{source:'default',description:'Default E-Set logo'}};
   state.get.mockImplementation(url=>Promise.resolve({data:url==='/cms'?[{id:'branding',label:'Branding'}]:[logoRow]}));
@@ -76,14 +87,14 @@ describe('CMS area and content boundaries',()=>{
   globalThis.URL.createObjectURL=vi.fn(()=>'blob:app-icon');globalThis.URL.revokeObjectURL=vi.fn();
   state.put.mockResolvedValue({data:{}});state.del.mockResolvedValue({data:{}});
   mount('/cms/branding');
-  expect(await screen.findByAltText('Current application icon')).toBeTruthy();
+  expect(await screen.findByAltText('Current browser tab and app icon')).toBeTruthy();
   expect(state.getBlob).toHaveBeenCalledWith('/cms/branding/app-icon/192');
   fireEvent.change(screen.getByLabelText(/Replace application icon/),{target:{files:[new File(['png'],'icon.png',{type:'image/png'})]}});
   fireEvent.click(screen.getByRole('button',{name:'Upload application icon'}));
   await waitFor(()=>expect(state.put).toHaveBeenCalled());
   expect(state.put.mock.calls[0][0]).toBe('/cms/branding/app-icon');
   expect(state.put.mock.calls[0][1].get('revision')).toBe('7');
-  fireEvent.click(screen.getByRole('button',{name:'Restore bundled icons'}));
+  fireEvent.click(screen.getByRole('button',{name:'Remove custom icon (use the logo)'}));
   await waitFor(()=>expect(state.del).toHaveBeenCalledWith('/cms/branding/app-icon',{body:{revision:7}}));
  });
  test('audit center names the target and override capability, with an unambiguous override label',async()=>{

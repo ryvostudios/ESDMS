@@ -130,9 +130,38 @@ test("application icon is square, decoded, CMS-authorized, audited and publicly 
   assert.ok(audit.rows.length);
   assert.ok(!JSON.stringify(audit.rows[0].metadata).includes('storageKey'));
   assert.equal((await call(tokens.ceo, "DELETE", "/cms/branding/app-icon", { revision })).status, 200);
-  const fallback = await call(null, "GET", "/cms/branding/public");
-  assert.equal(fallback.body.data.appIconVersion, null);
-  assert.equal((await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/192`)).status, 404);
+
+  // No custom icon: the browser tab / PWA artwork is the active company logo,
+  // letterboxed onto a square (never stretched), transparency kept.
+  const fromLogo = await call(null, "GET", "/cms/branding/public");
+  const logoVersion = fromLogo.body.data.appIconVersion;
+  assert.match(logoVersion, /^[a-f0-9]{64}$/);
+  assert.notEqual(logoVersion, publicInfo.body.data.appIconVersion, "a new version so browsers refetch");
+  for (const size of [32, 192, 512]) {
+    const response = await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/${size}?v=${logoVersion}`);
+    assert.equal(response.status, 200);
+    const meta = await sharp(Buffer.from(await response.arrayBuffer())).metadata();
+    assert.deepEqual([meta.format, meta.width, meta.height, meta.hasAlpha], ["png", size, size, true]);
+  }
+  const { data: corner } = await sharp(Buffer.from(await (await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/192`)).arrayBuffer()))
+    .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.equal(corner[3], 0, "the letterbox margin of a portrait logo is transparent, not a colored tile");
+  const touch = await sharp(Buffer.from(await (await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/180`)).arrayBuffer())).metadata();
+  assert.deepEqual([touch.width, touch.height, touch.hasAlpha], [180, 180, false], "Apple touch icon is opaque (iOS fills transparency with black)");
+  const logoManifest = await (await fetch(`${server.baseUrl}/api/v1/cms/branding/manifest.webmanifest`)).json();
+  assert.ok(logoManifest.icons.every(icon => icon.src.includes(logoVersion)));
+
+  // Nothing readable (configured logo unreadable, no custom icon): the bundled static icons stay.
+  await pool.query("UPDATE cms_settings SET value=$1 WHERE key='company.logo'",
+    [JSON.stringify({ storageKey: "cms/branding/logo/missing.png", sha256: "c".repeat(64), mimeType: "image/png", width: 1, height: 1, sizeBytes: 1 })]);
+  try {
+    assert.equal((await call(null, "GET", "/cms/branding/public")).body.data.appIconVersion, null);
+    assert.equal((await fetch(`${server.baseUrl}/api/v1/cms/branding/app-icon/192`)).status, 404);
+    const bundled = await (await fetch(`${server.baseUrl}/api/v1/cms/branding/manifest.webmanifest`)).json();
+    assert.ok(bundled.icons.every(icon => /^\/(maskable-)?icon-\d+\.png$/.test(icon.src)));
+  } finally {
+    await pool.query("UPDATE cms_settings SET value='' WHERE key='company.logo'");
+  }
 });
 
 test("branding changes require cms.branding.manage on the server; DENY wins; CEO protection is unaffected", async () => {

@@ -3,6 +3,7 @@ import { NavList } from "./NavList.jsx";
 import { CloseIcon } from "../../shared/icons.jsx";
 import { MobileKineticBackground } from "../../shared/components/MobileKineticBackground.jsx";
 import { useCompanyLogo } from "../../modules/cms/company-logo.js";
+import { CompanyMark } from "../../modules/cms/CompanyMark.jsx";
 import styles from "./MobileNav.module.css";
 
 const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -76,9 +77,7 @@ export function MobileNav({ open, onClose, triggerRef }) {
         </div>
         <div className={styles.header}>
           <div className={styles.brand}>
-            <span className={styles.brandMark} aria-hidden="true">
-              {logoUrl ? <img src={logoUrl} alt="" /> : "ES"}
-            </span>
+            <CompanyMark logoUrl={logoUrl} logoClassName={styles.brandLogo} fallbackClassName={styles.brandMark} />
             <span className={styles.brandName}>E-Set DMS</span>
           </div>
           <button ref={closeButtonRef} type="button" className={styles.closeButton} onClick={onClose} aria-label="Close navigation menu">
