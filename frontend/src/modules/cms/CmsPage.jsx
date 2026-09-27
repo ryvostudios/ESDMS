@@ -43,11 +43,13 @@ function ReadOnly({path,render}) {
   if(error)return <ErrorState message={error}/>;
   return data?render(data):<LoadingState/>;
 }
+// Artwork controls lead the Branding page: the logo, then the browser/app icon.
+const ARTWORK_ORDER={'company.logo':0,'company.app_icon':1};
 function Settings({category}) {
   const [rows,setRows]=useState(null),[error,setError]=useState('');
   const load=useCallback(()=>apiClient.get(`/cms/settings/${category}`).then(r=>setRows(r.data)).catch(e=>setError(e.message)),[category]);
   useEffect(()=>{load();},[load]);
-  return <>{error&&<ErrorState message={error}/>}<p>Company-wide, public plain text. Never enter passwords, API keys or confidential information.</p>{category==='branding'&&<p>Branding applies to newly generated documents. Issued Gate Pass, IPO and Delivery Challan PDFs keep the branding they were issued with; Demand List PDFs are regenerated from live data and always use the current branding.</p>}{rows?.map(row=>row.type==='logo'?<LogoEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>:<SettingEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>)}{!rows&&!error&&<LoadingState/>}</>;
+  return <>{error&&<ErrorState message={error}/>}<p>Company-wide, public plain text. Never enter passwords, API keys or confidential information.</p>{category==='branding'&&<p>Branding applies to newly generated documents. Issued Gate Pass, IPO and Delivery Challan PDFs keep the branding they were issued with; Demand List PDFs are regenerated from live data and always use the current branding.</p>}{rows&&[...rows].sort((a,b)=>(ARTWORK_ORDER[a.key]??2)-(ARTWORK_ORDER[b.key]??2)).map(row=>row.type==='logo'?<LogoEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>:<SettingEditor key={`${row.key}:${row.revision}`} row={row} onSaved={load}/>)}{!rows&&!error&&<LoadingState/>}</>;
 }
 function SettingEditor({row,onSaved}) {
   const [value,setValue]=useState(row.value),[message,setMessage]=useState(''),[saving,setSaving]=useState(false);
@@ -70,12 +72,12 @@ function LogoEditor({row,onSaved}) {
   async function run(action){setSaving(true);try{await action();setMessage('Saved');await onSaved();}catch(e){setMessage(e.message);}finally{setSaving(false);}}
   function upload(event){event.preventDefault();if(!file)return;const form=new FormData();form.append('revision',String(row.revision));form.append('logo',file);run(()=>apiClient.put(endpoint,form,{isForm:true}));}
   return <section className={styles.panel}><h2>{row.label}</h2><p>{row.description}</p>
-    <div className={styles.logoPreview}>{logoUrl?<img src={logoUrl} alt={isAppIcon?'Current application icon':'Current company logo'}/>:<span>{isAppIcon?'Bundled application icons are in use.':'Logo unavailable — documents show the company name only.'}</span>}</div>
+    <div className={styles.logoPreview}>{logoUrl?<img src={logoUrl} alt={isAppIcon?'Current browser tab and app icon':'Current application and document logo'}/>:<span>{isAppIcon?'Bundled icons are in use.':'Logo unavailable — the application and documents show the company name only.'}</span>}</div>
     <p className={styles.secondary}>{row.logo.description}</p>
-    <p className={styles.secondary}>{isAppIcon?'Use a square PNG or JPEG at least 512×512 pixels. The server generates safe PNG icon sizes; installed devices may retain a cached icon.':'For clear documents, upload a tightly cropped logo with little or no empty padding, on a transparent or light background (documents are printed on white). PNG or JPEG only, up to 2 MB, 32–4096 pixels per side. The current logo stays active until a new one is uploaded.'}</p>
+    <p className={styles.secondary}>{isAppIcon?'Use a square PNG or JPEG, 512–4096 pixels per side, up to 2 MB. The server generates the browser and app icon sizes; installed devices and browsers may keep a cached icon for a while.':'A transparent PNG is recommended; it is shown without any background. Upload a tightly cropped logo with little or no empty padding (documents are printed on white). PNG or JPEG only, up to 2 MB, 32–4096 pixels per side. The current logo stays active until a new one is uploaded.'}</p>
     <form onSubmit={upload}><FormField label={isAppIcon?'Replace application icon (PNG or JPEG, up to 2 MB)':'Replace logo (PNG or JPEG, up to 2 MB)'} htmlFor={isAppIcon?'appIcon':'companyLogo'}><input id={isAppIcon?'appIcon':'companyLogo'} type="file" accept="image/png,image/jpeg" onChange={choose}/></FormField>
       <Button type="submit" loading={saving} disabled={!file}>Upload {isAppIcon?'application icon':'logo'}</Button>
-      {row.logo.source==='uploaded'&&<Button type="button" variant="secondary" disabled={saving} onClick={()=>run(()=>apiClient.del(endpoint,{body:{revision:row.revision}}))}>{isAppIcon?'Restore bundled icons':'Restore default E-Set logo'}</Button>}
+      {row.logo.source==='uploaded'&&<Button type="button" variant="secondary" disabled={saving} onClick={()=>run(()=>apiClient.del(endpoint,{body:{revision:row.revision}}))}>{isAppIcon?'Remove custom icon (use the logo)':'Restore default E-Set logo'}</Button>}
       {message&&<p role="status">{message}</p>}</form></section>;
 }
 function PermissionCatalog() {

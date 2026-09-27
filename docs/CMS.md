@@ -2,9 +2,12 @@
 
 ## Web and installed-app branding (Phase 4)
 
-The existing `company.logo` is now also used in the desktop and mobile
-navigation header. Its public, checksum-checked endpoint is shared with the
-login page; a failed CMS or storage read leaves the bundled E-Set mark in place.
+The existing `company.logo` ("Application & Document Logo" in the CMS) is used
+in the desktop sidebar, the mobile navigation drawer, the login brand panel, the
+mobile login brand strip and the login card. It is shown as-is, with no tile or
+shadow behind it, so a transparent PNG stays transparent. Its public,
+checksum-checked endpoint is shared by all of them; a failed CMS or storage read,
+or an image that fails to decode, shows the styled "ES" text mark instead.
 Document branding and historical PDF snapshots retain their existing behavior.
 
 Migration `1787437000000_cms-web-pwa-branding` adds the managed
@@ -16,7 +19,16 @@ paths are rejected. The existing CMS revision check and `CMS_SETTING_CHANGED`
 audit apply. Audit records only a short format/dimension/checksum description,
 never image bytes or storage keys.
 
-Public `/api/v1/cms/branding/public` returns only the active icon digest.
+Icon priority ("Browser Tab & App Icon" in the CMS): the custom `company.app_icon`
+if set; otherwise the active company logo, letterboxed onto a transparent square
+(never stretched or cropped; the 180-pixel Apple touch icon is placed on white,
+because iOS fills transparency with black); otherwise, when neither can be read,
+the bundled static icons, which are themselves generated from the bundled E-Set
+logo.
+
+Public `/api/v1/cms/branding/public` returns only the active icon digest (the
+custom icon's, or a digest derived from the logo bytes, so any change gives
+browsers a new URL).
 `/api/v1/cms/branding/manifest.webmanifest` returns the public app name and
 versioned 192/512-pixel icon URLs, while `/api/v1/cms/branding/app-icon/:size`
 serves validated 32/180/192/512-pixel PNG derivatives with ETags. The frontend

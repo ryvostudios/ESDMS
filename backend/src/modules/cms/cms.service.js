@@ -31,7 +31,7 @@ export function describeLogo(reference) {
   return `Uploaded ${reference.mimeType==='image/png'?'PNG':'JPEG'} ${reference.width}×${reference.height}, ${Math.ceil(reference.sizeBytes/1024)} KB, sha256 ${reference.sha256.slice(0,12)}`;
 }
 const describeManagedArtwork = (key,reference) => key==='company.app_icon' && !reference
-  ? 'Bundled application icons' : describeLogo(reference);
+  ? 'No custom icon (uses the company logo)' : describeLogo(reference);
 export async function listSettings(category) {
   return (await repo.settings()).filter(row => SETTINGS[row.key]?.category === category).map(row => {
     const {managed,...definition} = SETTINGS[row.key];
@@ -175,18 +175,40 @@ export async function activeAppIcon() {
   } catch { return null; }
 }
 
+// Browser/PWA artwork: the custom square icon, otherwise the active company
+// logo. null (nothing readable) leaves the bundled static icons in place.
+async function activeIconSource() {
+  const icon = await activeAppIcon();
+  if (icon) return icon;
+  try {
+    const logo = await activeLogo();
+    return {buffer:logo.buffer,fromLogo:true,
+      version:createHash('sha256').update('logo-icon\0').update(logo.buffer).digest('hex')};
+  } catch { return null; }
+}
+
 export async function appIconVariant(size) {
   if (![32,180,192,512].includes(size)) throw new NotFoundError('Icon not available.');
-  const icon = await activeAppIcon();
+  const icon = await activeIconSource();
   if (!icon) throw new NotFoundError('Icon not available.');
-  const buffer = size === 512 ? icon.buffer : await sharp(icon.buffer,{limitInputPixels:512*512,failOn:'warning'})
-    .resize(size,size).png().toBuffer();
+  let buffer;
+  if (!icon.fromLogo) {
+    buffer = size === 512 ? icon.buffer : await sharp(icon.buffer,{limitInputPixels:512*512,failOn:'warning'})
+      .resize(size,size).png().toBuffer();
+  } else {
+    // Letterboxed, never stretched or cropped; transparency is kept, except
+    // the Apple touch icon, which iOS would otherwise fill with black.
+    buffer = await sharp(icon.buffer,{limitInputPixels:4096*4096,failOn:'warning'})
+      .resize(size,size,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).png().toBuffer();
+    // A second pass: sharp flattens before resizing, which would leave the letterbox transparent.
+    if (size === 180) buffer = await sharp(buffer).flatten({background:'#ffffff'}).png().toBuffer();
+  }
   return {buffer,etag:`${icon.version}-${size}`};
 }
 
 export async function publicWebBranding() {
   let version = null;
-  try { version = (await activeAppIcon())?.version || null; } catch { /* bundled fallback */ }
+  try { version = (await activeIconSource())?.version || null; } catch { /* bundled fallback */ }
   return {appIconVersion:version};
 }
 

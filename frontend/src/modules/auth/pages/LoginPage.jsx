@@ -1,5 +1,6 @@
 import { usePublicContent } from "../../cms/public-content.js";
 import { useCompanyLogo } from "../../cms/company-logo.js";
+import { CompanyMark } from "../../cms/CompanyMark.jsx";
 import { useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../../core/auth/AuthContext.jsx";
@@ -97,9 +98,7 @@ export function LoginPage() {
         <div className={styles.brandGrid}>
           <LoginKineticBackground interactionRef={brandPanelRef} />
         </div>
-        <span className={styles.brandMark} aria-hidden="true">
-          ES
-        </span>
+        <CompanyMark logoUrl={logoUrl} logoClassName={styles.brandLogo} fallbackClassName={styles.brandMark} />
         <div className={styles.brandCopy}>
           <h2>{content['company.display_name']}</h2>
           <p>Controlled, auditable operations across workforce, procurement, materials, and site access.</p>
@@ -113,14 +112,12 @@ export function LoginPage() {
             <div className={styles.mobileBrandGrid}>
               <MobileKineticBackground interactionRef={mobileBrandRef} />
             </div>
-            <span className={styles.mobileBrandMark} aria-hidden="true">
-              ES
-            </span>
+            <CompanyMark logoUrl={logoUrl} logoClassName={styles.mobileBrandLogo} fallbackClassName={styles.mobileBrandMark} />
             <span className={styles.mobileBrandName}>{content['company.short_name']}</span>
           </div>
 
           <div className={styles.heading}>
-            {logoUrl && <img className={styles.cardLogo} src={logoUrl} alt={`${content['company.display_name']} logo`} />}
+            <CompanyMark logoUrl={logoUrl} logoClassName={styles.cardLogo} alt={`${content['company.display_name']} logo`} fallback={null} />
             <h1>{content['login.heading']}</h1>
             <p>{content['login.help']}</p>
           </div>
